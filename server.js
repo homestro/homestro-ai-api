@@ -5,7 +5,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
 app.use(cors({ origin: true }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '2mb' }));
 
 function requireApiKey(req, res, next) {
   const configured = process.env.HOMESTRO_API_KEY;
@@ -25,8 +25,8 @@ app.get('/', (_req, res) => {
   res.json({
     name: 'Homestro AI Control API',
     status: 'online',
-    version: '1.0.0',
-    endpoints: ['/health', '/api/status', '/api/products/validate']
+    version: '1.1.0',
+    endpoints: ['/health', '/api/status', '/api/products/validate', '/api/ai/product']
   });
 });
 
@@ -61,8 +61,65 @@ app.post('/api/products/validate', requireApiKey, (req, res) => {
   };
 
   const valid = cost <= rules.maxCost && sellingPrice >= rules.minSellingPrice && ratio >= rules.minRatio;
-
   res.json({ ok: true, valid, product: { cost, sellingPrice, ratio }, rules });
+});
+
+function cleanJson(text) {
+  const trimmed = String(text || '').trim();
+  const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  return JSON.parse(withoutFence);
+}
+
+app.post('/api/ai/product', requireApiKey, async (req, res) => {
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(503).json({ ok: false, error: 'OPENAI_API_KEY is not configured.' });
+  }
+
+  const input = req.body?.product || req.body;
+  if (!input || typeof input !== 'object') {
+    return res.status(400).json({ ok: false, error: 'A product object is required.' });
+  }
+
+  const model = process.env.OPENAI_MODEL || 'gpt-5-mini';
+  const system = `Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Erstelle hochwertige, ehrliche und verkaufsstarke Produktdaten auf Deutsch. Keine erfundenen technischen Daten, Zertifikate, Garantien oder Lieferzeiten. Ausgabe ausschließlich als gültiges JSON mit diesen Feldern: title, description, shortDescription, bullets (Array mit 5 Einträgen), seoTitle, seoDescription, handle, tags (Array), category. Die Texte müssen für einen allgemeinen deutschen Alltagsshop geeignet sein.`;
+  const user = `Verarbeite dieses Produkt:\n${JSON.stringify(input, null, 2)}`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          { role: 'system', content: [{ type: 'input_text', text: system }] },
+          { role: 'user', content: [{ type: 'input_text', text: user }] }
+        ],
+        max_output_tokens: 1800
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error('OpenAI error:', data);
+      return res.status(502).json({ ok: false, error: 'OpenAI request failed.', details: data?.error?.message || 'Unknown OpenAI error' });
+    }
+
+    const outputText = data.output_text || data.output?.flatMap(item => item.content || []).map(c => c.text || '').join('') || '';
+    let product;
+    try {
+      product = cleanJson(outputText);
+    } catch {
+      return res.status(502).json({ ok: false, error: 'OpenAI returned invalid JSON.', raw: outputText.slice(0, 4000) });
+    }
+
+    res.json({ ok: true, model, product });
+  } catch (error) {
+    console.error(error);
+    res.status(502).json({ ok: false, error: 'Unable to reach OpenAI.' });
+  }
 });
 
 app.use((_req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
