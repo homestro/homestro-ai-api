@@ -1,0 +1,13 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Homestro AI Control"
+description = "Find and analyze Homestro products, check price rules, and prepare German product data, SEO, categorization, and product workflow recommendations."
+handle = "homestro-sidekick-tools"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/index.js"
+target = "admin.app.tools.data"
+tools = "./tools.json"
+instructions = "./instructions.md"
