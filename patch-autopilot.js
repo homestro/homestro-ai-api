@@ -2,7 +2,7 @@ const fs=require('fs');
 const p='server.js';
 let s=fs.readFileSync(p,'utf8');
 if(s.includes('HOMESTRO_AUTOPILOT_ENABLED')){console.log('autopilot already installed');process.exit(0);}
-const marker='\\napp.listen(';
+const marker='\napp.listen(';
 const idx=s.indexOf(marker);
 if(idx<0) throw new Error('app.listen marker not found');
 const code=`
