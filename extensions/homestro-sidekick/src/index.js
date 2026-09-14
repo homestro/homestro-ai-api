@@ -28,4 +28,25 @@ export default () => {
       rules: { max_cost_eur: 10, min_selling_price_eur: 34.9, min_ratio: 3 }
     };
   });
+
+  shopify.tools.register('homestro_create_draft', async ({ title, description_html = '', vendor = '', product_type = '', handle = '' }) => {
+    if (!String(title || '').trim()) throw new Error('Product title is required.');
+    const product = {
+      title: String(title).trim(),
+      descriptionHtml: String(description_html || '').trim(),
+      ...(vendor ? { vendor: String(vendor).trim() } : {}),
+      ...(product_type ? { productType: String(product_type).trim() } : {}),
+      ...(handle ? { handle: String(handle).trim() } : {})
+    };
+    const gql = `mutation HomestroCreateDraft($product: ProductCreateInput!) {
+      productCreate(product: $product) {
+        product { id title handle status vendor productType }
+        userErrors { field message }
+      }
+    }`;
+    const result = await shopify.query(gql, { variables: { product } });
+    const payload = result?.productCreate;
+    if (payload?.userErrors?.length) return { ok: false, userErrors: payload.userErrors };
+    return { ok: true, product: payload?.product || null, status: 'DRAFT' };
+  });
 };
