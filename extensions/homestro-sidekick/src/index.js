@@ -29,18 +29,21 @@ export default () => {
     };
   });
 
-  shopify.tools.register('homestro_create_draft', async ({ title, description_html = '', vendor = '', product_type = '', handle = '' }) => {
+  shopify.tools.register('homestro_create_draft', async ({ title, description_html = '', vendor = '', product_type = '', handle = '', seo_title = '', seo_description = '', tags = [] }) => {
     if (!String(title || '').trim()) throw new Error('Product title is required.');
     const product = {
       title: String(title).trim(),
       descriptionHtml: String(description_html || '').trim(),
+      status: 'DRAFT',
       ...(vendor ? { vendor: String(vendor).trim() } : {}),
       ...(product_type ? { productType: String(product_type).trim() } : {}),
-      ...(handle ? { handle: String(handle).trim() } : {})
+      ...(handle ? { handle: String(handle).trim() } : {}),
+      ...(seo_title || seo_description ? { seo: { ...(seo_title ? { title: String(seo_title).trim() } : {}), ...(seo_description ? { description: String(seo_description).trim() } : {}) } } : {}),
+      ...(Array.isArray(tags) && tags.length ? { tags: tags.map(t => String(t).trim()).filter(Boolean) } : {})
     };
     const gql = `mutation HomestroCreateDraft($product: ProductCreateInput!) {
       productCreate(product: $product) {
-        product { id title handle status vendor productType }
+        product { id title handle status vendor productType tags seo { title description } }
         userErrors { field message }
       }
     }`;
