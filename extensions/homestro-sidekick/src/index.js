@@ -24,6 +24,12 @@ export default () => {
     return shopify.query(gql);
   });
 
+  shopify.tools.register('homestro_read_variants', async ({ product_id }) => {
+    const id = asId(product_id);
+    if (!id) throw new Error('product_id is required.');
+    return shopify.query(`query HomestroReadVariants($id: ID!) { product(id: $id) { id title status options { id name position optionValues { id name } } variants(first: 100) { nodes { id title sku selectedOptions { name value } price compareAtPrice image { id url altText } } } } }`, { variables: { id } });
+  });
+
   shopify.tools.register('homestro_price_check', async ({ cost, selling_price }) => {
     const c = Number(cost); const p = Number(selling_price); const ratio = c > 0 ? p / c : 0;
     return { valid: Number.isFinite(c) && Number.isFinite(p) && c <= 10 && p >= 34.9 && ratio >= 3, cost_eur: c, selling_price_eur: p, ratio: Number(ratio.toFixed(2)), rules: { max_cost_eur: 10, min_selling_price_eur: 34.9, min_ratio: 3 } };
@@ -65,7 +71,7 @@ export default () => {
     }
 
     // IMPORTANT: option values are updated with productVariantsBulkUpdate, not productUpdate.
-    // This works for variants that already have images assigned.
+    // This works for variants that already have images assigned and preserves those images.
     if (Array.isArray(option_values) && option_values.length) {
       const optionInputs = option_values.map(v => ({ id: asId(v.id), optionValues: Array.isArray(v.option_values) ? v.option_values.map(o => ({ optionName: String(o.option_name || '').trim(), name: String(o.name || '').trim() })).filter(o => o.optionName && o.name) : [] })).filter(v => v.id && v.optionValues.length);
       if (optionInputs.length) {
