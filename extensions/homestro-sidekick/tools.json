@@ -21,7 +21,17 @@
   },
   {
     "name": "homestro_optimize_product",
-    "description": "Fully optimize an existing Homestro product while keeping it DRAFT. Read the variants first, then directly rename variant option values even when variants already have images. Never invent missing supplier data and never publish.",
-    "inputSchema": {"type":"object","properties":{"product_id":{"type":"string"},"title":{"type":"string"},"description_html":{"type":"string"},"vendor":{"type":"string"},"product_type":{"type":"string"},"category_id":{"type":"string"},"handle":{"type":"string"},"seo_title":{"type":"string"},"seo_description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"status":{"type":"string","enum":["DRAFT"]},"collection_ids":{"type":"array","items":{"type":"string"}},"variants":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"price":{"type":"string"},"compare_at_price":{"type":"string"},"sku":{"type":"string"}},"required":["id"]}},"option_values":{"type":"array","description":"Variant option values to set directly. Use this for image-linked variants. Preserve images.","items":{"type":"object","properties":{"id":{"type":"string"},"option_values":{"type":"array","items":{"type":"object","properties":{"option_name":{"type":"string"},"name":{"type":"string"}},"required":["option_name","name"]}}},"required":["id","option_values"]}},"media":{"type":"array","items":{"type":"object","properties":{"original_source":{"type":"string"},"alt":{"type":"string"}},"required":["original_source"]}}},"required":["product_id"]}
+    "description": "Fully optimize an existing Homestro product while keeping it DRAFT. Read variants first, directly rename variant option values when verified, preserve images, and verify mutations.",
+    "inputSchema": {"type":"object","properties":{"product_id":{"type":"string"},"title":{"type":"string"},"description_html":{"type":"string"},"vendor":{"type":"string"},"product_type":{"type":"string"},"category_id":{"type":"string"},"handle":{"type":"string"},"seo_title":{"type":"string"},"seo_description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"status":{"type":"string","enum":["DRAFT"]},"collection_ids":{"type":"array","items":{"type":"string"}},"variants":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"price":{"type":"string"},"compare_at_price":{"type":"string"},"sku":{"type":"string"}},"required":["id"]}},"option_values":{"type":"array","description":"Verified variant option values to set directly. Preserve images.","items":{"type":"object","properties":{"id":{"type":"string"},"option_values":{"type":"array","items":{"type":"object","properties":{"option_name":{"type":"string"},"name":{"type":"string"}},"required":["option_name","name"]}},"required":["id","option_values"]}},"media":{"type":"array","items":{"type":"object","properties":{"original_source":{"type":"string"},"alt":{"type":"string"}},"required":["original_source"]}}},"required":["product_id"]}
+  },
+  {
+    "name": "homestro_catalog_autopilot_run",
+    "description": "Run the autonomous Homestro catalog processor. Scan the complete Shopify catalog, evaluate every variant against cost <=10 EUR, selling price >=34.90 EUR and ratio >=3x, optimize qualifying products in German, reject non-qualifying products, and never publish. Use this by default when the merchant asks to process or optimize the whole catalog.",
+    "inputSchema": {"type":"object","properties":{}}
+  },
+  {
+    "name": "homestro_catalog_autopilot_status",
+    "description": "Return autonomous Homestro catalog processor status including last run, processed, rejected, failed and current error information.",
+    "inputSchema": {"type":"object","properties":{}}
   }
 ]
