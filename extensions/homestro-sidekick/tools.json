@@ -1,0 +1,33 @@
+[
+  {
+    "name": "homestro_product_search",
+    "description": "Search the Homestro Shopify catalog and return products with title, status, price, category, tags, variants, and inventory information.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Shopify product search query. Leave empty to inspect recent products."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of products to return.",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    }
+  },
+  {
+    "name": "homestro_price_check",
+    "description": "Check Homestro product economics against the store rules: supplier cost up to 10 EUR, selling price at least 34.90 EUR, and price-to-cost ratio at least 3x.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cost": { "type": "number" },
+        "selling_price": { "type": "number" }
+      },
+      "required": ["cost", "selling_price"]
+    }
+  }
+]
