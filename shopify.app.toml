@@ -1,0 +1,13 @@
+client_id = "c83d4a88dedfe364a10bc07a8d5fadc8"
+name = "Homestro AI Control"
+application_url = "https://homestro-ai-api-production.up.railway.app"
+embedded = true
+
+[access_scopes]
+scopes = "read_products,write_products"
+
+[build]
+automatically_update_urls_on_dev = false
+
+[sidekick]
+extensions_summary = "Find, analyze, optimize, and prepare Homestro products for the German Shopify store, including product text, SEO, categorization, pricing checks, and product workflow actions."
