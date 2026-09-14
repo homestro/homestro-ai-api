@@ -5,16 +5,8 @@
     "inputSchema": {
       "type": "object",
       "properties": {
-        "query": {
-          "type": "string",
-          "description": "Shopify product search query. Leave empty to inspect recent products."
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Maximum number of products to return.",
-          "minimum": 1,
-          "maximum": 50
-        }
+        "query": { "type": "string", "description": "Shopify product search query. Leave empty to inspect recent products." },
+        "limit": { "type": "integer", "description": "Maximum number of products to return.", "minimum": 1, "maximum": 50 }
       }
     }
   },
@@ -28,6 +20,21 @@
         "selling_price": { "type": "number" }
       },
       "required": ["cost", "selling_price"]
+    }
+  },
+  {
+    "name": "homestro_create_draft",
+    "description": "Create a new Shopify product directly in the connected Homestro store. Always creates it as DRAFT; never publishes it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "German product title." },
+        "description_html": { "type": "string", "description": "German product description in HTML." },
+        "vendor": { "type": "string" },
+        "product_type": { "type": "string" },
+        "handle": { "type": "string" }
+      },
+      "required": ["title"]
     }
   }
 ]
