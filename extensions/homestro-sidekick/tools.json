@@ -24,7 +24,7 @@
   },
   {
     "name": "homestro_create_draft",
-    "description": "Create a new Shopify product directly in the connected Homestro store. Always creates it as DRAFT; never publishes it.",
+    "description": "Create a new Shopify product directly in the connected Homestro store. Creates a German product draft with optional SEO and tags. Always DRAFT; never publishes it.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -32,7 +32,10 @@
         "description_html": { "type": "string", "description": "German product description in HTML." },
         "vendor": { "type": "string" },
         "product_type": { "type": "string" },
-        "handle": { "type": "string" }
+        "handle": { "type": "string" },
+        "seo_title": { "type": "string", "description": "German SEO title." },
+        "seo_description": { "type": "string", "description": "German SEO description." },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "German Shopify product tags." }
       },
       "required": ["title"]
     }
