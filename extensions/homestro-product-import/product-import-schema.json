@@ -1,45 +1,17 @@
 {
-  "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/shopify-intent.json",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "title": {
-        "type": "string",
-        "description": "German product title for Homestro",
-        "minLength": 1,
-        "maxLength": 255
-      },
-      "source_url": {
-        "type": "string",
-        "format": "uri",
-        "description": "Supplier or source URL for the product"
-      },
-      "cost": {
-        "type": "number",
-        "minimum": 0,
-        "description": "Supplier purchase cost in EUR"
-      },
-      "selling_price": {
-        "type": "number",
-        "minimum": 0,
-        "description": "Planned selling price in EUR"
-      },
-      "category": {
-        "type": "string",
-        "description": "Homestro category"
-      },
-      "description": {
-        "type": "string",
-        "description": "Optional source description or product notes"
-      }
-    }
+  "$schema":"https://extensions.shopifycdn.com/shopifycloud/schemas/v1/shopify-intent.json",
+  "inputSchema":{
+    "type":"object",
+    "properties":{
+      "title":{"type":"string","description":"Product title; source title is acceptable","minLength":1,"maxLength":255},
+      "source_url":{"type":"string","format":"uri","description":"Supplier/source product URL. Sidekick uses it to discover product images."},
+      "image_urls":{"type":"array","description":"Direct product image URLs from the source, when available","items":{"type":"string","format":"uri"},"maxItems":20},
+      "cost":{"type":"number","minimum":0,"description":"Supplier purchase cost in EUR"},
+      "selling_price":{"type":"number","minimum":0,"description":"Planned selling price in EUR"},
+      "category":{"type":"string","description":"Homestro category"},
+      "description":{"type":"string","description":"Optional source description or product notes"}
+    },
+    "required":["title","cost","selling_price"]
   },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "id": {
-        "$ref": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/shopify/product/gid.json"
-      }
-    }
-  }
+  "outputSchema":{"type":"object","properties":{"id":{"$ref":"https://extensions.shopifycdn.com/shopifycloud/schemas/v1/shopify/product/gid.json"}}}
 }
