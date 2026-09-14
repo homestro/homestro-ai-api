@@ -2,17 +2,12 @@ api_version = "2026-07"
 
 [[extensions]]
 name = "Homestro AI Control"
-description = "Find, read, optimize, and update Homestro products and variants directly from Shopify Sidekick."
+description = "Homestro AI for Shopify Sidekick: use Railway 24/7 to scan, evaluate, optimize and prepare Homestro products in German while keeping products DRAFT."
 handle = "homestro-sidekick-actions"
-type = "admin_link"
+type = "ui_extension"
 
 [[extensions.targeting]]
-target = "admin.app.intent.link"
-url = "/"
+target = "admin.app.tools.data"
+module = "./src/index.js"
 tools = "./tools.json"
 instructions = "./instructions.md"
-
-[[extensions.targeting.intents]]
-type = "shopify/product"
-action = "import"
-schema = "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/shopify/product/gid.json"
