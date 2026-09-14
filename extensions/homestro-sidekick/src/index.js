@@ -4,24 +4,22 @@ export default () => {
     ? [...new Set(value.flatMap(t => String(t).split(',').map(x => x.trim()).filter(Boolean)))]
     : [];
 
+  const railway = async (path, options = {}) => {
+    const response = await fetch(path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+    });
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error(`Railway returned invalid JSON (${response.status}).`); }
+    if (!response.ok || data?.ok === false) throw new Error(data?.error || `Railway request failed (${response.status}).`);
+    return data;
+  };
+
   shopify.tools.register('homestro_product_search', async ({ query = '', limit = 20 }) => {
     const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 50);
-    const queryPart = query ? `query: ${JSON.stringify(query)}` : '';
-    const gql = `query HomestroProducts {
-      products(first: ${safeLimit}${queryPart ? `, ${queryPart}` : ''}) {
-        nodes {
-          id title handle status vendor productType tags totalInventory
-          category { id name fullName }
-          priceRangeV2 { minVariantPrice { amount currencyCode } maxVariantPrice { amount currencyCode } }
-          variants(first: 100) { nodes { id title price compareAtPrice sku inventoryQuantity selectedOptions { name value } image { id url altText } } }
-          media(first: 50) { nodes { ... on MediaImage { id alt image { url width height } } } }
-          seo { title description }
-          collections(first: 20) { nodes { id title handle } }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }`;
-    return shopify.query(gql);
+    const queryPart = query ? `, query: ${JSON.stringify(query)}` : '';
+    return shopify.query(`query HomestroProducts { products(first: ${safeLimit}${queryPart}) { nodes { id title handle status vendor productType tags totalInventory category { id name fullName } priceRangeV2 { minVariantPrice { amount currencyCode } maxVariantPrice { amount currencyCode } } variants(first: 100) { nodes { id title price compareAtPrice sku inventoryQuantity selectedOptions { name value } image { id url altText } } } media(first: 50) { nodes { ... on MediaImage { id alt image { url width height } } } } seo { title description } collections(first: 20) { nodes { id title handle } } } pageInfo { hasNextPage endCursor } } }`);
   });
 
   shopify.tools.register('homestro_read_variants', async ({ product_id }) => {
@@ -39,8 +37,7 @@ export default () => {
   shopify.tools.register('homestro_create_draft', async ({ title, description_html = '', vendor = '', product_type = '', category_id = '', handle = '', seo_title = '', seo_description = '', tags = [], price = '', compare_at_price = '' }) => {
     if (!String(title || '').trim()) throw new Error('Product title is required.');
     const product = { title: String(title).trim(), descriptionHtml: String(description_html || '').trim(), status: 'DRAFT', ...(vendor ? { vendor: String(vendor).trim() } : {}), ...(product_type ? { productType: String(product_type).trim() } : {}), ...(category_id ? { category: asId(category_id) } : {}), ...(handle ? { handle: String(handle).trim() } : {}), ...(seo_title || seo_description ? { seo: { ...(seo_title ? { title: String(seo_title).trim() } : {}), ...(seo_description ? { description: String(seo_description).trim() } : {}) } } : {}), ...(cleanTags(tags).length ? { tags: cleanTags(tags) } : {}) };
-    const gql = `mutation HomestroCreateDraft($product: ProductCreateInput!) { productCreate(product: $product) { product { id title handle status vendor productType tags seo { title description } } userErrors { field message } } }`;
-    const result = await shopify.query(gql, { variables: { product } });
+    const result = await shopify.query(`mutation HomestroCreateDraft($product: ProductCreateInput!) { productCreate(product: $product) { product { id title handle status vendor productType tags seo { title description } } userErrors { field message } } }`, { variables: { product } });
     const payload = result?.productCreate;
     if (payload?.userErrors?.length) return { ok: false, userErrors: payload.userErrors };
     const created = payload?.product;
@@ -55,14 +52,11 @@ export default () => {
     const id = asId(product_id);
     if (!id) throw new Error('product_id is required.');
     if (status !== 'DRAFT') throw new Error('Homestro AI Control only allows DRAFT status.');
-
     const update = { id, status: 'DRAFT', ...(title ? { title: String(title).trim() } : {}), ...(description_html ? { descriptionHtml: String(description_html).trim() } : {}), ...(vendor ? { vendor: String(vendor).trim() } : {}), ...(product_type ? { productType: String(product_type).trim() } : {}), ...(category_id ? { category: asId(category_id) } : {}), ...(handle ? { handle: String(handle).trim() } : {}), ...(seo_title || seo_description ? { seo: { ...(seo_title ? { title: String(seo_title).trim() } : {}), ...(seo_description ? { description: String(seo_description).trim() } : {}) } } : {}), ...(cleanTags(tags).length ? { tags: cleanTags(tags) } : {}) };
-
     const result = await shopify.query(`mutation HomestroOptimizeProduct($product: ProductUpdateInput!) { productUpdate(product: $product) { product { id title handle status vendor productType tags category { id name fullName } seo { title description } } userErrors { field message } } }`, { variables: { product: update } });
     const payload = result?.productUpdate;
     if (payload?.userErrors?.length) return { ok: false, stage: 'product', userErrors: payload.userErrors };
     const output = { ok: true, product: payload?.product || null, status: 'DRAFT', warnings: [] };
-
     if (Array.isArray(variants) && variants.length) {
       const variantInputs = variants.map(v => ({ id: asId(v.id), ...(v.price !== undefined && v.price !== '' ? { price: String(v.price) } : {}), ...(v.compare_at_price !== undefined && v.compare_at_price !== '' ? { compareAtPrice: String(v.compare_at_price) } : {}), ...(v.sku !== undefined ? { inventoryItem: { sku: String(v.sku) } } : {}) })).filter(v => v.id);
       if (variantInputs.length) {
@@ -70,7 +64,6 @@ export default () => {
         if (vr?.productVariantsBulkUpdate?.userErrors?.length) output.warnings.push({ stage: 'variants', userErrors: vr.productVariantsBulkUpdate.userErrors });
       }
     }
-
     if (Array.isArray(option_values) && option_values.length) {
       const optionInputs = option_values.map(v => ({ id: asId(v.id), optionValues: Array.isArray(v.option_values) ? v.option_values.map(o => ({ optionName: String(o.option_name || '').trim(), name: String(o.name || '').trim() })).filter(o => o.optionName && o.name) : [] })).filter(v => v.id && v.optionValues.length);
       if (optionInputs.length) {
@@ -79,12 +72,10 @@ export default () => {
         else output.option_values_updated = optionInputs.length;
       }
     }
-
     if (Array.isArray(collection_ids) && collection_ids.length) {
       const cr = await shopify.query(`mutation HomestroAddCollections($productId: ID!, $collectionIds: [ID!]!) { collectionsAddProducts(productIds: [$productId], collectionIds: $collectionIds) { userErrors { field message } } }`, { variables: { productId: id, collectionIds: collection_ids.map(asId).filter(Boolean) } });
       if (cr?.collectionsAddProducts?.userErrors?.length) output.warnings.push({ stage: 'collections', userErrors: cr.collectionsAddProducts.userErrors });
     }
-
     if (Array.isArray(media) && media.length) {
       const mediaInputs = media.map(m => ({ originalSource: String(m.original_source || '').trim(), mediaContentType: 'IMAGE', ...(m.alt ? { alt: String(m.alt).trim() } : {}) })).filter(m => m.originalSource);
       if (mediaInputs.length) {
@@ -93,5 +84,13 @@ export default () => {
       }
     }
     return output;
+  });
+
+  shopify.tools.register('homestro_catalog_autopilot_run', async () => {
+    return railway('/api/sidekick/automation/run', { method: 'POST', body: '{}' });
+  });
+
+  shopify.tools.register('homestro_catalog_autopilot_status', async () => {
+    return railway('/api/sidekick/automation/status');
   });
 };
