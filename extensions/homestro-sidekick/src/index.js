@@ -86,6 +86,14 @@ export default () => {
     return output;
   });
 
+  // Railway is the brain: Sidekick pulls the next queued instruction, executes it with Shopify tools, then reports the result.
+  shopify.tools.register('homestro_next_railway_task', async () => railway('/api/sidekick/tasks/next'));
+  shopify.tools.register('homestro_submit_railway_task_result', async ({ task_id, result = {} }) => {
+    if (!task_id) throw new Error('task_id is required.');
+    return railway(`/api/sidekick/tasks/${encodeURIComponent(task_id)}/result`, { method: 'POST', body: JSON.stringify(result) });
+  });
+  shopify.tools.register('homestro_railway_task_status', async () => railway('/api/sidekick/tasks/status'));
+
   shopify.tools.register('homestro_catalog_autopilot_run', async () => {
     return railway('/api/sidekick/automation/run', { method: 'POST', body: '{}' });
   });
