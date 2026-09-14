@@ -1,0 +1,77 @@
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+const PORT = Number(process.env.PORT || 3000);
+
+app.use(cors({ origin: true }));
+app.use(express.json({ limit: '1mb' }));
+
+function requireApiKey(req, res, next) {
+  const configured = process.env.HOMESTRO_API_KEY;
+  if (!configured) {
+    return res.status(503).json({ ok: false, error: 'API key is not configured on the server.' });
+  }
+
+  const auth = req.get('authorization') || '';
+  const supplied = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!supplied || supplied !== configured) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  }
+  next();
+}
+
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'Homestro AI Control API',
+    status: 'online',
+    version: '1.0.0',
+    endpoints: ['/health', '/api/status', '/api/products/validate']
+  });
+});
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, service: 'homestro-ai-api', timestamp: new Date().toISOString() });
+});
+
+app.get('/api/status', requireApiKey, (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'homestro-ai-api',
+    shopifyConfigured: Boolean(process.env.SHOPIFY_STORE_DOMAIN && process.env.SHOPIFY_ACCESS_TOKEN),
+    openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/api/products/validate', requireApiKey, (req, res) => {
+  const cost = Number(req.body?.cost);
+  const sellingPrice = Number(req.body?.sellingPrice);
+  const ratio = Number(req.body?.ratio);
+
+  const validNumbers = [cost, sellingPrice, ratio].every(Number.isFinite);
+  if (!validNumbers) {
+    return res.status(400).json({ ok: false, error: 'cost, sellingPrice and ratio must be numbers.' });
+  }
+
+  const rules = {
+    maxCost: Number(process.env.MAX_PRODUCT_COST || 10),
+    minSellingPrice: Number(process.env.MIN_SELLING_PRICE || 34.90),
+    minRatio: Number(process.env.MIN_PRICE_COST_RATIO || 3)
+  };
+
+  const valid = cost <= rules.maxCost && sellingPrice >= rules.minSellingPrice && ratio >= rules.minRatio;
+
+  res.json({ ok: true, valid, product: { cost, sellingPrice, ratio }, rules });
+});
+
+app.use((_req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
+
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ ok: false, error: 'Internal server error' });
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Homestro AI Control API listening on port ${PORT}`);
+});
