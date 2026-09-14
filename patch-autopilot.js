@@ -12,7 +12,7 @@ function autopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTER
 async function autopilotListProducts(token){
   const all=[]; let after=null;
   do{
-    const q='query($after:String){products(first:100,after:$after){nodes{id title descriptionHtml handle status vendor productType tags variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}} image{id url altText}}}media(first:20){nodes{... on MediaImage{id image{url altText}}}} seo{title description}} pageInfo{hasNextPage endCursor}}}';
+    const q='query($after:String){products(first:100,after:$after){nodes{id title descriptionHtml handle status vendor productType tags variants(first:100){nodes{id title price sku selectedOptions{name value}inventoryItem{unitCost{amount currencyCode}}image{id url altText}}}media(first:20){nodes{... on MediaImage{id image{url altText}}}} seo{title description}} pageInfo{hasNextPage endCursor}}}';
     const d=await shopifyGraphQL(q,{after},token); all.push(...d.products.nodes); after=d.products.pageInfo.hasNextPage?d.products.pageInfo.endCursor:null;
   }while(after);
   return all;
@@ -50,7 +50,9 @@ async function autopilotRun(){
     let processed=0,rejected=0,failed=0;
     for(const product of products){
       const tags=product.tags||[];
-      if(tags.some(t=>/^homestro-ai-(processed|rejected)$/i.test(t)))continue;
+      // Rejected products are deliberately NOT skipped: if supplier cost/price changes later,
+      // the next cycle must be able to qualify and process them.
+      if(tags.some(t=>/^homestro-ai-processed$/i.test(t)))continue;
       try{
         const q=autopilotQualification(product);
         if(!q.valid){await autopilotMark(product,'rejected',token);rejected++;continue;}
