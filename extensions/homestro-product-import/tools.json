@@ -2,12 +2,10 @@
   {
     "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/sidekick-tools.json",
     "name": "optimize_product",
-    "description": "Create or improve honest German Homestro product copy, SEO, handle, tags and category from supplied product data.",
+    "description": "Autonomously create or improve honest German Homestro product copy, SEO, handle, tags and category from supplied product data.",
     "inputSchema": {
       "type": "object",
-      "properties": {
-        "product": { "type": "object", "description": "Product source data, including title, source URL, cost, selling price, category and description." }
-      },
+      "properties": { "product": { "type": "object", "description": "Product source data, including title, source URL, cost, selling price, category and description." } },
       "required": ["product"]
     }
   },
@@ -16,11 +14,7 @@
     "description": "Check a Homestro product against the configured cost, selling-price and margin rules.",
     "inputSchema": {
       "type": "object",
-      "properties": {
-        "cost": { "type": "number" },
-        "sellingPrice": { "type": "number" },
-        "ratio": { "type": "number" }
-      },
+      "properties": { "cost": { "type": "number" }, "sellingPrice": { "type": "number" }, "ratio": { "type": "number" } },
       "required": ["cost", "sellingPrice", "ratio"]
     }
   },
@@ -29,9 +23,7 @@
     "description": "Create the prepared Homestro product in Shopify as DRAFT without publishing it.",
     "inputSchema": {
       "type": "object",
-      "properties": {
-        "product": { "type": "object", "description": "Prepared Shopify product data." }
-      },
+      "properties": { "product": { "type": "object", "description": "Prepared Shopify product data." } },
       "required": ["product"]
     }
   },
@@ -40,10 +32,7 @@
     "description": "Update existing Homestro Shopify variant option values while preserving their current variant images.",
     "inputSchema": {
       "type": "object",
-      "properties": {
-        "productId": { "type": "string" },
-        "variants": { "type": "array", "items": { "type": "object" } }
-      },
+      "properties": { "productId": { "type": "string" }, "variants": { "type": "array", "items": { "type": "object" } } },
       "required": ["productId", "variants"]
     }
   }
