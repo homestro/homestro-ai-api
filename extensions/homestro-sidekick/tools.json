@@ -2,91 +2,21 @@
   {
     "name": "homestro_product_search",
     "description": "Search the Homestro Shopify catalog and return products with title, status, price, category, tags, variants, images, SEO and collections.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "query": { "type": "string", "description": "Shopify product search query. Leave empty to inspect recent products." },
-        "limit": { "type": "integer", "description": "Maximum number of products to return.", "minimum": 1, "maximum": 50 }
-      }
-    }
+    "inputSchema": {"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}}}
   },
   {
     "name": "homestro_price_check",
-    "description": "Check Homestro product economics against the store rules: supplier cost up to 10 EUR, selling price at least 34.90 EUR, and price-to-cost ratio at least 3x.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "cost": { "type": "number" },
-        "selling_price": { "type": "number" }
-      },
-      "required": ["cost", "selling_price"]
-    }
+    "description": "Check Homestro product economics: supplier cost up to 10 EUR, selling price at least 34.90 EUR, ratio at least 3x.",
+    "inputSchema": {"type":"object","properties":{"cost":{"type":"number"},"selling_price":{"type":"number"}},"required":["cost","selling_price"]}
   },
   {
     "name": "homestro_create_draft",
-    "description": "Create a new Shopify product directly in the connected Homestro store. Creates a German product draft with optional category, SEO, tags and initial price. Always DRAFT; never publishes it.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "title": { "type": "string", "description": "German product title." },
-        "description_html": { "type": "string", "description": "German product description in HTML." },
-        "vendor": { "type": "string" },
-        "product_type": { "type": "string" },
-        "category_id": { "type": "string", "description": "Shopify product taxonomy category ID, only when verified." },
-        "handle": { "type": "string" },
-        "seo_title": { "type": "string", "description": "German SEO title." },
-        "seo_description": { "type": "string", "description": "German SEO description." },
-        "tags": { "type": "array", "items": { "type": "string" }, "description": "German Shopify product tags. Comma-separated values are normalized." },
-        "price": { "type": "string", "description": "Initial variant price, only when verified." },
-        "compare_at_price": { "type": "string", "description": "Optional verified compare-at price." }
-      },
-      "required": ["title"]
-    }
+    "description": "Create a German Shopify product draft. Always DRAFT; never publishes.",
+    "inputSchema": {"type":"object","properties":{"title":{"type":"string"},"description_html":{"type":"string"},"vendor":{"type":"string"},"product_type":{"type":"string"},"category_id":{"type":"string"},"handle":{"type":"string"},"seo_title":{"type":"string"},"seo_description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"price":{"type":"string"},"compare_at_price":{"type":"string"}},"required":["title"]}
   },
   {
     "name": "homestro_optimize_product",
-    "description": "Fully optimize an existing Homestro Shopify product while keeping it DRAFT: German title and description, product type, verified Shopify category, SEO title/meta description, normalized tags, verified variant prices, collections, image URLs and German alt text. Never invent missing supplier data, never publish, and report warnings instead of guessing.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "product_id": { "type": "string", "description": "Shopify product ID." },
-        "title": { "type": "string" },
-        "description_html": { "type": "string" },
-        "vendor": { "type": "string" },
-        "product_type": { "type": "string" },
-        "category_id": { "type": "string", "description": "Verified Shopify product taxonomy category ID." },
-        "handle": { "type": "string" },
-        "seo_title": { "type": "string" },
-        "seo_description": { "type": "string" },
-        "tags": { "type": "array", "items": { "type": "string" } },
-        "status": { "type": "string", "enum": ["DRAFT"] },
-        "collection_ids": { "type": "array", "items": { "type": "string" } },
-        "variants": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" },
-              "price": { "type": "string" },
-              "compare_at_price": { "type": "string" },
-              "sku": { "type": "string" }
-            },
-            "required": ["id"]
-          }
-        },
-        "media": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "original_source": { "type": "string" },
-              "alt": { "type": "string" }
-            },
-            "required": ["original_source"]
-          }
-        }
-      },
-      "required": ["product_id"]
-    }
+    "description": "Fully optimize an existing Homestro product while keeping it DRAFT. Can also directly rename variant option values even when variants already have images. Never invent missing supplier data and never publish.",
+    "inputSchema": {"type":"object","properties":{"product_id":{"type":"string"},"title":{"type":"string"},"description_html":{"type":"string"},"vendor":{"type":"string"},"product_type":{"type":"string"},"category_id":{"type":"string"},"handle":{"type":"string"},"seo_title":{"type":"string"},"seo_description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"status":{"type":"string","enum":["DRAFT"]},"collection_ids":{"type":"array","items":{"type":"string"}},"variants":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"price":{"type":"string"},"compare_at_price":{"type":"string"},"sku":{"type":"string"}},"required":["id"]}},"option_values":{"type":"array","description":"Variant option values to set directly. Use this for image-linked variants.","items":{"type":"object","properties":{"id":{"type":"string"},"option_values":{"type":"array","items":{"type":"object","properties":{"option_name":{"type":"string"},"name":{"type":"string"}},"required":["option_name","name"]}}},"required":["id","option_values"]}},"media":{"type":"array","items":{"type":"object","properties":{"original_source":{"type":"string"},"alt":{"type":"string"}},"required":["original_source"]}}},"required":["product_id"]}
   }
 ]
