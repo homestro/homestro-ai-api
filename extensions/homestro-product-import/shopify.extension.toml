@@ -1,0 +1,18 @@
+api_version = "2026-04"
+
+[[extensions]]
+name = "Homestro Product Import"
+description = "Create and prepare a Homestro product as a Shopify draft from Sidekick."
+handle = "homestro-product-import"
+type = "admin_link"
+
+[[extensions.targeting]]
+target = "admin.app.intent.link"
+url = "/sidekick/import-product"
+tools = "./tools.json"
+instructions = "./instructions.md"
+
+[[extensions.targeting.intents]]
+type = "shopify/product"
+action = "import"
+schema = "./product-import-schema.json"
