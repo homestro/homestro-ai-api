@@ -1,0 +1,14 @@
+[[extensions]]
+name = "Prepare Homestro product"
+description = "Prepare a Shopify product for Homestro product research and optimization."
+handle = "prepare-product"
+type = "admin_link"
+
+[[extensions.targeting]]
+target = "admin.app.intent.link"
+url = "/?id={id}"
+
+[[extensions.targeting.intents]]
+type = "shopify/product"
+action = "import"
+schema = "./product-schema.json"
