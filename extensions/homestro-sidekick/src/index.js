@@ -4,10 +4,13 @@ export default () => {
     ? [...new Set(value.flatMap(t => String(t).split(',').map(x => x.trim()).filter(Boolean)))]
     : [];
 
+  // Railway is external to the Shopify app domain, so use an absolute URL and explicitly attach Shopify's ID token.
+  const RAILWAY_BASE = 'https://homestro-ai-api-retry-production.up.railway.app';
   const railway = async (path, options = {}) => {
-    const response = await fetch(path, {
+    const idToken = await shopify.idToken();
+    const response = await fetch(`${RAILWAY_BASE}${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}`, ...(options.headers || {}) }
     });
     const text = await response.text();
     let data;
@@ -86,7 +89,6 @@ export default () => {
     return output;
   });
 
-  // Railway is the brain: Sidekick pulls the next queued instruction, executes it with Shopify tools, then reports the result.
   shopify.tools.register('homestro_next_railway_task', async () => railway('/api/sidekick/tasks/next'));
   shopify.tools.register('homestro_submit_railway_task_result', async ({ task_id, result = {} }) => {
     if (!task_id) throw new Error('task_id is required.');
