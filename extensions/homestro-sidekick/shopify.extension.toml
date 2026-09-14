@@ -2,12 +2,17 @@ api_version = "2026-07"
 
 [[extensions]]
 name = "Homestro AI Control"
-description = "Find and analyze Homestro products, check price rules, and prepare German product data, SEO, categorization, and product workflow recommendations."
-handle = "homestro-sidekick-tools"
-type = "ui_extension"
+description = "Find, read, optimize, and update Homestro products and variants directly from Shopify Sidekick."
+handle = "homestro-sidekick-actions"
+type = "admin_link"
 
 [[extensions.targeting]]
-module = "./src/index.js"
-target = "admin.app.tools.data"
+target = "admin.app.intent.link"
+url = "/"
 tools = "./tools.json"
 instructions = "./instructions.md"
+
+[[extensions.targeting.intents]]
+type = "shopify/product"
+action = "import"
+schema = "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/shopify/product/gid.json"
