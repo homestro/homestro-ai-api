@@ -1,39 +1,23 @@
 [
   {
-    "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/sidekick-tools.json",
-    "name": "optimize_product",
-    "description": "Autonomously create or improve honest German Homestro product copy, SEO, handle, tags and category from supplied product data.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "product": { "type": "object", "description": "Product source data, including title, source URL, cost, selling price, category and description." } },
-      "required": ["product"]
-    }
+    "$schema":"https://extensions.shopifycdn.com/shopifycloud/schemas/v1/sidekick-tools.json",
+    "name":"optimize_product",
+    "description":"Autonomously prepare a complete German Homestro product from source data, including honest copy, SEO, handle, tags and category.",
+    "inputSchema":{"type":"object","properties":{"product":{"type":"object","description":"Product source data. Preserve source_url and image_urls when available; include cost and selling_price."}},"required":["product"]}
   },
   {
-    "name": "validate_product",
-    "description": "Check a Homestro product against the configured cost, selling-price and margin rules.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "cost": { "type": "number" }, "sellingPrice": { "type": "number" }, "ratio": { "type": "number" } },
-      "required": ["cost", "sellingPrice", "ratio"]
-    }
+    "name":"validate_product",
+    "description":"Check Homestro rules before import: cost <= 10 EUR, selling price >= 34.90 EUR and price/cost ratio >= 3.",
+    "inputSchema":{"type":"object","properties":{"cost":{"type":"number"},"sellingPrice":{"type":"number"},"ratio":{"type":"number"}},"required":["cost","sellingPrice","ratio"]}
   },
   {
-    "name": "create_product_draft",
-    "description": "Create the prepared Homestro product in Shopify as DRAFT without publishing it.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "product": { "type": "object", "description": "Prepared Shopify product data." } },
-      "required": ["product"]
-    }
+    "name":"create_product_draft",
+    "description":"Create the complete prepared Homestro product in Shopify as DRAFT. Automatically applies German SEO, tags, price/cost and imports source images when source_url or image_urls are available. Never publishes.",
+    "inputSchema":{"type":"object","properties":{"product":{"type":"object","description":"Prepared product. Include source_url or image_urls whenever the source provides images, plus seoTitle, seoDescription, tags, cost and selling_price."}},"required":["product"]}
   },
   {
-    "name": "update_variants",
-    "description": "Update existing Homestro Shopify variant option values while preserving their current variant images.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "productId": { "type": "string" }, "variants": { "type": "array", "items": { "type": "object" } } },
-      "required": ["productId", "variants"]
-    }
+    "name":"update_variants",
+    "description":"Update existing Homestro Shopify variant option values while preserving current variant images.",
+    "inputSchema":{"type":"object","properties":{"productId":{"type":"string"},"variants":{"type":"array","items":{"type":"object"}}},"required":["productId","variants"]}
   }
 ]
