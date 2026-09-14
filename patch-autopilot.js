@@ -50,8 +50,6 @@ async function autopilotRun(){
     let processed=0,rejected=0,failed=0;
     for(const product of products){
       const tags=product.tags||[];
-      // Rejected products are deliberately NOT skipped: if supplier cost/price changes later,
-      // the next cycle must be able to qualify and process them.
       if(tags.some(t=>/^homestro-ai-processed$/i.test(t)))continue;
       try{
         const q=autopilotQualification(product);
@@ -70,6 +68,10 @@ async function autopilotRun(){
 }
 app.get('/api/automation/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:autopilotInterval(),running:autopilot.running,lastRun:autopilot.lastRun,lastError:autopilot.lastError,totals:{processed:autopilot.processed,rejected:autopilot.rejected,failed:autopilot.failed}}));
 app.post('/api/automation/run',apiKey,async(_q,res)=>{res.json(await autopilotRun());});
+// Sidekick -> Railway -> Shopify bridge. The extension runs on the app's Railway domain,
+// so Shopify's authenticated fetch supplies the short-lived Shopify ID token automatically.
+app.get('/api/sidekick/automation/status',sidekick,(_q,res)=>res.json({ok:true,source:'railway',enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:autopilotInterval(),running:autopilot.running,lastRun:autopilot.lastRun,lastError:autopilot.lastError,totals:{processed:autopilot.processed,rejected:autopilot.rejected,failed:autopilot.failed}}));
+app.post('/api/sidekick/automation/run',sidekick,async(_q,res)=>{try{res.json(await autopilotRun());}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
   setTimeout(()=>autopilotRun().catch(e=>console.error('Initial autopilot error',e)),15000);
   setInterval(()=>autopilotRun().catch(e=>console.error('Scheduled autopilot error',e)),autopilotInterval());
