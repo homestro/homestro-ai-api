@@ -1,0 +1,12 @@
+{
+  "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/intent.json",
+  "value": {
+    "type": "string",
+    "description": "The Shopify Product GID to prepare in Homestro.",
+    "mapTo": "param",
+    "fieldName": "id"
+  },
+  "inputSchema": {
+    "$ref": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/shopify/product/gid.json"
+  }
+}
