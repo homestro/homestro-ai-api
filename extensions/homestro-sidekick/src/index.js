@@ -5,7 +5,7 @@ export default () => {
     : [];
 
   // Railway is external to the Shopify app domain, so use an absolute URL and explicitly attach Shopify's ID token.
-  const RAILWAY_BASE = 'https://homestro-ai-api-retry-production.up.railway.app';
+  const RAILWAY_BASE = 'https://homestro-ai-api-fixed-production.up.railway.app';
   const railway = async (path, options = {}) => {
     const idToken = await shopify.idToken();
     const response = await fetch(`${RAILWAY_BASE}${path}`, {
