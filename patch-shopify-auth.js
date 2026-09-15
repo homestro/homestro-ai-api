@@ -8,3 +8,4 @@ const fn=`async function getClientToken(){const c=cfg();if(!c.domain)throw Objec
 s=s.slice(0,start)+fn+s.slice(end);
 fs.writeFileSync(p,s);
 console.log('Shopify auth fixed: form-urlencoded + direct token fallback');
+// Railway trigger: keep this patch in the watched set.
