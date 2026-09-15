@@ -3,7 +3,7 @@ builder = "RAILPACK"
 buildCommand = "npm install"
 
 [deploy]
-startCommand = "node ./patch-autopilot.js && node ./patch-cost-rules.js && node ./patch-shopify-auth.js && node ./server.js"
+startCommand = "node ./patch-autopilot.js && node ./patch-cost-rules.js && node ./patch-shopify-auth.js && node ./patch-json-output.js && node ./server.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ALWAYS"
