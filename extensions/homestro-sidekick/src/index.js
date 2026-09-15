@@ -4,10 +4,11 @@ export default () => {
     ? [...new Set(value.flatMap(t => String(t).split(',').map(x => x.trim()).filter(Boolean)))]
     : [];
 
-  // Railway is external to the Shopify app domain, so use an absolute URL and explicitly attach Shopify's ID token.
-  const RAILWAY_BASE = 'https://homestro-ai-api-fixed-production.up.railway.app';
+  // Railway is external to the Shopify app domain. Shopify's Sidekick sandbox
+  // requires the documented auth.idToken() API for cross-origin requests.
+  const RAILWAY_BASE = 'https://homestro-ai-api-production.up.railway.app';
   const railway = async (path, options = {}) => {
-    const idToken = await shopify.idToken();
+    const idToken = await auth.idToken();
     const response = await fetch(`${RAILWAY_BASE}${path}`, {
       ...options,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}`, ...(options.headers || {}) }
