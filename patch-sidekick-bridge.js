@@ -13,3 +13,4 @@ app.post('/api/sidekick/automation/run',sidekick,async(_q,res)=>{try{res.json(aw
 s=s.slice(0,idx)+code+s.slice(idx);
 fs.writeFileSync(p,s);
 console.log('sidekick bridge installed');
+// trigger Railway rebuild with corrected build configuration
