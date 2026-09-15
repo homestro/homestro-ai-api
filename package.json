@@ -1,8 +1,8 @@
 {
   "name": "homestro-ai-api",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
-  "description": "Homestro AI Control API for Railway and Shopify",
+  "description": "Homestro AI Control API for Railway and Shopify - runtime refresh",
   "main": "server.js",
   "scripts": {
     "start": "node ./railway-bootstrap.js"
