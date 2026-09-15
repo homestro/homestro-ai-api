@@ -1,0 +1,11 @@
+const fs=require('fs');
+const p='server.js';
+let s=fs.readFileSync(p,'utf8');
+const old="function cleanJson(t){return JSON.parse(String(t||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/\\s*```$/i,'').trim());}";
+const neu="function cleanJson(t){let x=String(t||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/\\s*```$/i,'').trim();const a=x.indexOf('{'),b=x.lastIndexOf('}');if(a>=0&&b>a)x=x.slice(a,b+1);return JSON.parse(x);}";
+if(s.includes(old))s=s.replace(old,neu);
+const oldCall="max_output_tokens:1800";
+const newCall="max_output_tokens:3000,text:{format:{type:'json_object'}}";
+if(s.includes(oldCall)&&!s.includes("text:{format:{type:'json_object'}}"))s=s.replace(oldCall,newCall);
+fs.writeFileSync(p,s);
+console.log('AI JSON resilience installed');
