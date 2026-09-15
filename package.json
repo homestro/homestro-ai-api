@@ -5,7 +5,7 @@
   "description": "Homestro AI Control API for Railway and Shopify",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node patch-autopilot.js && node server.js"
   },
   "engines": {
     "node": ">=20"
