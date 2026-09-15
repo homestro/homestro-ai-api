@@ -1,5 +1,6 @@
 const fs=require('fs');
 const p='server.js';
+console.log('JSON PATCH: starting');
 let s=fs.readFileSync(p,'utf8');
 const start=s.indexOf('function cleanJson(');
 const end=s.indexOf("app.post('/api/ai/product'",start);
@@ -9,6 +10,4 @@ async function aiProduct(input){if(!process.env.OPENAI_API_KEY)throw Object.assi
 `;
 s=s.slice(0,start)+replacement+s.slice(end);
 fs.writeFileSync(p,s);
-console.log('structured JSON output patch installed v2');
-// redeploy trigger: ensure Railway picks up the structured-output fix
-// v3: force a fresh Railway build from main
+console.log('JSON PATCH: installed v3');
