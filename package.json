@@ -1,11 +1,11 @@
 {
   "name": "homestro-ai-api",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "Homestro AI Control API for Railway and Shopify",
   "main": "server.js",
   "scripts": {
-    "start": "node ./patch-autopilot.js && node ./server.js"
+    "start": "node ./railway-bootstrap.js"
   },
   "engines": {
     "node": ">=20"
