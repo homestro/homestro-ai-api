@@ -10,3 +10,4 @@ async function aiProduct(input){if(!process.env.OPENAI_API_KEY)throw Object.assi
 s=s.slice(0,start)+replacement+s.slice(end);
 fs.writeFileSync(p,s);
 console.log('structured JSON output patch installed v2');
+// redeploy trigger: ensure Railway picks up the structured-output fix
