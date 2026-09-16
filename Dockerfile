@@ -12,4 +12,4 @@ COPY . .
 ENV NODE_ENV=production
 ENV PORT=8080
 
-CMD ["node", "./patch-autopilot.js", "&&", "node", "./patch-cost-rules.js", "&&", "node", "./patch-shopify-auth.js", "&&", "node", "./patch-json-output.js", "&&", "node", "./server.js"]
+CMD ["sh", "-c", "node ./patch-autopilot.js && node ./patch-cost-rules.js && node ./patch-shopify-auth.js && node ./patch-json-output.js && node ./server.js"]
