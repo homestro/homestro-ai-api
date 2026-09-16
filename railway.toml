@@ -1,8 +1,9 @@
 [build]
-builder = "RAILPACK"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.homestro-fixed"
 
 [deploy]
-startCommand = "node ./railway-bootstrap.js"
+startCommand = "sh -c 'node ./patch-autopilot.js && node ./patch-shopify-auth.js && node ./patch-json-safe.js && node ./server.js'"
 healthcheckPath = "/health"
 healthcheckTimeout = 60
 restartPolicyType = "ALWAYS"
