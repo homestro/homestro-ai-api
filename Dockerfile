@@ -1,5 +1,6 @@
 FROM node:20-bookworm-slim
 
+# Force a fresh Railway Docker build; Railway healthchecks require curl.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
