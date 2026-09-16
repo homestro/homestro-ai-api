@@ -7,3 +7,5 @@ startCommand = "sh -c 'node ./patch-autopilot.js && node ./patch-shopify-auth.js
 healthcheckPath = "/health"
 healthcheckTimeout = 60
 restartPolicyType = "ALWAYS"
+
+# Homestro fixed deployment trigger 2026-09-16
