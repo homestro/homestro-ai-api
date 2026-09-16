@@ -1,9 +1,0 @@
-[build]
-builder = "DOCKERFILE"
-buildCommand = ""
-
-[deploy]
-startCommand = "node ./server.js"
-restartPolicyType = "ALWAYS"
-restartPolicyMaxRetries = 10
-sleepApplication = false
