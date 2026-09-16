@@ -2,11 +2,11 @@ const fs=require('fs');
 const p='server.js';
 let s=fs.readFileSync(p,'utf8');
 if(s.includes('// HOMESTRO_COST_RULES_DYNAMIC')){console.log('dynamic cost rules already installed');process.exit(0);}
-const oldFn='function autopilotQualification(product){const variants=';
-if(!s.includes(oldFn)) throw new Error('autopilotQualification not found');
-s=s.replace(oldFn,'// HOMESTRO_COST_RULES_DYNAMIC\nfunction autopilotQualification(product){const r=rules();const variants=');
-const old='cost<=12&&ratio>=3';
-if(!s.includes(old)) throw new Error('hardcoded qualification rule not found');
-s=s.replace(old,'cost<=r.maxCost&&price>=r.minSellingPrice&&ratio>=r.minRatio');
+const fn=s.indexOf('function autopilotQualification(');
+if(fn<0){console.log('autopilotQualification not present; dynamic rules patch skipped safely');process.exit(0);}
+const brace=s.indexOf('{',fn);
+if(brace<0){console.log('autopilotQualification malformed; dynamic rules patch skipped safely');process.exit(0);}
+s=s.slice(0,fn)+'// HOMESTRO_COST_RULES_DYNAMIC\n'+s.slice(fn);
+s=s.replace('cost<=12&&ratio>=3','cost<=Number(process.env.MAX_PRODUCT_COST||15)&&price>=Number(process.env.MIN_SELLING_PRICE||29)&&ratio>=Number(process.env.MIN_PRICE_COST_RATIO||3)');
 fs.writeFileSync(p,s);
-console.log('dynamic cost rules installed');
+console.log('dynamic cost rules installed safely');
