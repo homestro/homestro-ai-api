@@ -1,16 +1,24 @@
-const fs=require('fs');
-const {spawn}=require('child_process');
-const https=require('https');
-const BASE='https://raw.githubusercontent.com/homestro/homestro-ai-api/main/';
-const FILES=['server.js','patch-autopilot.js','patch-shopify-auth.js','patch-json-safe.js'];
-function get(url){return new Promise((resolve,reject)=>https.get(url,{headers:{'User-Agent':'Homestro-Railway'}},r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>r.statusCode>=200&&r.statusCode<300?resolve(d):reject(new Error('HTTP '+r.statusCode+' for '+url)));}).on('error',reject));}
-(async()=>{
- console.log('HOMESTRO BOOTSTRAP START v3');
- for(const f of FILES){const content=await get(BASE+f);fs.writeFileSync(f,content);console.log('HOMESTRO FILE REFRESHED '+f+' '+content.length);}
- require('./patch-autopilot.js');
- require('./patch-shopify-auth.js');
- require('./patch-json-safe.js');
- console.log('HOMESTRO PATCHES COMPLETE v3');
- const child=spawn(process.execPath,['./server.js'],{stdio:'inherit'});
- child.on('exit',code=>process.exit(code??0));
-})().catch(e=>{console.error('HOMESTRO BOOTSTRAP FAILED',e);process.exit(1);});
+const { spawn } = require('child_process');
+
+// Clean Railway entrypoint: server.js is already the canonical runtime.
+// Do not download/execute legacy patch scripts at boot; doing so can make
+// deployments fail before the HTTP health endpoint starts.
+console.log('HOMESTRO BOOTSTRAP START v4');
+
+const child = spawn(process.execPath, ['./server.js'], {
+  stdio: 'inherit',
+  env: process.env
+});
+
+child.on('error', (err) => {
+  console.error('HOMESTRO SERVER SPAWN FAILED', err);
+  process.exit(1);
+});
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    console.error(`HOMESTRO SERVER EXITED BY SIGNAL ${signal}`);
+    process.exit(1);
+  }
+  process.exit(code ?? 0);
+});
