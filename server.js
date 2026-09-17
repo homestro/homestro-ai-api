@@ -37,4 +37,38 @@ async function createDraft(input,token){if(!input?.title)throw Object.assign(new
 app.post('/api/shopify/products/draft',apiKey,async(req,res)=>{try{res.status(201).json({ok:true,product:await createDraft(req.body?.product||req.body),status:'DRAFT'});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,userErrors:e.details});}});
 async function updateVariants(productId,variants,token){const normalized=(Array.isArray(variants)?variants:[]).map(v=>({id:String(v.id||''),optionValues:(v.optionValues||[]).map(o=>({optionName:String(o.optionName||''),name:String(o.name||'')}))})).filter(v=>v.id&&v.optionValues.length&&v.optionValues.every(o=>o.optionName&&o.name));if(!productId||!normalized.length)throw Object.assign(new Error('productId and valid variants are required.'),{status:400});const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants,allowPartialUpdates:false){product{id title options{id name optionValues{id name}}variants(first:100){nodes{id title selectedOptions{name value}image{id url altText}}}}userErrors{field message}}}',{productId,variants:normalized},token);if(d.productVariantsBulkUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected the variant update.'),{status:400,details:d.productVariantsBulkUpdate.userErrors});return d.productVariantsBulkUpdate.product;}
 app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({ok:true,product:await updateVariants(String(req.body.productId||''),req.body.variants,await getClientToken())});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,userErrors:e.details});}});
+
+// HOMESTRO_CATALOG_AUTOPILOT_V3
+const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set()};
+const catalogKeywords=['home organization','kitchen storage','car cleaning','garden tools','home improvement','pet accessories','fitness accessories','baby accessories','beauty accessories','travel accessories'];
+function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
+function catalogNum(v){const n=Number(String(v??'').replace(/[^0-9.,-]/g,'').replace(',','.'));return Number.isFinite(n)?n:NaN;}
+async function catalogSearch(keyword){
+ const url='https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html?g=y';
+ const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/3.0)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
+ const html=await r.text(); if(!r.ok)throw new Error('AliExpress HTTP '+r.status);
+ const out=[],ids=new Set(),re=/(?:productId|product_id|productIdStr)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi; let m;
+ while((m=re.exec(html))&&out.length<80){const id=m[1];if(ids.has(id))continue;ids.add(id);const c=html.slice(Math.max(0,m.index-3000),Math.min(html.length,m.index+6000));
+  const t=c.match(/(?:productTitle|title)\s*["']?\s*[:=]\s*["']([^"']{10,300})/i),p=c.match(/(?:salePrice|discountPrice|price)\s*["']?\s*[:=]\s*["']?([0-9]+(?:[.,][0-9]+)?)/i),o=c.match(/(?:orders|sold)\s*["']?\s*[:=]\s*["']?([0-9,.]+)\+?/i),im=c.match(/https?:\/\/[^"'\\ ]+\.(?:jpg|jpeg|png|webp)/i);
+  out.push({id,title:String(t?.[1]||keyword).replace(/<[^>]*>/g,' ').trim(),cost:catalogNum(p?.[1]),sold:catalogNum(o?.[1])||0,image_urls:im?[im[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
+ }
+ console.log('CATALOG SOURCE',keyword,'items='+out.length); return out;
+}
+function catalogPass(x){const r=rules(),cost=Number(x.cost);if(!Number.isFinite(cost)||cost<3||cost>r.maxCost)return false;if(Number(x.sold||0)<1000)return false;const price=Math.max(r.minSellingPrice,Math.ceil(cost*3*100)/100);return price/cost>=r.minRatio;}
+async function catalogRun(){
+ if(catalogState.running)return; catalogState.running=true; let created=0,rejected=0,failed=0;
+ try{let token=null;const batch=Math.max(1,Number(process.env.HOMESTRO_CATALOG_BATCH||10));
+  for(const k of catalogKeywords){if(created>=batch)break;let items=[];try{items=await catalogSearch(k);}catch(e){failed++;console.error('CATALOG SOURCE FAILED',k,e.message);continue;}
+   for(const x of items){if(created>=batch)break;if(catalogState.seen.has(x.id))continue;catalogState.seen.add(x.id);if(!catalogPass(x)){rejected++;continue;}
+    try{if(!token)token=await getClientToken();const selling=Math.max(rules().minSellingPrice,Math.ceil(Number(x.cost)*3.25*100)/100);const ai=await aiProduct({title:x.title,description:'Source product. Use only facts verifiable from the source page.',category:'',source_url:x.source_url,cost:x.cost,selling_price:selling,sold:x.sold});const p=ai.product||{};if(!p.title)throw new Error('AI returned no title');const d=await createDraft({title:p.title,description:p.description,shortDescription:p.shortDescription,category:p.category,tags:p.tags,seoTitle:p.seoTitle,seoDescription:p.seoDescription,handle:p.handle,cost:Number(x.cost),selling_price:selling,image_urls:x.image_urls,source_url:x.source_url},token);created++;catalogState.created++;console.log('CATALOG DRAFT CREATED',x.id,'shopify='+d.id,'media='+d.mediaCount);}catch(e){failed++;catalogState.failed++;console.error('CATALOG CREATE FAILED',x.id,e.message);}
+   }
+  }
+  catalogState.rejected+=rejected;catalogState.lastRun=new Date().toISOString();catalogState.lastError=null;console.log('CATALOG RUN COMPLETE','created='+created,'rejected='+rejected,'failed='+failed);
+ }catch(e){catalogState.lastRun=new Date().toISOString();catalogState.lastError=e.message;console.error('CATALOG RUN FAILED',e.message);}finally{catalogState.running=false;}
+}
+app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+app.post('/api/catalog/run',apiKey,async(_q,res)=>{if(catalogState.running)return res.json({ok:true,skipped:true});catalogRun();res.json({ok:true,started:true});});
+if(process.env.HOMESTRO_CATALOG_ENABLED!=='false'){setTimeout(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),10000);setInterval(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),catalogInterval());}
+
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
