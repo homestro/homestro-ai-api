@@ -52,6 +52,7 @@ async function catalogDiscoveryRun(){
   finally{catalogDiscovery.running=false;}
 }
 app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',intervalMs:catalogInterval(),running:catalogDiscovery.running,lastRun:catalogDiscovery.lastRun,lastError:catalogDiscovery.lastError,totals:{created:catalogDiscovery.created,rejected:catalogDiscovery.rejected,failed:catalogDiscovery.failed}}));
+app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogDiscovery.running,lastRun:catalogDiscovery.lastRun,lastError:catalogDiscovery.lastError,totals:{created:catalogDiscovery.created,rejected:catalogDiscovery.rejected,failed:catalogDiscovery.failed}}));
 app.post('/api/catalog/run',apiKey,async(_q,res)=>res.json(await catalogDiscoveryRun()));
 if(process.env.HOMESTRO_CATALOG_ENABLED!=='false'){setTimeout(()=>catalogDiscoveryRun().catch(console.error),10000);setInterval(()=>catalogDiscoveryRun().catch(console.error),catalogInterval());}
 `;
