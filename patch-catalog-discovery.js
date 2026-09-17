@@ -5,7 +5,7 @@ if(s.includes('HOMESTRO_CATALOG_DISCOVERY_V1')){console.log('CATALOG DISCOVERY a
 const marker='app.listen(';
 const i=s.indexOf(marker);
 if(i<0)throw new Error('app.listen marker not found');
-const code=String.raw`
+const code=`
 // HOMESTRO_CATALOG_DISCOVERY_V1
 const catalogDiscovery={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set()};
 const catalogKeywords=['home organization','kitchen storage','car cleaning','garden tools','home improvement','pet accessories','fitness accessories','baby accessories','beauty accessories','travel accessories'];
