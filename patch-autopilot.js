@@ -1,7 +1,7 @@
 const fs=require('fs');
 const p='server.js';
 let s=fs.readFileSync(p,'utf8');
-const listen='\napp.listen(';
+const listen='app.listen(';
 const li=s.indexOf(listen);
 if(li<0)throw new Error('app.listen marker not found');
 const marker='// HOMESTRO_AUTOPILOT_ENABLED';
