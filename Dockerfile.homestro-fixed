@@ -1,5 +1,5 @@
 FROM node:20-bookworm-slim
-# HOMESTRO FORCE DEPLOY 2026-09-16
+# HOMESTRO FORCE DEPLOY 2026-09-17 CATALOG DISCOVERY
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
@@ -7,4 +7,4 @@ RUN npm install --omit=dev
 COPY . .
 ENV NODE_ENV=production
 ENV PORT=8080
-CMD ["sh", "-c", "node ./patch-autopilot.js && node ./patch-quality-gate.js && node ./patch-shopify-auth.js && node ./patch-json-safe.js && node ./server.js"]
+CMD ["sh", "-c", "node ./patch-autopilot.js && node ./patch-quality-gate.js && node ./patch-shopify-auth.js && node ./patch-json-safe.js && node ./patch-catalog-discovery.js && node ./server.js"]
