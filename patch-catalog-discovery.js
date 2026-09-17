@@ -1,10 +1,12 @@
 const fs=require('fs');
 const p='server.js';
 let s=fs.readFileSync(p,'utf8');
-const start=s.indexOf('// HOMESTRO_CATALOG_DISCOVERY_V1');
+const startV1=s.indexOf('// HOMESTRO_CATALOG_DISCOVERY_V1');
+const startV2=s.indexOf('// HOMESTRO_CATALOG_DISCOVERY_V2');
+const start=startV2>=0?startV2:startV1;
 const listen=s.indexOf('app.listen(');
 if(listen<0)throw new Error('app.listen marker not found');
-if(start<0)throw new Error('catalog marker not found');
+// Fresh source has no catalog block; insert at app.listen. Existing build artifact is replaced in-place.
 const code=`
 // HOMESTRO_CATALOG_DISCOVERY_V2
 const catalogDiscovery={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set()};
