@@ -7,4 +7,4 @@ RUN npm install --omit=dev
 COPY . .
 ENV NODE_ENV=production
 ENV PORT=8080
-CMD ["sh", "-c", "node ./patch-autopilot.js && node ./patch-shopify-auth.js && node ./patch-json-safe.js && node ./server.js"]
+CMD ["sh", "-c", "node ./patch-autopilot.js && node ./patch-quality-gate.js && node ./patch-shopify-auth.js && node ./patch-json-safe.js && node ./server.js"]
