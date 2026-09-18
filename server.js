@@ -205,6 +205,33 @@ function catalogPass(x){
  const price=Math.max(r.minSellingPrice,Math.ceil(cost*3.25*100)/100);
  return price/cost>=r.minRatio;
 }
+async function processExistingDraftProduct(productId,token){
+ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags variants(first:100){nodes{id title price sku selectedOptions{name value}}} media(first:20){nodes{mediaContentType status alt{id}}}}}',{id:productId},token);
+ const p=d.product;if(!p)throw new Error('Product not found');
+ const desc=String(p.description||'');
+ const src=(desc.match(/https?:\\/\\/(?:www\\.)?aliexpress\\.com\\/item\\/\\d+\\.html[^\\s<]*/i)||[])[0]||'';
+ const id=(src.match(/\\/item\\/(\\d+)\\.html/i)||[])[1]||'';
+ if(!src||!id)throw new Error('No AliExpress source URL found');
+ const details=await extractAliExpressDetails(src);
+ if(!details.page_title||!details.page_text)throw new Error('AliExpress source data unavailable');
+ if(!details.image_urls.length)throw new Error('No source images');
+ if(!details.variants.length)throw new Error('No source variants');
+ const ai=await aiProduct({title:details.page_title,description:details.page_text.slice(0,7000),category:p.productType,source_url:src,source_product_id:id,variants:details.variants,options:details.options,image_urls:details.image_urls});
+ const x=ai.product||{};
+ if(!x.title)throw new Error('AI returned no title');
+ const price=Number(p.variants?.nodes?.[0]?.price||0);
+ if(!Number.isFinite(price)||price<=0)throw new Error('Existing product has no valid selling price');
+ const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description seo{title description} tags}userErrors{field message}}}',{input:{id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),tags:[...(Array.isArray(x.tags)?x.tags:[]),'homestro-ai-processed-existing'],seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}}},token);
+ if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
+ const media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
+ return {id:productId,title:x.title,source_url:src,source_product_id:id,images:media.count,variants:details.variants.length,price,processed:true};
+}
+async function processExistingDrafts(limit,token){
+ const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status}}}',{first:Math.min(Math.max(Number(limit)||10,1),10),query:'status:draft'},token);
+ const results=[];for(const p of d.products.nodes){try{results.push(await processExistingDraftProduct(p.id,token));}catch(e){results.push({id:p.id,title:p.title,processed:false,error:e.message});}}
+ return results;
+}
+
 async function catalogRun(){
  if(catalogState.running)return; catalogState.running=true; let created=0,rejected=0,failed=0;
  try{
