@@ -1,0 +1,13 @@
+FROM node:20-bookworm-slim
+# HOMESTRO HEALTHCHECK FIX 2026-09-18
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && command -v curl \
+    && curl --version \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+COPY . .
+ENV NODE_ENV=production
+ENV PORT=8080
+CMD ["node", "./server.js"]
