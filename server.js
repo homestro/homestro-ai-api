@@ -209,8 +209,8 @@ async function processExistingDraftProduct(productId,token){
  const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags variants(first:100){nodes{id title price sku selectedOptions{name value}}} media(first:20){nodes{mediaContentType status alt{id}}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');
  const desc=String(p.description||'');
- const src=(desc.match(/https?:\\/\\/(?:www\\.)?aliexpress\\.com\\/item\\/\\d+\\.html[^\\s<]*/i)||[])[0]||'';
- const id=(src.match(/\\/item\\/(\\d+)\\.html/i)||[])[1]||'';
+ const src=(desc.match(/https?:\/\/(?:www\.)?aliexpress\.com\/item\/\d+\.html[^\s<]*/i)||[])[0]||'';
+ const id=(src.match(/\/item\/(\d+)\.html/i)||[])[1]||'';
  if(!src||!id)throw new Error('No AliExpress source URL found');
  const details=await extractAliExpressDetails(src);
  if(!details.page_title||!details.page_text)throw new Error('AliExpress source data unavailable');
