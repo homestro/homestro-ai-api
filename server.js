@@ -139,34 +139,21 @@ async function createDraft(input,token){
  if(!input?.title)throw Object.assign(new Error('Product title is required.'),{status:400});
  const cost=Number(input.cost),price=Number(input.selling_price??input.sellingPrice),ratio=cost>0&&Number.isFinite(price)?price/cost:NaN;
  if(Number.isFinite(cost)&&Number.isFinite(price)){const v=validateProduct(cost,price,ratio);if(!v.valid)throw Object.assign(new Error('Product fails Homestro rules.'),{status:400,details:v.rules});}
- const found=await discoverImages(input);
- const details=found.details||{};
+ const found=await discoverImages(input),details=found.details||{};
  const opts=Array.isArray(input.options)&&input.options.length?input.options:(details.options||[]);
  const variantsRaw=Array.isArray(input.variants)&&input.variants.length?input.variants:(details.variants||[]);
- const files=found.urls.slice(0,12).map((url,i)=>({originalSource:url,contentType:'IMAGE',alt:String(input.title||'Homestro Produkt')+' Bild '+(i+1)}));
- const variants=variantsRaw.length?variantsRaw.slice(0,100).map((ovs,i)=>({optionValues:ovs,price:Number.isFinite(price)?String(price):undefined,inventoryItem:{cost:Number.isFinite(cost)?String(cost):undefined,sku:String(input.supplier_id||input.supplierId||input.source_product_id||input.sourceProductId||'AE')+'-'+(i+1)}})):undefined;
- const product={
-  title:String(input.title).trim(),
-  descriptionHtml:String(input.descriptionHtml||input.description||'').trim(),
-  handle:input.handle?String(input.handle).trim():undefined,
-  vendor:input.vendor?String(input.vendor).trim():'Homestro',
-  productType:String(input.productType||input.category||'').trim()||undefined,
-  status:'DRAFT',
-  tags:Array.isArray(input.tags)?input.tags.map(String).filter(Boolean):[],
-  seo:{title:String(input.seoTitle||'').slice(0,70)||undefined,description:String(input.seoDescription||'').slice(0,320)||undefined},
-  productOptions:opts.slice(0,3).map((o,i)=>({name:String(o.name),position:i+1,values:(Array.isArray(o.values)?o.values:[]).slice(0,100).map(v=>({name:String(v)}))})),
-  variants,
-  files
- };
- if(!variants)delete product.variants;
+ const uniqueHandle=String(input.handle||'homestro-produkt').replace(/[^a-zA-Z0-9-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,80)+'-'+String(input.source_product_id||input.sourceProductId||Date.now());
+ const product={title:String(input.title).trim(),descriptionHtml:String(input.descriptionHtml||input.description||'').trim(),handle:uniqueHandle,vendor:input.vendor?String(input.vendor).trim():'Homestro',productType:String(input.productType||input.category||'').trim()||undefined,status:'DRAFT',tags:Array.isArray(input.tags)?input.tags.map(String).filter(Boolean):[],seo:{title:String(input.seoTitle||'').slice(0,70)||undefined,description:String(input.seoDescription||'').slice(0,320)||undefined},productOptions:opts.slice(0,3).map((o,i)=>({name:String(o.name),position:i+1,values:(Array.isArray(o.values)?o.values:[]).slice(0,100).map(v=>({name:String(v)}))})),variants:variantsRaw.length?variantsRaw.slice(0,100).map((ovs,i)=>({optionValues:ovs,price:Number.isFinite(price)?String(price):undefined,inventoryItem:{cost:Number.isFinite(cost)?String(cost):undefined,sku:String(input.source_product_id||input.sourceProductId||'AE')+'-'+(i+1)}})):undefined),metafields:[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:String(input.source_url||'')},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:String(input.source_product_id||'')}]};
+ if(!product.variants)delete product.variants;
  if(!product.seo.title&&!product.seo.description)delete product.seo;
  if(!product.productOptions.length)delete product.productOptions;
- if(!product.files.length)delete product.files;
+ if(!product.files)delete product.files;
  const d=await shopifyGraphQL('mutation($input:ProductSetInput!){productSet(input:$input,synchronous:true){product{id title handle status vendor productType tags seo{title description}options{name position optionValues{name}}variants(first:100){nodes{id title price sku selectedOptions{name value}image{id url altText}inventoryItem{unitCost{amount currencyCode}}}}media(first:20){nodes{mediaContentType status alt}}}userErrors{field message}}}',{input:product},token);
- const errs=d.productSet.userErrors||[];
- if(errs.length)throw Object.assign(new Error('Shopify rejected the product: '+errs.map(e=>e.message).join('; ')),{status:400,details:errs});
+ const errs=d.productSet.userErrors||[];if(errs.length)throw Object.assign(new Error('Shopify rejected the product: '+errs.map(e=>e.message).join('; ')),{status:400,details:errs});
  const p=d.productSet.product;
- return{...p,mediaCount:(p.media?.nodes||[]).length,variantCount:(p.variants?.nodes||[]).length,options:p.options||[],sourceImageCount:found.urls.length,euWarehouse:Boolean(details.euWarehouse)};
+ let media={count:0,urls:[],rejected:0,validation:'source-images'};
+ try{media=await addMedia(p.id,input,p.title,token);}catch(e){console.error('PRODUCT MEDIA FAILED',input.source_product_id,e.message);}
+ return{...p,mediaCount:media.count,variantCount:(p.variants?.nodes||[]).length,options:p.options||[],sourceImageCount:found.urls.length,euWarehouse:Boolean(details.euWarehouse),mediaValidation:media.validation};
 }
 
 app.post('/api/shopify/products/draft',apiKey,async(req,res)=>{try{res.status(201).json({ok:true,product:await createDraft(req.body?.product||req.body),status:'DRAFT'});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,userErrors:e.details});}});
