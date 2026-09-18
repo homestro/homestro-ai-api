@@ -74,40 +74,45 @@ function absoluteUrl(u,base){try{return new URL(u,base).href;}catch{return null;
 async function extractAliExpressDetails(url){
  const out={image_urls:[],variants:[],options:[],page_title:'',page_text:'',euWarehouse:false};
  try{
-  const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.0)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
+  const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.1)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
   if(!r.ok)return out;
   const html=await r.text();
-  out.page_text=html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi,' ').replace(/<style[^>]*>[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,20000);
-  out.page_title=((html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i)||[])[1]||'').replace(/<[^>]+>/g,' ').trim();
+  const strip=new RegExp('<script[^>]*>[\\s\\S]*?</script>','gi');
+  const style=new RegExp('<style[^>]*>[\\s\\S]*?</style>','gi');
+  out.page_text=html.replace(strip,' ').replace(style,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,20000);
+  const titleMatch=html.match(new RegExp('<title[^>]*>([\\s\\S]*?)</title>','i'));
+  out.page_title=String(titleMatch?.[1]||'').replace(/<[^>]+>/g,' ').trim();
   const urls=[];
-  const add=u=>{try{u=String(u).replace(/\\\\\\\//g,'/').replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&');if(/^https?:\\/\\//i.test(u))urls.push(u.replace(/\\\\/g,''));}catch{}};
+  const add=u=>{try{let v=String(u).replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&').replace(/\\\\\//g,'/');if(/^https?:\/\//i.test(v))urls.push(v.replace(/\\\\/g,''));}catch{}};
   let m;
-  const metaRe=/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["'][^>]*>/gi;
+  const metaRe=new RegExp('<meta[^>]+(?:property|name)=["\\'](?:og:image|twitter:image)["\\'][^>]+content=["\\']([^"\\']+)["\\'][^>]*>','gi');
   while((m=metaRe.exec(html))&&urls.length<12)add(m[1]);
-  const jsonImageRe=/"(?:image|images|imageUrl|imageURL)"\\s*:\\s*"(https?:[^"\\\\]+)"/gi;
+  const jsonImageRe=new RegExp('"(?:image|images|imageUrl|imageURL)"\\s*:\\s*"(https?:[^"\\\\]+)"','gi');
   while((m=jsonImageRe.exec(html))&&urls.length<40)add(m[1]);
-  const imgRe=/(?:src|data-src|data-original)=["'](https?:[^"']+)["']/gi;
-  while((m=imgRe.exec(html))&&urls.length<50)add(m[1]);
+  const imgRe=new RegExp('(?:src|data-src|data-original)=["\\'](https?:[^"\\']+)["\\']','gi');
+  while((m=imgRe.exec(html))&&urls.length<60)add(m[1]);
   out.image_urls=[...new Set(urls.filter(u=>!/logo|icon|avatar|sprite/i.test(u)))].slice(0,20);
 
-  const valueMap=new Map(), optionDefs=[];
-  const optRe=/"skuPropertyName"\\s*:\\s*"([^"]+)"[\\s\S]{0,12000}?"skuPropertyValues"\\s*:\\s*\\[([\\s\\S]*?)\\]/gi;
+  const valueMap=new Map(),optionDefs=[];
+  const optRe=new RegExp('"skuPropertyName"\\s*:\\s*"([^"]+)"[\\s\\S]{0,12000}?"skuPropertyValues"\\s*:\\s*\\[([\\s\\S]*?)\\]','gi');
   while((m=optRe.exec(html))&&optionDefs.length<3){
-   const name=m[1].trim(), vals=[];let vm;
-   const vr=/"propertyValueId"\\s*:\\s*"?([0-9]+)"?[\\s\\S]{0,500}?"propertyValueDisplayName"\\s*:\\s*"([^"]+)"/gi;
-   while((vm=vr.exec(m[2]))&&vals.length<100){const id=vm[1],label=vm[2].trim();if(!valueMap.has(id))valueMap.set(id,{name:label,option:name});if(!vals.some(v=>v.name===label))vals.push({name:label,id});}
-   if(vals.length){optionDefs.push({name,values:vals.map(v=>v.name)});}
+   const name=m[1].trim(),vals=[];
+   let vm;const vr=new RegExp('"propertyValueId"\\s*:\\s*"?([0-9]+)"?[\\s\\S]{0,500}?"propertyValueDisplayName"\\s*:\\s*"([^"]+)"','gi');
+   while((vm=vr.exec(m[2]))&&vals.length<100){
+    const id=vm[1],label=vm[2].trim();if(!valueMap.has(id))valueMap.set(id,{name:label,option:name});
+    if(!vals.some(v=>v.name===label))vals.push({name:label,id});
+   }
+   if(vals.length)optionDefs.push({name,values:vals.map(v=>v.name)});
   }
   out.options=optionDefs;
-  const combos=[];const skuRe=/"([0-9]+(?::[0-9]+)+)"\\s*:\\s*\\{[\\s\\S]{0,2500}?"skuId"\\s*:/g;
+  const combos=[],seen=new Set();
+  const skuRe=new RegExp('"([0-9]+(?::[0-9]+)+)"\\s*:\\s*\\{[\\s\\S]{0,2500}?"skuId"\\s*:','g');
   while((m=skuRe.exec(html))&&combos.length<100){
    const parts=m[1].split(':').map(id=>valueMap.get(id)).filter(Boolean);
-   if(parts.length)combos.push(parts.map(v=>({optionName:v.option,name:v.name})));
+   if(parts.length){const combo=parts.map(v=>({optionName:v.option,name:v.name}));const key=JSON.stringify(combo);if(!seen.has(key)){seen.add(key);combos.push(combo);}}
   }
-  const seen=new Set();
-  out.variants=combos.filter(v=>{const k=JSON.stringify(v);if(seen.has(k))return false;seen.add(k);return true;});
-  const eu=/ships?\\s+from\\s*[:\\-]?\\s*(Germany|Poland|Czech(?:ia| Republic)|France|Spain|Italy|Netherlands|Belgium|Austria|EU|European Union)/i.test(out.page_text);
-  out.euWarehouse=eu;
+  out.variants=combos;
+  out.euWarehouse=new RegExp('ships?\\s+from\\s*[:\\-]?\\s*(Germany|Poland|Czech(?:ia| Republic)|France|Spain|Italy|Netherlands|Belgium|Austria|EU|European Union)','i').test(out.page_text);
  }catch{}
  return out;
 }
