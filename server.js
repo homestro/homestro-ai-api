@@ -15,6 +15,37 @@ async function getRequestToken(req){const a=req.get('authorization')||'',id=a.st
 async function shopifyGraphQL(query,variables={},overrideToken){const c=cfg();if(!c.domain)throw Object.assign(new Error('Shopify is not configured.'),{status:503});const token=overrideToken||await getClientToken();const r=await fetch(`https://${c.domain}/admin/api/2026-07/graphql.json`,{method:'POST',headers:{'Content-Type':'application/json','X-Shopify-Access-Token':token},body:JSON.stringify({query,variables})});const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch(e){throw Object.assign(new Error('Shopify GraphQL returned non-JSON HTTP '+r.status+' '+raw.slice(0,180)),{status:502});}if(!r.ok||d.errors?.length)throw Object.assign(new Error(d.errors?.map(x=>x.message).join('; ')||`Shopify HTTP ${r.status}`),{status:502});return d.data;}
 function apiKey(req,res,next){const k=process.env.HOMESTRO_API_KEY,a=req.get('authorization')||'';if(!k)return res.status(503).json({ok:false,error:'API key is not configured.'});if(a==='Bearer '+k)return next();return res.status(401).json({ok:false,error:'Unauthorized'});}
 async function sidekick(req,res,next){try{req.sidekick=await getRequestToken(req);next();}catch(e){res.set('X-Shopify-Retry-Invalid-Session-Request','1');res.status(e.status||401).json({ok:false,error:e.message});}}
+// SHOPIFY OAUTH INSTALL FLOW
+const oauthStates=new Map();
+function shopifyHmacValid(query){
+ const c=cfg(),h=String(query.hmac||'');if(!h||!c.clientSecret)return false;
+ const pairs=Object.keys(query).filter(k=>!['hmac','signature'].includes(k)).sort().map(k=>`${k}=${Array.isArray(query[k])?query[k].join(','):query[k]}`);
+ const digest=crypto.createHmac('sha256',c.clientSecret).update(pairs.join('&')).digest('hex');
+ return crypto.timingSafeEqual(Buffer.from(digest),Buffer.from(h));
+}
+app.get('/auth/install',(req,res)=>{
+ const c=cfg(),shop=String(req.query.shop||c.domain||'').trim().toLowerCase();
+ if(!c.domain||!c.clientId||!c.clientSecret)return res.status(503).send('Shopify OAuth is not configured.');
+ if(!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop))return res.status(400).send('Invalid Shopify shop.');
+ const state=crypto.randomBytes(24).toString('hex');oauthStates.set(state,{shop,expires:Date.now()+600000});
+ const redirect=encodeURIComponent(`https://${req.get('host')}/auth/callback`);
+ const scopes=encodeURIComponent('write_products,read_products');
+ res.redirect(`https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(c.clientId)}&scope=${scopes}&redirect_uri=${redirect}&state=${state}`);
+});
+app.get('/auth/callback',async(req,res)=>{
+ try{
+  const c=cfg(),shop=String(req.query.shop||'').trim().toLowerCase(),code=String(req.query.code||''),state=String(req.query.state||'');
+  const st=oauthStates.get(state);oauthStates.delete(state);
+  if(!st||st.expires<Date.now()||st.shop!==shop)return res.status(400).send('Invalid or expired Shopify OAuth state.');
+  if(!shopifyHmacValid(req.query))return res.status(400).send('Invalid Shopify OAuth HMAC.');
+  const r=await fetch(`https://${shop}/admin/oauth/access_token`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:c.clientId,client_secret:c.clientSecret,code})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||!d.access_token)return res.status(502).send('Shopify OAuth token exchange failed.');
+  cached={token:d.access_token,expires:Date.now()+Number(d.expires_in||86400)*1000};
+  res.redirect('/');
+ }catch(e){res.status(500).send('Shopify OAuth callback failed.');}
+});
+
 app.get('/',(_q,res)=>res.type('html').send('<!doctype html><html lang="de"><body><h1>Homestro AI Control</h1><p>Backend online</p><p>Neue Produkte bleiben DRAFT.</p></body></html>'));
 app.get('/health',(_q,res)=>res.json({ok:true,service:'homestro-ai-api',timestamp:new Date().toISOString()}));
 app.get('/api/status',apiKey,(_q,res)=>res.json({ok:true,service:'homestro-ai-api',shopifyConfigured:Boolean(cfg().domain),openaiConfigured:Boolean(process.env.OPENAI_API_KEY),imageValidation:'strict-vision'}));
