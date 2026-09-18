@@ -85,11 +85,11 @@ async function extractAliExpressDetails(url){
   const urls=[];
   const add=u=>{try{let v=String(u).replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&').replace(/\\\\\//g,'/');if(/^https?:\/\//i.test(v))urls.push(v.replace(/\\\\/g,''));}catch{}};
   let m;
-  const metaRe=new RegExp('<meta[^>]+(?:property|name)=["\\'](?:og:image|twitter:image)["\\'][^>]+content=["\\']([^"\\']+)["\\'][^>]*>','gi');
+  const metaRe=new RegExp("<meta[^>]+(?:property|name)=\"(?:og:image|twitter:image)\"[^>]+content=\"([^\"]+)\"[^>]*>","gi");
   while((m=metaRe.exec(html))&&urls.length<12)add(m[1]);
   const jsonImageRe=new RegExp('"(?:image|images|imageUrl|imageURL)"\\s*:\\s*"(https?:[^"\\\\]+)"','gi');
   while((m=jsonImageRe.exec(html))&&urls.length<40)add(m[1]);
-  const imgRe=new RegExp('(?:src|data-src|data-original)=["\\'](https?:[^"\\']+)["\\']','gi');
+  const imgRe=new RegExp("(?:src|data-src|data-original)=\"(https?:[^\"]+)\"","gi");
   while((m=imgRe.exec(html))&&urls.length<60)add(m[1]);
   out.image_urls=[...new Set(urls.filter(u=>!/logo|icon|avatar|sprite/i.test(u)))].slice(0,20);
 
