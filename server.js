@@ -77,7 +77,7 @@ async function extractAliExpressDetails(url){
   const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.0)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
   if(!r.ok)return out;
   const html=await r.text();
-  out.page_text=html.replace(/<script[\\s\\S]*?<\\/script>/gi,' ').replace(/<style[\\s\\S]*?<\\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').slice(0,20000);
+  out.page_text=html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi,' ').replace(/<style[^>]*>[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,20000);
   out.page_title=((html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i)||[])[1]||'').replace(/<[^>]+>/g,' ').trim();
   const urls=[];
   const add=u=>{try{u=String(u).replace(/\\\\\\\//g,'/').replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&');if(/^https?:\\/\\//i.test(u))urls.push(u.replace(/\\\\/g,''));}catch{}};
