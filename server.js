@@ -143,7 +143,19 @@ async function createDraft(input,token){
  const opts=Array.isArray(input.options)&&input.options.length?input.options:(details.options||[]);
  const variantsRaw=Array.isArray(input.variants)&&input.variants.length?input.variants:(details.variants||[]);
  const uniqueHandle=String(input.handle||'homestro-produkt').replace(/[^a-zA-Z0-9-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,80)+'-'+String(input.source_product_id||input.sourceProductId||Date.now());
- const product={title:String(input.title).trim(),descriptionHtml:String(input.descriptionHtml||input.description||'').trim(),handle:uniqueHandle,vendor:input.vendor?String(input.vendor).trim():'Homestro',productType:String(input.productType||input.category||'').trim()||undefined,status:'DRAFT',tags:Array.isArray(input.tags)?input.tags.map(String).filter(Boolean):[],seo:{title:String(input.seoTitle||'').slice(0,70)||undefined,description:String(input.seoDescription||'').slice(0,320)||undefined},productOptions:opts.slice(0,3).map((o,i)=>({name:String(o.name),position:i+1,values:(Array.isArray(o.values)?o.values:[]).slice(0,100).map(v=>({name:String(v)}))})),variants:variantsRaw.length?variantsRaw.slice(0,100).map((ovs,i)=>({optionValues:ovs,price:Number.isFinite(price)?String(price):undefined,inventoryItem:{cost:Number.isFinite(cost)?String(cost):undefined,sku:String(input.source_product_id||input.sourceProductId||'AE')+'-'+(i+1)}})):undefined),metafields:[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:String(input.source_url||'')},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:String(input.source_product_id||'')}]};
+ const product={
+  title:String(input.title).trim(),
+  descriptionHtml:String(input.descriptionHtml||input.description||'').trim(),
+  handle:uniqueHandle,
+  vendor:input.vendor?String(input.vendor).trim():'Homestro',
+  productType:String(input.productType||input.category||'').trim()||undefined,
+  status:'DRAFT',
+  tags:Array.isArray(input.tags)?input.tags.map(String).filter(Boolean):[],
+  seo:{title:String(input.seoTitle||'').slice(0,70)||undefined,description:String(input.seoDescription||'').slice(0,320)||undefined},
+  productOptions:opts.slice(0,3).map((o,i)=>({name:String(o.name),position:i+1,values:(Array.isArray(o.values)?o.values:[]).slice(0,100).map(v=>({name:String(v)}))})),
+  variants:variantsRaw.length?variantsRaw.slice(0,100).map((ovs,i)=>({optionValues:ovs,price:Number.isFinite(price)?String(price):undefined,inventoryItem:{cost:Number.isFinite(cost)?String(cost):undefined,sku:String(input.source_product_id||input.sourceProductId||'AE')+'-'+(i+1)}})):undefined,
+  metafields:[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:String(input.source_url||'')},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:String(input.source_product_id||'')}]
+ };
  if(!product.variants)delete product.variants;
  if(!product.seo.title&&!product.seo.description)delete product.seo;
  if(!product.productOptions.length)delete product.productOptions;
