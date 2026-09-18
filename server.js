@@ -142,7 +142,7 @@ async function createDraft(input,token){
  const found=await discoverImages(input),details=found.details||{};
  const opts=Array.isArray(input.options)&&input.options.length?input.options:(details.options||[]);
  const variantsRaw=Array.isArray(input.variants)&&input.variants.length?input.variants:(details.variants||[]);
- const uniqueHandle=String(input.handle||'homestro-produkt').replace(/[^a-zA-Z0-9-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,80)+'-'+String(input.source_product_id||input.sourceProductId||Date.now());
+ const baseHandle=String(input.handle||'homestro-produkt').replace(/[^a-zA-Z0-9-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,60)||'homestro-produkt'; const sourceId=String(input.source_product_id||input.sourceProductId||'produkt').replace(/[^a-zA-Z0-9-]/g,'-').slice(0,24); const uniqueHandle=baseHandle+'-'+sourceId+'-'+Date.now().toString(36);
  const product={
   title:String(input.title).trim(),
   descriptionHtml:String(input.descriptionHtml||input.description||'').trim(),
