@@ -49,7 +49,7 @@ async function catalogSearch(keyword){
  const html=await r.text(); if(!r.ok)throw new Error('AliExpress HTTP '+r.status);
  const out=[],ids=new Set(),re=/(?:productId|product_id|productIdStr)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi; let m;
  while((m=re.exec(html))&&out.length<80){const id=m[1];if(ids.has(id))continue;ids.add(id);const c=html.slice(Math.max(0,m.index-3000),Math.min(html.length,m.index+6000));
-  const titleMatch=c.match(/<title[^>]*>([^<]{10,300})<\\/title>/i); const priceMatch=c.match(/(?:price|Price|€|US\\$)[^0-9]{0,40}([0-9]+[.,]?[0-9]*)/); const soldMatch=c.match(/([0-9][0-9,.]*)\\+?\\s*(?:orders|sold|sales)/i); const imageMatch=c.match(/https?:[^"' ]+\\.(?:jpg|jpeg|png|webp)/i); const t=titleMatch; const p=priceMatch; const o=soldMatch; const im=imageMatch;
+  const titleMatch=c.match(new RegExp("<title[^>]*>([^<]{10,300})</title>","i")); const priceMatch=c.match(new RegExp("(?:price|Price|€|US\\\\$)[^0-9]{0,40}([0-9]+[.,]?[0-9]*)")); const soldMatch=c.match(new RegExp("([0-9][0-9,.]*)\\\\+?\\\\s*(?:orders|sold|sales)","i")); const imageMatch=c.match(new RegExp("https?:[^\\\"' ]+\\\\.(?:jpg|jpeg|png|webp)","i")); const t=titleMatch; const p=priceMatch; const o=soldMatch; const im=imageMatch;
   out.push({id,title:String(t?.[1]||keyword).replace(/<[^>]*>/g,' ').trim(),cost:catalogNum(p?.[1]),sold:catalogNum(o?.[1])||0,image_urls:im?[im[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
  }
  console.log('CATALOG SOURCE',keyword,'items='+out.length); return out;
