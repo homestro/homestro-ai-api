@@ -1,6 +1,6 @@
 client_id = "c83d4a88dedfe364a10bc07a8d5fadc8"
 name = "Homestro AI Control"
-application_url = "https://homestro-ai-api-production.up.railway.app"
+application_url = "https://homestro-ai-api-fixed-current-production.up.railway.app"
 embedded = true
 
 [access_scopes]
