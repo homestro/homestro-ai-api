@@ -140,6 +140,10 @@ async function createDraft(input,token){
  const cost=Number(input.cost),price=Number(input.selling_price??input.sellingPrice),ratio=cost>0&&Number.isFinite(price)?price/cost:NaN;
  if(Number.isFinite(cost)&&Number.isFinite(price)){const v=validateProduct(cost,price,ratio);if(!v.valid)throw Object.assign(new Error('Product fails Homestro rules.'),{status:400,details:v.rules});}
  const found=await discoverImages(input),details=found.details||{};
+ if(!String(input.source_url||'').trim())throw Object.assign(new Error('Source URL is required.'),{status:400});
+ if(!String(input.source_product_id||'').trim())throw Object.assign(new Error('Source product ID is required.'),{status:400});
+ if(!Number.isFinite(cost)||cost<=0||!Number.isFinite(price)||price<=0)throw Object.assign(new Error('Valid cost and selling price are required.'),{status:400});
+ if(!found.urls.length)throw Object.assign(new Error('No source images found; product was not created.'),{status:400});
  const opts=Array.isArray(input.options)&&input.options.length?input.options:(details.options||[]);
  const variantsRaw=Array.isArray(input.variants)&&input.variants.length?input.variants:(details.variants||[]);
  const baseHandle=String(input.handle||'homestro-produkt').replace(/[^a-zA-Z0-9-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,60)||'homestro-produkt'; const sourceId=String(input.source_product_id||input.sourceProductId||'produkt').replace(/[^a-zA-Z0-9-]/g,'-').slice(0,24); const uniqueHandle=baseHandle+'-'+sourceId+'-'+Date.now().toString(36);
