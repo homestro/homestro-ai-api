@@ -202,6 +202,8 @@ async function catalogSearch(keyword){
 }
 function catalogPass(x){
  const r=rules(),cost=Number(x.cost),title=String(x.title||'').toLowerCase();
+ // HARD GATE: catalog candidates must have source URL and product ID before any Shopify write.
+ if(!String(x.source_url||'').trim()||!String(x.id||'').trim())return false;
  const bad=/(earphone|headphone|bluetooth|speaker|smartwatch|watch phone|charger|cable|usb|led strip|camera|drone|gaming|projector|power bank|electronic|elektronik|kopfhörer|lautsprecher)/i.test(title);
  if(bad)return false;
  if(!Number.isFinite(cost)||cost<3||cost>r.maxCost)return false;
