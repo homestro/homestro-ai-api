@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim
 # HOMESTRO CLEAN CATALOG START 2026-09-18
 # RAILWAY DIRECT SERVER FIX 2026-09-18
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && curl --version && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
