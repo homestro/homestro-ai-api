@@ -3,7 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.homestro-fixed"
 
 [deploy]
-startCommand = "sh -c 'node ./patch-autopilot.js && node ./patch-shopify-auth.js && node ./patch-json-safe.js && node ./server.js'"
+startCommand = "node ./server.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 60
 restartPolicyType = "ALWAYS"
