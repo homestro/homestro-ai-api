@@ -259,7 +259,7 @@ app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
 const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
-const catalogKeywords=['home organization','kitchen storage','car cleaning','garden tools','home improvement','pet accessories','fitness accessories','baby accessories','beauty accessories','travel accessories'];
+const catalogKeywords=['home organization','kitchen storage','bathroom storage','cleaning tools','laundry organizer','car cleaning','car accessories','garden tools','gardening accessories','home improvement','DIY tools','pet accessories','dog accessories','cat accessories','fitness accessories','sports accessories','baby accessories','beauty accessories','travel accessories','camping accessories','office organization','desk organizer','storage box','kitchen organizer','home decor','hand tools'];
 function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
 function catalogNum(v){
  const s=String(v??'').trim().replace(/[^0-9.,-]/g,'');
@@ -279,7 +279,9 @@ async function catalogSearch(keyword){
   const titleMatch=c.match(new RegExp("<title[^>]*>([^<]{10,300})</title>","i")); const priceRe=new RegExp("(?:price|Price|€|US\\$)[^0-9]{0,40}([0-9]+(?:[.,][0-9]+)?)","gi"); const soldRe=new RegExp("([0-9][0-9,.]*)\\+?\\s*(?:orders|sold|sales)","gi"); const prices=[...c.matchAll(priceRe)].map(z=>catalogNum(z[1])).filter(n=>Number.isFinite(n)&&n>=3&&n<=15); const solds=[...c.matchAll(soldRe)].map(z=>catalogNum(z[1])).filter(n=>Number.isFinite(n)); const p=prices.length?{1:prices[0]}:null; const o=solds.length?{1:Math.max(...solds)}:null; const imageMatch=c.match(new RegExp("https?:[^\\\"' ]+\\.(?:jpg|jpeg|png|webp)(?:\\?[^\\\"' ]*)?","i")); const t=titleMatch; const im=imageMatch;
   out.push({id,title:String(t?.[1]||keyword).replace(/<[^>]*>/g,' ').trim(),cost:catalogNum(p?.[1]),sold:catalogNum(o?.[1])||0,image_urls:im?[im[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
  }
- console.log('CATALOG SOURCE',keyword,'items='+out.length); return out;
+  }
+  }
+  console.log('CATALOG SOURCE',keyword,'items='+out.length); return out;
 }
 function catalogPass(x){
  const r=rules(),cost=Number(x.cost),title=String(x.title||'').toLowerCase();
