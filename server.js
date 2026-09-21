@@ -298,7 +298,7 @@ async function catalogSearch(keyword){
       const titleCandidates=[];
       const titleRes=[
         /"(?:title|subject|productTitle|name)"\\s*:\\s*"([^"]{10,400})"/i,
-        /<(?:title|h[1-3])[^>]*>([^<]{10,400})<\\/(?:title|h[1-3])>/i
+        new RegExp('<(?:title|h[1-3])[^>]*>([^<]{10,400})</(?:title|h[1-3])>','i')
       ];
       for(const tr of titleRes){const tm=c.match(tr);if(tm)titleCandidates.push(tm[1]);}
       const title=String(titleCandidates[0]||keyword).replace(/\\u0026/g,'&').replace(/\\\\u002F/g,'/').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim();
