@@ -259,7 +259,7 @@ app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
 const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
-const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','cooking tools','baking tools','laundry tools','bathroom cleaning','car accessories','car cleaning','garden tools','gardening tools','DIY tools','hand tools','repair tools','measuring tools','pet care','pet grooming','dog training','cat care','fitness equipment','sports equipment','bike accessories','baby care','beauty tools','personal care','travel accessories','camping equipment','office tools','barbecue tools','home improvement'];
+const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','cooking tools','baking tools','kitchen knives','chef knives','kitchen knife','cooking knives','messer küche','laundry tools','bathroom cleaning','car accessories','car cleaning','garden tools','gardening tools','DIY tools','hand tools','repair tools','measuring tools','pet care','pet grooming','dog training','cat care','fitness equipment','sports equipment','bike accessories','baby care','beauty tools','personal care','travel accessories','camping equipment','office tools','barbecue tools','home improvement'];
 function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
 function catalogNum(v){
  const raw=String(v??'').trim().replace(/\s+/g,'');
@@ -330,12 +330,12 @@ function catalogPass(x){
  const bad=/(earphone|headphone|bluetooth|speaker|smartwatch|watch phone|charger|cable|usb|led strip|camera|drone|gaming|projector|power bank|electronic|elektronik|kopfhörer|lautsprecher)/i.test(title);
  if(bad)return false; const junk=/(hook|hooks|hanging hook|adhesive hook|haken|box|boxes|storage box|organizer|organiser|aufbewahrung|rack|shelf|shelves|regal|holder|halter|stand|case|cover|bag|pouch|tasche|etui|hülle|keychain|key ring|schlüsselanhänger|sticker|decal|ornament|decoration|decor|deko|wall art|phone case|cable holder|clip|clamp|bracket)/i.test(title);
  if(junk)return false;
- const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro)/i.test(title);
+ const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|knife|messer|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro)/i.test(title);
  if(!practical)return false;
  if(!Number.isFinite(cost)||cost<5||cost>r.maxCost)return false;
  if(Number(x.sold||0)<2000)return false;
- if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|knife|weapon|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title))return false;
- const problem=/((?:clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam))/i.test(title);
+ if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|weapon|hunting knife|tactical knife|survival knife|pocket knife|butterfly knife|switchblade|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title))return false;
+ const problem=/((?:clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|knife|messer|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam))/i.test(title);
  if(!problem)return false;
  const price=Math.max(39.90,Math.ceil(cost*3.5*100)/100);
  const ebay=ebayProfitability({selling_price:price,landed_cost_eur:cost});
