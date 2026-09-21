@@ -304,20 +304,19 @@ async function catalogSearch(keyword){
       const title=String(titleCandidates[0]||keyword).replace(/\\u0026/g,'&').replace(/\\\\u002F/g,'/').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim();
 
       const priceMatches=[];
-      const priceRe=/(?:salePrice|discountPrice|formattedPrice|price|currentPrice|originalPrice)\\s*["']?\\s*[:=]\\s*["']?\\$?([0-9]+(?:[.,][0-9]+)?)/gi;
+      const priceRe=/(?:salePrice|discountPrice|formattedPrice|price|currentPrice|originalPrice)\s*["']?\s*[:=]\s*["']?\$?([0-9]+(?:[.,][0-9]+)?)/gi;
       while((m=priceRe.exec(c))&&priceMatches.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))priceMatches.push(n);}
       const costCandidates=priceMatches.filter(n=>n>=2&&n<=20);
       const cost=costCandidates.length?Math.min(...costCandidates):NaN;
 
       const solds=[];
-      const soldRe=/([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)\\+?\\s*(?:orders|sold|sales|units?)/gi;
+      const soldRe=/([0-9]+(?:[.,][0-9]+)?\s*[kKmMbB]?)\+?\s*(?:orders|sold|sales|units?)/gi;
       while((m=soldRe.exec(c))&&solds.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))solds.push(n);}
-      // Also support AliExpress strings such as "1.2K+ sold" and JSON order fields.
-      const orderFieldRe=/"(?:orders|orderCount|tradeCount|sold|sales)"\\s*:\\s*"?([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)"?/gi;
+      const orderFieldRe=/"(?:orders|orderCount|tradeCount|sold|sales)"\s*:\s*"?([0-9]+(?:[.,][0-9]+)?\s*[kKmMbB]?)"?/gi;
       while((m=orderFieldRe.exec(c))&&solds.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))solds.push(n);}
       const sold=solds.length?Math.max(...solds):0;
 
-      const imageMatch=c.match(/https?:[^"' ]+\\.(?:jpg|jpeg|png|webp)(?:\\?[^"' ]*)?/i);
+      const imageMatch=c.match(/https?:[^"' ]+\.(?:jpg|jpeg|png|webp)(?:\?[^"' ]*)?/i);
       out.push({id,title,cost,sold,image_urls:imageMatch?[imageMatch[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
     }
   }
