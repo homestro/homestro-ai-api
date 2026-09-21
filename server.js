@@ -229,7 +229,8 @@ async function processExistingDraftProduct(productId,token){
  const desc=String(p.description||'');
  const srcMatch=desc.match(new RegExp("https?://(?:www\\\\.)?aliexpress\\\\.com/item/\\\\d+\\\\.html[^\\\\s<]*","i"));
  const src=mf.aliexpress_url || (srcMatch?.[0]||'');
- const id=mf.aliexpress_product_id || ((src.match(/\\/item\\/(\\d+)\\.html/i)||[])[1]||'');
+ const idMatch=src.match(new RegExp("/item/(\\\\d+)\\\\.html","i"));
+ const id=mf.aliexpress_product_id || (idMatch?.[1]||'');
  if(!src||!id)throw new Error('No AliExpress source URL/ID found');
  const details=await extractAliExpressDetails(src);
  if(!details.page_title||!details.page_text)throw new Error('AliExpress source data unavailable');
