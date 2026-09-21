@@ -332,11 +332,15 @@ function catalogPass(x){
  if(junk)return false;
  const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro)/i.test(title);
  if(!practical)return false;
- if(!Number.isFinite(cost)||cost<3||cost>r.maxCost)return false;
- if(Number(x.sold||0)<1000)return false;
- if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|knife|weapon|medical|supplement)/i.test(title))return false;
- const price=Math.max(r.minSellingPrice,Math.ceil(cost*3.25*100)/100);
- return price/cost>=r.minRatio;
+ if(!Number.isFinite(cost)||cost<5||cost>r.maxCost)return false;
+ if(Number(x.sold||0)<2000)return false;
+ if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|knife|weapon|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title))return false;
+ const problem=/((?:clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam))/i.test(title);
+ if(!problem)return false;
+ const price=Math.max(39.90,Math.ceil(cost*3.5*100)/100);
+ const ebay=ebayProfitability({selling_price:price,landed_cost_eur:cost});
+ if(Number(ebay.profitEur||0)<12)return false;
+ return price/cost>=Math.max(r.minRatio,3.5);
 }
 
 function isDsersImportedCandidate(product){
@@ -456,7 +460,7 @@ async function catalogRun(){
     if(catalogState.seen.has(x.id))continue;
     catalogState.seen.add(x.id);
     if(!catalogPass(x)){rejected++;continue;}
-    const selling=Math.max(rules().minSellingPrice,Math.ceil(Number(x.cost)*3.25*100)/100);
+    const selling=Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
     const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
     const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
     try{
