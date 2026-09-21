@@ -279,21 +279,46 @@ async function catalogSearch(keyword){
   const out=[],ids=new Set();
   for(const page of [1,2,3]){
     const url='https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html?g=y&page='+page;
-    const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.1)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
+    const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.2)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
     const html=await r.text(); if(!r.ok)throw new Error('AliExpress HTTP '+r.status);
-    const re=/(?:productId|product_id|productIdStr)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi; let m;
-    while((m=re.exec(html))&&out.length<240){
-      const id=m[1]; if(ids.has(id))continue; ids.add(id);
-      const c=html.slice(Math.max(0,m.index-12000),Math.min(html.length,m.index+18000));
-      const titleMatch=c.match(new RegExp("(?:title|subject|productTitle)\\s*[\\\"']?\\s*[:=]\\s*[\\\"']([^\\\"']{10,300})[\\\"']","i"));
-      const priceMatches=[...c.matchAll(new RegExp("(?:price|salePrice|discountPrice|formattedPrice)[^0-9]{0,80}([0-9]+(?:[.,][0-9]+)?)","gi"))];
-      const soldMatches=[...c.matchAll(new RegExp("([0-9]+(?:[.,][0-9]+)?[kKmMbB]?)\\+?\\s*(?:orders|sold|sales)","gi"))];
-      const prices=priceMatches.map(z=>catalogNum(z[1])).filter(n=>Number.isFinite(n)&&n>=3&&n<=15);
-      const solds=soldMatches.map(z=>catalogNum(z[1])).filter(n=>Number.isFinite(n));
-      const cost=prices.length?Math.min(...prices):NaN;
+
+    // AliExpress search pages contain several serialized representations of the same card.
+    // First collect product IDs from item URLs as well as JSON fields, then score only a tight
+    // neighborhood around each occurrence instead of mixing data from unrelated cards.
+    const occurrences=[];
+    const idRe=/(?:productId|product_id|productIdStr|itemId|item_id)\\s*["']?\\s*[:=]\\s*["']?(\\d{8,})/gi;
+    let m;
+    while((m=idRe.exec(html))&&occurrences.length<600)occurrences.push({id:m[1],index:m.index});
+    const urlRe=/https?:\\/\\/(?:www\\.)?aliexpress\\.com\\/item\\/(\\d{8,})(?:\\.html)?/gi;
+    while((m=urlRe.exec(html))&&occurrences.length<800)occurrences.push({id:m[1],index:m.index});
+    for(const occ of occurrences){
+      const id=String(occ.id); if(ids.has(id))continue; ids.add(id);
+      const c=html.slice(Math.max(0,occ.index-6000),Math.min(html.length,occ.index+9000));
+
+      const titleCandidates=[];
+      const titleRes=[
+        /"(?:title|subject|productTitle|name)"\\s*:\\s*"([^"]{10,400})"/i,
+        /<(?:title|h[1-3])[^>]*>([^<]{10,400})<\\/(?:title|h[1-3])>/i
+      ];
+      for(const tr of titleRes){const tm=c.match(tr);if(tm)titleCandidates.push(tm[1]);}
+      const title=String(titleCandidates[0]||keyword).replace(/\\u0026/g,'&').replace(/\\\\u002F/g,'/').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim();
+
+      const priceMatches=[];
+      const priceRe=/(?:salePrice|discountPrice|formattedPrice|price|currentPrice|originalPrice)\\s*["']?\\s*[:=]\\s*["']?\\$?([0-9]+(?:[.,][0-9]+)?)/gi;
+      while((m=priceRe.exec(c))&&priceMatches.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))priceMatches.push(n);}
+      const costCandidates=priceMatches.filter(n=>n>=2&&n<=20);
+      const cost=costCandidates.length?Math.min(...costCandidates):NaN;
+
+      const solds=[];
+      const soldRe=/([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)\\+?\\s*(?:orders|sold|sales|units?)/gi;
+      while((m=soldRe.exec(c))&&solds.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))solds.push(n);}
+      // Also support AliExpress strings such as "1.2K+ sold" and JSON order fields.
+      const orderFieldRe=/"(?:orders|orderCount|tradeCount|sold|sales)"\\s*:\\s*"?([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)"?/gi;
+      while((m=orderFieldRe.exec(c))&&solds.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))solds.push(n);}
       const sold=solds.length?Math.max(...solds):0;
-      const imageMatch=c.match(new RegExp("https?:[^\\\"' ]+\\.(?:jpg|jpeg|png|webp)(?:\\?[^\\\"' ]*)?","i"));
-      out.push({id,title:String(titleMatch?.[1]||keyword).replace(/\\u0026/g,'&').replace(/<[^>]*>/g,' ').trim(),cost,sold,image_urls:imageMatch?[imageMatch[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
+
+      const imageMatch=c.match(/https?:[^"' ]+\\.(?:jpg|jpeg|png|webp)(?:\\?[^"' ]*)?/i);
+      out.push({id,title,cost,sold,image_urls:imageMatch?[imageMatch[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
     }
   }
   console.log('CATALOG SOURCE',keyword,'items='+out.length); return out;
