@@ -251,8 +251,8 @@ async function processExistingDraftProduct(productId,token){
  return {id:productId,title:x.title,source_url:src,source_product_id:id,images:media.count,variants:details.variants.length,price,cost,ratio,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
- const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status}}}',{first:Math.min(Math.max(Number(limit)||10,1),10),query:'status:draft NOT tag:homestro-ai-processed-existing'},token);
- const results=[];for(const p of d.products.nodes){try{results.push(await processExistingDraftProduct(p.id,token));}catch(e){results.push({id:p.id,title:p.title,processed:false,error:e.message});}}
+ const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status}}}',{first:Math.min(Math.max(Number(limit)||10,1),10),query:'status:draft NOT tag:homestro-ai-processed-existing NOT tag:homestro-ai-failed-existing'},token);
+ const results=[];for(const p of d.products.nodes){try{results.push(await processExistingDraftProduct(p.id,token));}catch(e){try{await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags:[...((await shopifyGraphQL('query($id:ID!){product(id:$id){tags}}',{id:p.id},token)).product?.tags||[]),'homestro-ai-failed-existing']}},token);}catch{} results.push({id:p.id,title:p.title,processed:false,error:e.message});}}
  return results;
 }
 
@@ -307,7 +307,7 @@ async function catalogRun(){
 }
 
 app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
-app.get('/api/catalog/process-existing-test',async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||1),1),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
+app.get('/api/catalog/process-existing-test',async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||5),5),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 app.post('/api/catalog/run',apiKey,async(_q,res)=>{if(catalogState.running)return res.json({ok:true,skipped:true});catalogRun();res.json({ok:true,started:true});});
