@@ -54,6 +54,29 @@ app.get('/api/shopify/products',apiKey,async(req,res)=>{try{const first=Math.min
 function rules(){return{maxCost:Number(process.env.MAX_PRODUCT_COST||10),minSellingPrice:Number(process.env.MIN_SELLING_PRICE||34.9),minRatio:Number(process.env.MIN_PRICE_COST_RATIO||3)};}
 function validateProduct(cost,sellingPrice,ratio){const r=rules();return{valid:Number.isFinite(cost)&&Number.isFinite(sellingPrice)&&Number.isFinite(ratio)&&cost<=r.maxCost&&sellingPrice>=r.minSellingPrice&&ratio>=r.minRatio,product:{cost,sellingPrice,ratio},rules:r};}
 app.post('/api/products/validate',apiKey,(req,res)=>{const cost=Number(req.body?.cost),sellingPrice=Number(req.body?.sellingPrice),ratio=Number(req.body?.ratio);if(![cost,sellingPrice,ratio].every(Number.isFinite))return res.status(400).json({ok:false,error:'cost, sellingPrice and ratio must be numbers.'});res.json({ok:true,...validateProduct(cost,sellingPrice,ratio)});});
+// HOMESTRO_EBAY_PROFIT_GATE
+function ebayProfitability(input){
+ const sale=Number(input?.selling_price??input?.sellingPrice);
+ const landed=Number(input?.landed_cost_eur??input?.landedCostEur);
+ const commission=Number(process.env.EBAY_COMMISSION_RATE||0.14);
+ const orderFee=Number(process.env.EBAY_ORDER_FEE_EUR||0.45);
+ const feeVat=Number(process.env.EBAY_FEE_VAT_RATE||0.19);
+ const maxAd=Number(process.env.EBAY_MAX_AD_RATE||0.15);
+ const minProfit=Number(process.env.MIN_NET_PROFIT_EUR||10);
+ const fixed=orderFee*(1+feeVat);
+ const variableBase=commission*(1+feeVat);
+ const ebayBase=sale*variableBase+fixed;
+ const ad=sale*maxAd;
+ const profit=sale-landed-ebayBase-ad;
+ const denominator=1-variableBase-maxAd;
+ const minSale=denominator>0?(landed+fixed+minProfit)/denominator:Infinity;
+ const valid=Number.isFinite(sale)&&sale>0&&Number.isFinite(landed)&&landed>0&&Number.isFinite(profit)&&profit>=minProfit;
+ return {valid,sale,landedCostEur:landed,ebayCommissionRate:commission,ebayOrderFeeEur:orderFee,ebayFeeVatRate:feeVat,maxAdRate:maxAd,minProfitEur:minProfit,ebayBaseFeeEur:ebayBase,adFeeEur:ad,estimatedProfitEur:profit,minRequiredSellingPriceEur:minSale,marginPct:sale>0?(profit/sale)*100:NaN};
+}
+app.post('/api/products/profitability',apiKey,(req,res)=>{
+ try{const e=ebayProfitability(req.body||{});res.json({ok:true,...e});}
+ catch(err){res.status(400).json({ok:false,error:err.message});}
+});
 function cleanJson(t){const s=String(t||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/i,'').trim();const a=s.indexOf('{'),b=s.lastIndexOf('}');if(a<0||b<a)throw new Error('AI returned no JSON object');return JSON.parse(s.slice(a,b+1));}
 function homestroStripEmoji(v){return String(v||'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[ \t]{2,}/g,' ').trim();}
 function homestroPlain(v){return String(v||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/\s+/g,' ').trim();}
@@ -147,7 +170,10 @@ async function setProductTags(productId,tags,token){const arr=Array.isArray(tags
 async function setVariantPricing(productId,price,cost,token){if(!Number.isFinite(price)&&!Number.isFinite(cost))return null;const q='{product(id:"'+productId.replace(/"/g,'\\"')+'"){variants(first:1){nodes{id}}}}';const d0=await shopifyGraphQL(q,{},token),id=d0.product?.variants?.nodes?.[0]?.id;if(!id)return null;const variant={id};if(Number.isFinite(price))variant.price=String(price);if(Number.isFinite(cost))variant.inventoryItem={cost:Number(cost)};const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants,allowPartialUpdates:false){product{id variants(first:1){nodes{id price inventoryItem{unitCost{amount currencyCode}}}}}userErrors{field message}}}',{productId,variants:[variant]},token);if(d.productVariantsBulkUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected price/cost.'),{status:400,details:d.productVariantsBulkUpdate.userErrors});return d.productVariantsBulkUpdate.product;}
 async function createDraft(input,token){
  if(!input?.title)throw Object.assign(new Error('Product title is required.'),{status:400});
- const cost=Number(input.cost),price=Number(input.selling_price??input.sellingPrice),ratio=cost>0&&Number.isFinite(price)?price/cost:NaN;
+ const cost=Number(input.cost),price=Number(input.selling_price??input.sellingPrice),landedCostEur=Number(input.landed_cost_eur??input.landedCostEur),ratio=cost>0&&Number.isFinite(price)?price/cost:NaN;
+ if(!Number.isFinite(landedCostEur)||landedCostEur<=0)throw Object.assign(new Error('Product blocked: real landed cost in EUR is required before publication.'),{status:400,details:{required:'landed_cost_eur',message:'Use supplier/product cost + shipping + VAT/service charges converted to EUR; do not use product price alone.'}});
+ const economics=ebayProfitability({selling_price:price,landed_cost_eur:landedCostEur});
+ if(!economics.valid)throw Object.assign(new Error('Product blocked by eBay profitability gate.'),{status:400,details:economics});
  if(Number.isFinite(cost)&&Number.isFinite(price)){const v=validateProduct(cost,price,ratio);if(!v.valid)throw Object.assign(new Error('Product fails Homestro rules.'),{status:400,details:v.rules});}
  const found=await discoverImages(input),details=found.details||{};
  if(!String(input.source_url||'').trim())throw Object.assign(new Error('Source URL is required.'),{status:400});
@@ -167,7 +193,7 @@ async function createDraft(input,token){
   tags:Array.isArray(input.tags)?input.tags.map(homestroStripEmoji).filter(Boolean):[],
   seo:{title:homestroStripEmoji(String(input.seoTitle||'')).slice(0,70)||undefined,description:homestroStripEmoji(String(input.seoDescription||'')).slice(0,320)||undefined},
   productOptions:opts.slice(0,3).map((o,i)=>({name:String(o.name),position:i+1,values:(Array.isArray(o.values)?o.values:[]).slice(0,100).map(v=>({name:String(v)}))})),
-  variants:variantsRaw.length?variantsRaw.slice(0,100).map((ovs,i)=>({optionValues:ovs,price:Number.isFinite(price)?String(price):undefined,inventoryItem:{cost:Number.isFinite(cost)?String(cost):undefined,sku:String(input.source_product_id||input.sourceProductId||'AE')+'-'+(i+1)}})):undefined,
+  variants:variantsRaw.length?variantsRaw.slice(0,100).map((ovs,i)=>({optionValues:ovs,price:Number.isFinite(price)?String(price):undefined,inventoryItem:{cost:Number.isFinite(landedCostEur)?String(landedCostEur):undefined,sku:String(input.source_product_id||input.sourceProductId||'AE')+'-'+(i+1)}})):undefined,
   metafields:[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:String(input.source_url||'')},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:String(input.source_product_id||'')}]
  };
  if(!product.variants)delete product.variants;
@@ -179,7 +205,7 @@ async function createDraft(input,token){
  const p=d.productSet.product;
  let media={count:0,urls:[],rejected:0,validation:'source-images'};
  media=await addMedia(p.id,input,p.title,token);
- return{...p,mediaCount:media.count,variantCount:(p.variants?.nodes||[]).length,options:p.options||[],sourceImageCount:found.urls.length,euWarehouse:Boolean(details.euWarehouse),mediaValidation:media.validation};
+ return{...p,mediaCount:media.count,variantCount:(p.variants?.nodes||[]).length,options:p.options||[],sourceImageCount:found.urls.length,euWarehouse:Boolean(details.euWarehouse),mediaValidation:media.validation,economics};
 }
 
 app.post('/api/shopify/products/draft',apiKey,async(req,res)=>{try{res.status(201).json({ok:true,product:await createDraft(req.body?.product||req.body),status:'DRAFT'});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,userErrors:e.details});}});
@@ -293,7 +319,7 @@ async function catalogRun(){
       title:p.title,description:p.description,shortDescription:p.shortDescription,category:p.category||k,
       tags:p.tags,seoTitle:p.seoTitle,seoDescription:p.seoDescription,handle:p.handle,
       cost:Number(x.cost),selling_price:selling,image_urls:allImages,source_url:x.source_url,
-      source_product_id:x.id,supplier_id:x.id,options:details.options||[],variants:details.variants||[]
+      source_product_id:x.id,supplier_id:x.id,landed_cost_eur:x.landed_cost_eur,options:details.options||[],variants:details.variants||[]
      },token);
      const activated=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id status}userErrors{field message}}}',{input:{id:d.id,status:'ACTIVE'}},token);
      if(activated.productUpdate.userErrors?.length)throw new Error('Activation failed: '+activated.productUpdate.userErrors.map(e=>e.message).join('; '));
