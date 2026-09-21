@@ -304,7 +304,7 @@ function isDsersImportedCandidate(product){
  const all=tags+' '+desc+' '+values;
  // Without the DSers API, the reliable source marker we can enforce is an AliExpress item URL
  // carried by the imported Shopify product. Products without this marker are never touched.
- return /https?:\\/\\/(?:www\\.)?aliexpress\\.com\\/item\\/\\d+\\.html/i.test(all);
+ return new RegExp('https?:\\\\/\\\\/(?:www\\.)?aliexpress\\\\.com\\\\/item\\\\/\\\\d+\\\\.html','i').test(all);
 }
 
 async function processExistingDraftProduct(productId,token){
