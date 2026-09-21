@@ -249,7 +249,7 @@ function catalogPass(x){
  return price/cost>=r.minRatio;
 }
 async function processExistingDraftProduct(productId,token){
- const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}}}}',{id:productId},token);
+ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{mediaContentType status alt}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
@@ -257,24 +257,40 @@ async function processExistingDraftProduct(productId,token){
  const src=mf.aliexpress_url || (srcMatch?.[0]||'');
  const idMatch=src.match(new RegExp("/item/(\\\\d+)\\\\.html","i"));
  const id=mf.aliexpress_product_id || (idMatch?.[1]||'');
- if(!src||!id)throw new Error('No AliExpress source URL/ID found');
- const details=await extractAliExpressDetails(src);
- if(!details.page_title||!details.page_text)throw new Error('AliExpress source data unavailable');
- if(!details.image_urls.length)throw new Error('No source images');
- if(!details.variants.length)throw new Error('No source variants');
+ let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
+ if(src&&id){
+  details=await extractAliExpressDetails(src);
+  if(!details.page_title||!details.page_text)throw new Error('AliExpress source data unavailable');
+ }
  const price=Number(p.variants?.nodes?.[0]?.price||0);
  const cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
  const ratio=cost>0&&price>0?price/cost:NaN;
- const gate=validateProduct(cost,price,ratio);
- if(!gate.valid)throw new Error('Existing draft fails Homestro price/cost gate: '+JSON.stringify(gate.rules));
- const ai=await aiProduct({title:details.page_title,description:details.page_text.slice(0,7000),category:p.productType,source_url:src,source_product_id:id,variants:details.variants,options:details.options,image_urls:details.image_urls,cost,selling_price:price});
- const x=homestroSanitizeProduct(ai.product||{}, {title:details.page_title,category:p.productType});
+ const profitability=ebayProfitability({selling_price:price,landed_cost_eur:cost});
+ const profitPending=!profitability.valid;
+ const ai=await aiProduct({
+  title:details.page_title||p.title,
+  description:(details.page_text||desc||'Shopify-Draft ohne Lieferantenquelle').slice(0,7000),
+  category:p.productType,
+  source_url:src||'',
+  source_product_id:id||'',
+  variants:details.variants||[],
+  options:details.options||[],
+  image_urls:details.image_urls||[],
+  cost,selling_price:price
+ });
+ const x=homestroSanitizeProduct(ai.product||{}, {title:p.title,category:p.productType});
  if(!x.title)throw new Error('AI returned no title');
  if(homestroPlain(x.description).length<900)throw new Error('Existing draft failed 900-character description gate');
- const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description seo{title description} tags}userErrors{field message}}}',{input:{id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),tags:[...(Array.isArray(x.tags)?x.tags:[]),'homestro-ai-processed-existing'],seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}}},token);
+ const baseTags=Array.isArray(x.tags)?x.tags:[];
+ const oldTags=Array.isArray(p.tags)?p.tags:[];
+ const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing'].includes(String(t))),...baseTags,'homestro-ai-processed-existing',...(profitPending?['homestro-profit-pending']:['homestro-profit-checked'])])];
+ const input={id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),tags,seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}};
+ if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
+ const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description seo{title description} tags}userErrors{field message}}}',{input},token);
  if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
- const media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
- return {id:productId,title:x.title,source_url:src,source_product_id:id,images:media.count,variants:details.variants.length,price,cost,ratio,processed:true,mediaValidation:media.validation};
+ let media={count:0,validation:'not-run'};
+ if(src&&details.image_urls?.length)media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status}}}',{first:Math.min(Math.max(Number(limit)||10,1),10),query:'status:draft NOT tag:homestro-ai-processed-existing NOT tag:homestro-ai-failed-existing'},token);
