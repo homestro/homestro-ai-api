@@ -301,7 +301,7 @@ async function catalogSearch(keyword){
         new RegExp('<(?:title|h[1-3])[^>]*>([^<]{10,400})</(?:title|h[1-3])>','i')
       ];
       for(const tr of titleRes){const tm=c.match(tr);if(tm)titleCandidates.push(tm[1]);}
-      const title=String(titleCandidates[0]||keyword).replace(/\\u0026/g,'&').replace(/\\\\u002F/g,'/').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim();
+      const title=String(titleCandidates.filter(v=>String(v||'').trim().length>=15).sort((a,b)=>String(b).length-String(a).length)[0]||keyword).replace(/\\u0026/g,'&').replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim();
 
       const priceMatches=[];
       const priceRe=/(?:salePrice|discountPrice|formattedPrice|price|currentPrice|originalPrice)\s*["']?\s*[:=]\s*["']?\$?([0-9]+(?:[.,][0-9]+)?)/gi;
@@ -445,6 +445,8 @@ async function catalogRun(){
  try{
   const batch=Math.max(1,Number(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
   const candidates=[];
+  const titleSeen=new Set();
+  const keywordCounts=new Map();
   for(const k of catalogKeywords){
    if(candidates.length>=batch)break;
    let items=[];
@@ -463,6 +465,11 @@ async function catalogRun(){
      candidate.euWarehouse=Boolean(details.euWarehouse);
      if(candidate.euWarehouse===false && process.env.HOMESTRO_REQUIRE_EU_WAREHOUSE==='true')continue;
     }catch(e){candidate.note+=' AliExpress Detaildaten konnten nicht vollständig geladen werden.';}
+    const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
+    const keyCount=Number(keywordCounts.get(k)||0);
+    if(titleSeen.has(titleKey)||keyCount>=5)continue;
+    titleSeen.add(titleKey);
+    keywordCounts.set(k,keyCount+1);
     candidates.push(candidate);
    }
   }
