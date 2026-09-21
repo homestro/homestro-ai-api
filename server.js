@@ -295,8 +295,10 @@ async function catalogRun(){
       cost:Number(x.cost),selling_price:selling,image_urls:allImages,source_url:x.source_url,
       source_product_id:x.id,supplier_id:x.id,options:details.options||[],variants:details.variants||[]
      },token);
+     const activated=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id status}userErrors{field message}}}',{input:{id:d.id,status:'ACTIVE'}},token);
+     if(activated.productUpdate.userErrors?.length)throw new Error('Activation failed: '+activated.productUpdate.userErrors.map(e=>e.message).join('; '));
      created++;catalogState.created++;
-     console.log('CATALOG DRAFT CREATED',x.id,'shopify='+d.id,'media='+d.mediaCount,'variants='+d.variantCount,'eu='+d.euWarehouse);
+     console.log('CATALOG ACTIVE CREATED',x.id,'shopify='+d.id,'media='+d.mediaCount,'variants='+d.variantCount,'eu='+d.euWarehouse);
     }catch(e){failed++;catalogState.failed++;console.error('CATALOG CREATE FAILED',x.id,e.message);}
    }
   }
