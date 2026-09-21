@@ -286,7 +286,7 @@ async function catalogSearch(keyword){
     // First collect product IDs from item URLs as well as JSON fields, then score only a tight
     // neighborhood around each occurrence instead of mixing data from unrelated cards.
     const occurrences=[];
-    const idRe=/(?:productId|product_id|productIdStr|itemId|item_id)\\s*["']?\\s*[:=]\\s*["']?(\\d{8,})/gi;
+    const idRe=/(?:productId|product_id|productIdStr|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;
     let m;
     while((m=idRe.exec(html))&&occurrences.length<600)occurrences.push({id:m[1],index:m.index});
     const urlRe=new RegExp('https?:\\\\/\\\\/(?:www\\.)?aliexpress\\\\.com\\\\/item\\\\/(\\\\d{8,})(?:\\\\.html)?','gi');
@@ -297,7 +297,7 @@ async function catalogSearch(keyword){
 
       const titleCandidates=[];
       const titleRes=[
-        /"(?:title|subject|productTitle|name)"\\s*:\\s*"([^"]{10,400})"/i,
+        /"(?:title|subject|productTitle|name)"\s*:\s*"([^"]{10,400})"/i,
         new RegExp('<(?:title|h[1-3])[^>]*>([^<]{10,400})</(?:title|h[1-3])>','i')
       ];
       for(const tr of titleRes){const tm=c.match(tr);if(tm)titleCandidates.push(tm[1]);}
