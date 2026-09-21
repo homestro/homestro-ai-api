@@ -320,7 +320,7 @@ async function catalogSearch(keyword){
       out.push({id,title,cost,sold,image_urls:imageMatch?[imageMatch[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
     }
   }
-  console.log('CATALOG SOURCE',keyword,'items='+out.length); return out;
+  console.log('CATALOG SOURCE',keyword,'items='+out.length); console.log('CATALOG SAMPLE',keyword,out.slice(0,20).map(x=>({id:x.id,title:String(x.title||'').slice(0,70),cost:x.cost,sold:x.sold}))); return out;
 }
 
 function catalogPass(x){
