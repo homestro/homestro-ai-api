@@ -205,10 +205,10 @@ async function addMedia(productId,input,title,token){
   if(uploadedUrl){accepted.push(uploadedUrl);generatedCount++;}
  }
  if(!accepted.length)throw Object.assign(new Error('No product image passed strict AI validation and no generated replacement was available.'),{status:400});
- const media=accepted.filter(url=>!/^https?:\/\/.*shopify/i.test(url)).map(url=>({mediaContentType:'IMAGE',originalSource:url,alt:String(title||'Homestro Produkt')}));
+ const media=accepted.map(url=>({mediaContentType:'IMAGE',originalSource:url,alt:String(title||'Homestro Produkt')}));
  const d=await shopifyGraphQL('mutation($productId:ID!,$media:[CreateMediaInput!]!){productCreateMedia(productId:$productId,media:$media){media{mediaContentType status}mediaUserErrors{field message}}}',{productId,media},token);
  const errs=d.productCreateMedia.mediaUserErrors||[];if(errs.length)throw Object.assign(new Error('Shopify rejected product images.'),{status:400,details:errs});
- return{count:(d.productCreateMedia.media||[]).length+generatedCount,urls:accepted,rejected:Math.max(0,candidates.length-(accepted.length-generatedCount)),generated:generatedCount,validation:'strict-ai-vision-no-foreign-text'};
+ return{count:(d.productCreateMedia.media||[]).length,urls:accepted,rejected:Math.max(0,candidates.length-(accepted.length-generatedCount)),generated:generatedCount,validation:'strict-ai-vision-no-foreign-text'};
 }
 async function setSeo(productId,seo,token){if(!seo?.title&&!seo?.description)return null;const input={id:productId,seo:{title:String(seo.title||'').slice(0,70),description:String(seo.description||'').slice(0,320)}};const d=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id seo{title description}}userErrors{field message}}}',{input},token);if(d.productUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected SEO data.'),{status:400,details:d.productUpdate.userErrors});return d.productUpdate.product;}
 async function setProductTags(productId,tags,token){const arr=Array.isArray(tags)?tags.map(String).filter(Boolean):[];if(!arr.length)return null;const d=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:productId,tags:arr}},token);if(d.productUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected product tags.'),{status:400,details:d.productUpdate.userErrors});return d.productUpdate.product;}
