@@ -259,7 +259,7 @@ app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
 const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
-const catalogKeywords=['home organization','kitchen storage','bathroom storage','cleaning tools','laundry organizer','car cleaning','car accessories','garden tools','gardening accessories','home improvement','DIY tools','pet accessories','dog accessories','cat accessories','fitness accessories','sports accessories','baby accessories','beauty accessories','travel accessories','camping accessories','office organization','desk organizer','storage box','kitchen organizer','home decor','hand tools'];
+const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','laundry tools','car cleaning tools','car care tools','garden tools','gardening tools','DIY hand tools','home repair tools','pet care tools','dog training tools','cat care tools','fitness training equipment','sports training equipment','baby care products','beauty tools','personal care tools','travel essentials','camping equipment','office utility tools'];
 function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
 function catalogNum(v){
  const raw=String(v??'').trim().replace(/\s+/g,'');
@@ -328,7 +328,10 @@ function catalogPass(x){
  // HARD GATE: catalog candidates must have source URL and product ID before any Shopify write.
  if(!String(x.source_url||'').trim()||!String(x.id||'').trim())return false;
  const bad=/(earphone|headphone|bluetooth|speaker|smartwatch|watch phone|charger|cable|usb|led strip|camera|drone|gaming|projector|power bank|electronic|elektronik|kopfhörer|lautsprecher)/i.test(title);
- if(bad)return false;
+ if(bad)return false; const junk=/(hook|hooks|hanging hook|adhesive hook|haken|box|boxes|storage box|organizer|organiser|aufbewahrung|rack|shelf|shelves|regal|holder|halter|stand|case|cover|bag|pouch|tasche|etui|hülle|keychain|key ring|schlüsselanhänger|sticker|decal|ornament|decoration|decor|deko|wall art|phone case|cable holder|clip|clamp|bracket)/i.test(title);
+ if(junk)return false;
+ const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro)/i.test(title);
+ if(!practical)return false;
  if(!Number.isFinite(cost)||cost<3||cost>r.maxCost)return false;
  if(Number(x.sold||0)<1000)return false;
  if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|knife|weapon|medical|supplement)/i.test(title))return false;
