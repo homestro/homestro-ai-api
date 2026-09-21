@@ -259,7 +259,7 @@ app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
 const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
-const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','laundry tools','car cleaning tools','car care tools','garden tools','gardening tools','DIY hand tools','home repair tools','pet care tools','dog training tools','cat care tools','fitness training equipment','sports training equipment','baby care products','beauty tools','personal care tools','travel essentials','camping equipment','office utility tools'];
+const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','cooking tools','baking tools','laundry tools','bathroom cleaning','car accessories','car cleaning','garden tools','gardening tools','DIY tools','hand tools','repair tools','measuring tools','pet care','pet grooming','dog training','cat care','fitness equipment','sports equipment','bike accessories','baby care','beauty tools','personal care','travel accessories','camping equipment','office tools','barbecue tools','home improvement'];
 function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
 function catalogNum(v){
  const raw=String(v??'').trim().replace(/\s+/g,'');
