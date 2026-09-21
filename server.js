@@ -289,7 +289,7 @@ async function catalogSearch(keyword){
     const idRe=/(?:productId|product_id|productIdStr|itemId|item_id)\\s*["']?\\s*[:=]\\s*["']?(\\d{8,})/gi;
     let m;
     while((m=idRe.exec(html))&&occurrences.length<600)occurrences.push({id:m[1],index:m.index});
-    const urlRe=/https?:\\/\\/(?:www\\.)?aliexpress\\.com\\/item\\/(\\d{8,})(?:\\.html)?/gi;
+    const urlRe=new RegExp('https?:\\\\/\\\\/(?:www\\.)?aliexpress\\\\.com\\\\/item\\\\/(\\\\d{8,})(?:\\\\.html)?','gi');
     while((m=urlRe.exec(html))&&occurrences.length<800)occurrences.push({id:m[1],index:m.index});
     for(const occ of occurrences){
       const id=String(occ.id); if(ids.has(id))continue; ids.add(id);
