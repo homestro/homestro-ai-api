@@ -227,7 +227,8 @@ async function processExistingDraftProduct(productId,token){
  const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
- const src=mf.aliexpress_url || ((desc.match(/https?:\\/\\/(?:www\\.)?aliexpress\\.com\\/item\\/\\d+\\.html[^\\s<]*/i)||[])[0] || '');
+ const srcMatch=desc.match(new RegExp("https?://(?:www\\\\.)?aliexpress\\\\.com/item/\\\\d+\\\\.html[^\\\\s<]*","i"));
+ const src=mf.aliexpress_url || (srcMatch?.[0]||'');
  const id=mf.aliexpress_product_id || ((src.match(/\\/item\\/(\\d+)\\.html/i)||[])[1]||'');
  if(!src||!id)throw new Error('No AliExpress source URL/ID found');
  const details=await extractAliExpressDetails(src);
