@@ -151,19 +151,64 @@ async function discoverImages(input){
 }
 async function imageIsRelevant(url,input,pageContext){
  if(!process.env.OPENAI_API_KEY)return false;
- const model=process.env.OPENAI_IMAGE_MODEL||process.env.OPENAI_MODEL||'gpt-5-mini';
+ const model=process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||'gpt-5-mini';
  const prompt='Prüfe dieses konkrete Produktbild für Homestro extrem streng. Freigabe NUR wenn exakt das Produkt aus dem Produktnamen/der Beschreibung gezeigt wird und das Bild für einen deutschen Online-Shop geeignet ist. ABLEHNEN bei anderem Produkt, Zubehör statt Hauptprodukt, Banner, Logo, Wasserzeichen, Verpackung als Hauptmotiv, chinesischen/japanischen/koreanischen Schriftzeichen, fremdsprachigem Werbetext, irreführenden Angaben, starker Unschärfe oder schlechter Qualität. Wenn du unsicher bist, ABLEHNEN. Produkt: '+String(input?.title||'')+'. Kategorie: '+String(input?.category||input?.productType||'')+'. Beschreibung: '+homestroPlain(input?.description||'').slice(0,1500)+'. Quellkontext: '+String(pageContext||'').slice(0,3000)+'. Antworte nur JSON {"relevant":true/false,"confidence":0-1,"hasForeignText":true/false,"lowQuality":true/false}.';
  try{const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});const raw=await r.text();const d=JSON.parse(raw);if(!r.ok)return false;const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;}catch{return false;}
 }
+
+async function generateHomestroImage(input,title,pageContext){
+ if(!process.env.OPENAI_API_KEY) return null;
+ const model=process.env.OPENAI_IMAGE_MODEL||'gpt-image-1';
+ const prompt='Create a clean, realistic premium e-commerce product photo for Homestro.de. Show ONLY the actual product described below, centered and clearly visible, suitable for a German online shop. No text anywhere in the image, no letters, no numbers, no Chinese/Japanese/Korean characters, no English, no logos, no watermark, no labels, no packaging with writing, no UI, no collage. Neutral professional studio background, natural realistic lighting, product-focused, photorealistic. Product: '+String(title||input?.title||'').slice(0,500)+'. Category: '+String(input?.category||input?.productType||'').slice(0,300)+'. Source context: '+String(pageContext||'').slice(0,2500);
+ try{
+  const r=await fetch('https://api.openai.com/v1/images/generations',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,prompt,size:'1024x1024',n:1})});
+  const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{return null;}
+  if(!r.ok||!d.data?.[0]?.b64_json)return null;
+  return 'data:image/png;base64,'+d.data[0].b64_json;
+ }catch{return null;}
+}
+async function uploadGeneratedImageToShopify(productId,dataUrl,title,token,index){
+ const b64=String(dataUrl||'').replace(/^data:image\\/png;base64,/i,'');
+ if(!b64)return null;
+ const filename='homestro-ai-'+Date.now()+'-'+index+'.png';
+ const staged=await shopifyGraphQL('mutation($input:[StagedUploadInput!]!){stagedUploadsCreate(input:$input){stagedTargets{url resourceUrl parameters{name value}} userErrors{field message}}}',{input:[{filename,mimeType:'image/png',httpMethod:'POST',resource:'IMAGE'}]},token);
+ const se=staged.stagedUploadsCreate.userErrors||[];
+ if(se.length)throw Object.assign(new Error('Shopify staged upload failed.'),{status:400,details:se});
+ const target=staged.stagedUploadsCreate.stagedTargets?.[0]; if(!target?.url||!target?.resourceUrl)throw new Error('Shopify returned no staged upload target.');
+ const form=new FormData();
+ for(const p of (target.parameters||[]))form.append(p.name,p.value);
+ form.append('file',new Blob([Buffer.from(b64,'base64')],{type:'image/png'}),filename);
+ const up=await fetch(target.url,{method:'POST',body:form}); if(!up.ok)throw new Error('Generated image upload failed (HTTP '+up.status+').');
+ const fileCreate=await shopifyGraphQL('mutation($files:[FileCreateInput!]!){fileCreate(files:$files){files{id fileStatus alt} userErrors{field message}}}',{files:[{alt:String(title||'Homestro Produkt'),contentType:'IMAGE',originalSource:target.resourceUrl}]},token);
+ const fe=fileCreate.fileCreate.userErrors||[]; if(fe.length)throw Object.assign(new Error('Shopify fileCreate failed.'),{status:400,details:fe});
+ const fileId=fileCreate.fileCreate.files?.[0]?.id; if(!fileId)throw new Error('Shopify did not return generated image file ID.');
+ for(let i=0;i<8;i++){
+  const q=await shopifyGraphQL('query($id:ID!){node(id:$id){... on MediaImage{id image{url}}}}',{id:fileId},token);
+  const url=q.node?.image?.url; if(url)return url;
+  await new Promise(r=>setTimeout(r,1000));
+ }
+ return null;
+}
+
 async function addMedia(productId,input,title,token){
  const found=await discoverImages({...input,title});
  const candidates=found.urls.slice(0,20),accepted=[];
- for(const url of candidates){if(accepted.length>=10)break;if(await imageIsRelevant(url,{...input,title},found.pageContext||''))accepted.push(url);}
- if(!accepted.length)throw Object.assign(new Error('No product image passed strict AI validation.'),{status:400});
- const media=accepted.map(url=>({mediaContentType:'IMAGE',originalSource:url,alt:String(title||'Homestro Produkt')}));
+ for(const url of candidates){if(accepted.length>=7)break;if(await imageIsRelevant(url,{...input,title},found.pageContext||''))accepted.push(url);}
+ // If source images contain foreign text, logos, watermarks or are otherwise unsuitable,
+ // replace the missing visuals with freshly generated, text-free Homestro images.
+ let generatedCount=0;
+ for(let i=0;accepted.length<5&&i<4;i++){
+  const dataUrl=await generateHomestroImage({...input,title},title,found.pageContext||'');
+  if(!dataUrl)break;
+  if(!(await imageIsRelevant(dataUrl,{...input,title},found.pageContext||'')))continue;
+  const uploadedUrl=await uploadGeneratedImageToShopify(productId,dataUrl,title,token,i+1);
+  if(uploadedUrl){accepted.push(uploadedUrl);generatedCount++;}
+ }
+ if(!accepted.length)throw Object.assign(new Error('No product image passed strict AI validation and no generated replacement was available.'),{status:400});
+ const media=accepted.filter(url=>!/^https?:\/\/.*shopify/i.test(url)).map(url=>({mediaContentType:'IMAGE',originalSource:url,alt:String(title||'Homestro Produkt')}));
  const d=await shopifyGraphQL('mutation($productId:ID!,$media:[CreateMediaInput!]!){productCreateMedia(productId:$productId,media:$media){media{mediaContentType status}mediaUserErrors{field message}}}',{productId,media},token);
  const errs=d.productCreateMedia.mediaUserErrors||[];if(errs.length)throw Object.assign(new Error('Shopify rejected product images.'),{status:400,details:errs});
- return{count:(d.productCreateMedia.media||[]).length,urls:accepted,rejected:Math.max(0,candidates.length-accepted.length),validation:'strict-ai-vision'};
+ return{count:(d.productCreateMedia.media||[]).length+generatedCount,urls:accepted,rejected:Math.max(0,candidates.length-(accepted.length-generatedCount)),generated:generatedCount,validation:'strict-ai-vision-no-foreign-text'};
 }
 async function setSeo(productId,seo,token){if(!seo?.title&&!seo?.description)return null;const input={id:productId,seo:{title:String(seo.title||'').slice(0,70),description:String(seo.description||'').slice(0,320)}};const d=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id seo{title description}}userErrors{field message}}}',{input},token);if(d.productUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected SEO data.'),{status:400,details:d.productUpdate.userErrors});return d.productUpdate.product;}
 async function setProductTags(productId,tags,token){const arr=Array.isArray(tags)?tags.map(String).filter(Boolean):[];if(!arr.length)return null;const d=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:productId,tags:arr}},token);if(d.productUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected product tags.'),{status:400,details:d.productUpdate.userErrors});return d.productUpdate.product;}
@@ -248,9 +293,23 @@ function catalogPass(x){
  const price=Math.max(r.minSellingPrice,Math.ceil(cost*3.25*100)/100);
  return price/cost>=r.minRatio;
 }
+
+function isDsersImportedCandidate(product){
+ const status=String(product?.status||'').toUpperCase();
+ if(status!=='DRAFT')return false;
+ const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String).join(' ');
+ const desc=String(product?.description||'');
+ const mf=Array.isArray(product?.metafields)?product.metafields:[];
+ const values=mf.map(x=>String(x?.value||'')).join(' ');
+ const all=tags+' '+desc+' '+values;
+ // Without the DSers API, the reliable source marker we can enforce is an AliExpress item URL
+ // carried by the imported Shopify product. Products without this marker are never touched.
+ return /https?:\\/\\/(?:www\\.)?aliexpress\\.com\\/item\\/\\d+\\.html/i.test(all);
+}
+
 async function processExistingDraftProduct(productId,token){
  const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{mediaContentType status alt}}}}',{id:productId},token);
- const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
+ const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');if(!isDsersImportedCandidate(p))throw new Error('Safety guard: DRAFT is not recognized as a DSers/AliExpress import; skipped');
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
  const srcMatch=desc.match(new RegExp("https?://(?:www\\\\.)?aliexpress\\\\.com/item/\\\\d+\\\\.html[^\\\\s<]*","i"));
@@ -293,10 +352,46 @@ async function processExistingDraftProduct(productId,token){
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
- const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status}}}',{first:Math.min(Math.max(Number(limit)||10,1),10),query:'status:draft NOT tag:homestro-ai-processed-existing NOT tag:homestro-ai-failed-existing'},token);
- const results=[];for(const p of d.products.nodes){try{results.push(await processExistingDraftProduct(p.id,token));}catch(e){try{await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags:[...((await shopifyGraphQL('query($id:ID!){product(id:$id){tags}}',{id:p.id},token)).product?.tags||[]),'homestro-ai-failed-existing']}},token);}catch{} results.push({id:p.id,title:p.title,processed:false,error:e.message});}}
+ const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
+ const eligible=d.products.nodes.filter(isDsersImportedCandidate).filter(p=>!p.tags?.includes('homestro-ai-processed-existing')&&!p.tags?.includes('homestro-ai-failed-existing')).slice(0,Math.min(Math.max(Number(limit)||5,1),10));
+ const results=[];
+ for(const p of eligible){
+  try{results.push(await processExistingDraftProduct(p.id,token));}
+  catch(e){
+   try{
+    const current=await shopifyGraphQL('query($id:ID!){product(id:$id){tags}}',{id:p.id},token);
+    const tags=[...new Set([...(current.product?.tags||[]),'homestro-ai-failed-existing'])];
+    await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags}},token);
+   }catch{}
+   results.push({id:p.id,title:p.title,processed:false,error:e.message});
+  }
+ }
  return results;
 }
+const draftAutopilotState={running:false,lastRun:null,lastError:null,processed:0,skipped:0};
+function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
+async function draftAutopilotRun(){
+ if(draftAutopilotState.running)return;
+ draftAutopilotState.running=true;
+ try{
+  const token=await getClientToken();
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft"){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{},token);
+  const nodes=d.products.nodes||[];
+  draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
+  const eligible=nodes.filter(isDsersImportedCandidate).filter(p=>!p.tags?.includes('homestro-ai-processed-existing')&&!p.tags?.includes('homestro-ai-failed-existing')).slice(0,5);
+  let done=0;
+  for(const p of eligible){
+   try{await processExistingDraftProduct(p.id,token);done++;}
+   catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);}
+  }
+  draftAutopilotState.processed+=done;
+  draftAutopilotState.lastRun=new Date().toISOString();
+  draftAutopilotState.lastError=null;
+  console.log('DRAFT AUTOPILOT COMPLETE','eligible='+eligible.length,'processed='+done,'skipped='+draftAutopilotState.skipped);
+ }catch(e){draftAutopilotState.lastRun=new Date().toISOString();draftAutopilotState.lastError=e.message;console.error('DRAFT AUTOPILOT FAILED',e.message);}
+ finally{draftAutopilotState.running=false;}
+}
+
 
 async function catalogRun(){
  if(catalogState.running)return;
@@ -338,12 +433,19 @@ async function catalogRun(){
 app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
 
 app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
-app.get('/api/catalog/process-existing-test',async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||5),5),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
+app.get('/api/catalog/process-existing-test',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||5),5),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 app.post('/api/catalog/run',apiKey,async(_q,res)=>{if(catalogState.running)return res.json({ok:true,skipped:true});catalogRun();res.json({ok:true,started:true});});
 if(process.env.HOMESTRO_CATALOG_ENABLED!=='false'){setTimeout(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),10000);setInterval(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),catalogInterval());}
 
 app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'homestro-catalog-autopilot',enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',intervalMs:catalogInterval(),running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+
+
+app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skippedNonDsers:draftAutopilotState.skipped}));
+if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
+ setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000);
+ setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
+}
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
