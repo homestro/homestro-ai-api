@@ -213,7 +213,7 @@ async function updateVariants(productId,variants,token){const normalized=(Array.
 app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({ok:true,product:await updateVariants(String(req.body.productId||''),req.body.variants,await getClientToken())});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,userErrors:e.details});}});
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
-const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set()};
+const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
 const catalogKeywords=['home organization','kitchen storage','car cleaning','garden tools','home improvement','pet accessories','fitness accessories','baby accessories','beauty accessories','travel accessories'];
 function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
 function catalogNum(v){
@@ -299,56 +299,43 @@ async function processExistingDrafts(limit,token){
 }
 
 async function catalogRun(){
- if(catalogState.running)return; catalogState.running=true; let created=0,rejected=0,failed=0;
+ if(catalogState.running)return;
+ catalogState.running=true;
+ let rejected=0,failed=0;
  try{
-  let token=null;const batch=Math.max(1,Number(process.env.HOMESTRO_CATALOG_BATCH||10));
+  const batch=Math.max(1,Number(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
+  const candidates=[];
   for(const k of catalogKeywords){
-   if(created>=batch)break;
-   let items=[];try{items=await catalogSearch(k);}catch(e){failed++;console.error('CATALOG SOURCE FAILED',k,e.message);continue;}
+   if(candidates.length>=batch)break;
+   let items=[];
+   try{items=await catalogSearch(k);}catch(e){failed++;console.error('CATALOG SOURCE FAILED',k,e.message);continue;}
    for(const x of items){
-    if(created>=batch)break;if(catalogState.seen.has(x.id))continue;catalogState.seen.add(x.id);
+    if(candidates.length>=batch)break;
+    if(catalogState.seen.has(x.id))continue;
+    catalogState.seen.add(x.id);
     if(!catalogPass(x)){rejected++;continue;}
+    const selling=Math.max(rules().minSellingPrice,Math.ceil(Number(x.cost)*3.25*100)/100);
+    const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
+    const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
     try{
-     if(!token)token=await getClientToken();
      const details=await extractAliExpressDetails(x.source_url);
-     const allImages=details.image_urls||x.image_urls||[];
-     const sourceText=details.page_text||'';
-     const selling=Math.max(rules().minSellingPrice,Math.ceil(Number(x.cost)*3.25*100)/100);
-     const ai=await aiProduct({
-      title:details.page_title||x.title,
-      description:'AliExpress-Quellseite: '+sourceText.slice(0,7000),
-      category:k,
-      source_url:x.source_url,
-      source_product_id:x.id,
-      supplier_id:x.id,
-      cost:x.cost,
-      selling_price:selling,
-      sold:x.sold,
-      image_urls:allImages,
-      options:details.options||[],
-      variants:details.variants||[],
-      eu_warehouse:Boolean(details.euWarehouse)
-     });
-     const p=ai.product||{};
-     if(!p.title)throw new Error('AI returned no title');
-     const d=await createDraft({
-      title:p.title,description:p.description,shortDescription:p.shortDescription,category:p.category||k,
-      tags:p.tags,seoTitle:p.seoTitle,seoDescription:p.seoDescription,handle:p.handle,
-      cost:Number(x.cost),selling_price:selling,image_urls:allImages,source_url:x.source_url,
-      source_product_id:x.id,supplier_id:x.id,landed_cost_eur:x.landed_cost_eur,options:details.options||[],variants:details.variants||[]
-     },token);
-     // SAFETY: autopilot may create only DRAFT products. Publication is manual/approval-only.
-     if(String(d.status||'DRAFT')!=='DRAFT')throw new Error('Safety guard: autopilot product is not DRAFT');
-     created++;catalogState.created++;
-     console.log('CATALOG DRAFT CREATED',x.id,'shopify='+d.id,'media='+d.mediaCount,'variants='+d.variantCount,'eu='+d.euWarehouse);
-    }catch(e){failed++;catalogState.failed++;console.error('CATALOG CREATE FAILED',x.id,e.message);}
+     candidate.title=String(details.page_title||candidate.title).trim();
+     candidate.euWarehouse=Boolean(details.euWarehouse);
+     if(candidate.euWarehouse===false && process.env.HOMESTRO_REQUIRE_EU_WAREHOUSE==='true')continue;
+    }catch(e){candidate.note+=' AliExpress Detaildaten konnten nicht vollständig geladen werden.';}
+    candidates.push(candidate);
    }
   }
-  catalogState.rejected+=rejected;catalogState.lastRun=new Date().toISOString();catalogState.lastError=null;
-  console.log('CATALOG RUN COMPLETE','created='+created,'rejected='+rejected,'failed='+failed);
+  catalogState.candidates=candidates;
+  catalogState.rejected+=rejected;
+  catalogState.lastRun=new Date().toISOString();
+  catalogState.lastError=null;
+  console.log('CATALOG CANDIDATE RUN COMPLETE','candidates='+candidates.length,'rejected='+rejected,'failed='+failed);
  }catch(e){catalogState.lastRun=new Date().toISOString();catalogState.lastError=e.message;console.error('CATALOG RUN FAILED',e.message);}
  finally{catalogState.running=false;}
 }
+
+app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
 
 app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 app.get('/api/catalog/process-existing-test',async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||5),5),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
