@@ -168,7 +168,7 @@ async function generateHomestroImage(input,title,pageContext){
  }catch{return null;}
 }
 async function uploadGeneratedImageToShopify(productId,dataUrl,title,token,index){
- const b64=String(dataUrl||'').replace(/^data:image\\/png;base64,/i,'');
+ const b64=String(dataUrl||'').replace(/^data:image\/png;base64,/i,'');
  if(!b64)return null;
  const filename='homestro-ai-'+Date.now()+'-'+index+'.png';
  const staged=await shopifyGraphQL('mutation($input:[StagedUploadInput!]!){stagedUploadsCreate(input:$input){stagedTargets{url resourceUrl parameters{name value}} userErrors{field message}}}',{input:[{filename,mimeType:'image/png',httpMethod:'POST',resource:'IMAGE'}]},token);
