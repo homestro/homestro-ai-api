@@ -100,7 +100,7 @@ async function aiProduct(input){
 app.post('/api/ai/product',apiKey,async(req,res)=>{try{res.json({ok:true,...await aiProduct(req.body?.product||req.body)});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 function absoluteUrl(u,base){try{return new URL(u,base).href;}catch{return null;}}
 async function extractAliExpressDetails(url){
- const out={image_urls:[],variants:[],options:[],page_title:'',page_text:'',euWarehouse:false};
+ const out={image_urls:[],variants:[],options:[],page_title:'',page_text:'',euWarehouse:false,costEur:NaN,sold:0};
  try{
   const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.1)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
   if(!r.ok)return out;
@@ -140,7 +140,21 @@ async function extractAliExpressDetails(url){
    if(parts.length){const combo=parts.map(v=>({optionName:v.option,name:v.name}));const key=JSON.stringify(combo);if(!seen.has(key)){seen.add(key);combos.push(combo);}}
   }
   out.variants=combos;
-  out.euWarehouse=new RegExp('ships?\\s+from\\s*[:\\-]?\\s*(Germany|Poland|Czech(?:ia| Republic)|France|Spain|Italy|Netherlands|Belgium|Austria|EU|European Union)','i').test(out.page_text);
+    {
+    const prices=[...html.matchAll(/(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice)[^0-9]{0,80}(?:EUR|€)?\\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+    const eur=[...html.matchAll(/(?:€|EUR)\\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+    if([...prices,...eur].length)out.costEur=Math.min(...prices,...eur);
+    const sold=[...html.matchAll(/([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)\\+?\\s*(?:orders|sold|sales|units?)/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
+    const orders=[...html.matchAll(/"(?:orders|orderCount|tradeCount|sold|sales)"\\s*:\\s*"?([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)"?/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
+    out.sold=Math.max(0,...sold,...orders);
+  }
+{
+  const euNames='Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|France|Frankreich|Spain|Spanien|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|EU|European Union|Europäische Union';
+  const euCodes='DE|PL|CZ|ES|FR|IT|NL|BE|AT';
+  const nearLabel=new RegExp('(?:ships?\\\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)[^]{0,300}?(?:'+euNames+'|'+euCodes+')','i');
+  const reverse=new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,180}?(?:ships?\\\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)','i');
+  out.euWarehouse=nearLabel.test(html)||reverse.test(html)||nearLabel.test(out.page_text)||reverse.test(out.page_text);
+}
  }catch{}
  return out;
 }
@@ -259,7 +273,7 @@ app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
 const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
-const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','cooking tools','baking tools','kitchen knives','chef knives','kitchen knife','cooking knives','messer küche','laundry tools','bathroom cleaning','car accessories','car cleaning','garden tools','gardening tools','DIY tools','hand tools','repair tools','measuring tools','pet care','pet grooming','dog training','cat care','fitness equipment','sports equipment','bike accessories','baby care','beauty tools','personal care','travel accessories','camping equipment','office tools','barbecue tools','home improvement'];
+const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','cooking tools','baking tools','kitchen knives','chef knives','cooking knives','messer küche','laundry tools','bathroom cleaning','car accessories','car cleaning','garden tools','gardening tools','DIY tools','hand tools','repair tools','measuring tools','pet care','pet grooming','dog training','cat care','fitness equipment','sports equipment','bike accessories','baby care','beauty tools','personal care','travel accessories','camping equipment','office tools','barbecue tools','home improvement','bluetooth headphones','wireless headphones','AI headphones','AI earbuds','noise cancelling headphones','kopfhörer bluetooth','ohrhörer bluetooth'];
 function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
 function catalogNum(v){
  const raw=String(v??'').trim().replace(/\s+/g,'');
@@ -277,70 +291,44 @@ function catalogNum(v){
 }
 async function catalogSearch(keyword){
   const out=[],ids=new Set();
-  for(const page of [1,2,3]){
-    const url='https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html?g=y&page='+page;
-    const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.2)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
-    const html=await r.text(); if(!r.ok)throw new Error('AliExpress HTTP '+r.status);
-
-    // AliExpress search pages contain several serialized representations of the same card.
-    // First collect product IDs from item URLs as well as JSON fields, then score only a tight
-    // neighborhood around each occurrence instead of mixing data from unrelated cards.
-    const occurrences=[];
-    const idRe=/(?:productId|product_id|productIdStr|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;
-    let m;
-    while((m=idRe.exec(html))&&occurrences.length<600)occurrences.push({id:m[1],index:m.index});
-    const urlRe=new RegExp('https?:\\\\/\\\\/(?:www\\.)?aliexpress\\\\.com\\\\/item\\\\/(\\\\d{8,})(?:\\\\.html)?','gi');
-    while((m=urlRe.exec(html))&&occurrences.length<800)occurrences.push({id:m[1],index:m.index});
-    for(const occ of occurrences){
-      const id=String(occ.id); if(ids.has(id))continue; ids.add(id);
-      const c=html.slice(Math.max(0,occ.index-6000),Math.min(html.length,occ.index+9000));
-
-      const titleCandidates=[];
-      const titleRes=[
-        /"(?:title|subject|productTitle|name)"\s*:\s*"([^"]{10,400})"/i,
-        new RegExp('<(?:title|h[1-3])[^>]*>([^<]{10,400})</(?:title|h[1-3])>','i')
-      ];
-      for(const tr of titleRes){const tm=c.match(tr);if(tm)titleCandidates.push(tm[1]);}
-      const title=String(titleCandidates.filter(v=>String(v||'').trim().length>=15).sort((a,b)=>String(b).length-String(a).length)[0]||keyword).replace(/\\u0026/g,'&').replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim();
-
-      const priceMatches=[];
-      const priceRe=/(?:salePrice|discountPrice|formattedPrice|price|currentPrice|originalPrice)\s*["']?\s*[:=]\s*["']?\$?([0-9]+(?:[.,][0-9]+)?)/gi;
-      while((m=priceRe.exec(c))&&priceMatches.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))priceMatches.push(n);}
-      const costCandidates=priceMatches.filter(n=>n>=2&&n<=20);
-      const cost=costCandidates.length?Math.min(...costCandidates):NaN;
-
-      const solds=[];
-      const soldRe=/([0-9]+(?:[.,][0-9]+)?\s*[kKmMbB]?)\+?\s*(?:orders|sold|sales|units?)/gi;
-      while((m=soldRe.exec(c))&&solds.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))solds.push(n);}
-      const orderFieldRe=/"(?:orders|orderCount|tradeCount|sold|sales)"\s*:\s*"?([0-9]+(?:[.,][0-9]+)?\s*[kKmMbB]?)"?/gi;
-      while((m=orderFieldRe.exec(c))&&solds.length<20){const n=catalogNum(m[1]);if(Number.isFinite(n))solds.push(n);}
-      const sold=solds.length?Math.max(...solds):0;
-
-      const imageMatch=c.match(/https?:[^"' ]+\.(?:jpg|jpeg|png|webp)(?:\?[^"' ]*)?/i);
-      out.push({id,title,cost,sold,image_urls:imageMatch?[imageMatch[0]]:[],source_url:'https://www.aliexpress.com/item/'+id+'.html'});
-    }
-  }
-  console.log('CATALOG SOURCE',keyword,'items='+out.length); return out;
+  const addId=(id,context='')=>{id=String(id||'').replace(/[^0-9]/g,'');if(id.length<8||ids.has(id))return;ids.add(id);out.push({id,title:keyword,cost:NaN,sold:0,image_urls:[],source_url:'https://www.aliexpress.com/item/'+id+'.html',context});};
+  const parseAli=(html)=>{
+    const re=/(?:productId|product_id|productIdStr|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;let m;
+    while((m=re.exec(html))&&ids.size<1000)addId(m[1],html.slice(Math.max(0,m.index-5000),Math.min(html.length,m.index+7000)));
+    const ur=/aliexpress(?:\\\\/|\\/|\.)+com(?:\\\\/|\\/|\.)+item(?:\\\\/|\\/)(\\d{8,})/gi;
+    while((m=ur.exec(html))&&ids.size<1000)addId(m[1],html.slice(Math.max(0,m.index-5000),Math.min(html.length,m.index+7000)));
+  };
+  const urls=[
+    'https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html?g=y&page=1',
+    'https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html?SearchText='+encodeURIComponent(keyword)
+  ];
+  for(const url of urls){try{const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept-Language':'de-DE,de;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml'},redirect:'follow'});const html=await r.text();if(r.ok&&html.length>5000)parseAli(html);}catch{}if(out.length>=120)break;}
+  if(out.length<8){try{const q=encodeURIComponent('site:aliexpress.com/item '+keyword);const r=await fetch('https://html.duckduckgo.com/html/?q='+q,{headers:{'User-Agent':'Mozilla/5.0','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});const html=await r.text();const decoded=html.replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/').replace(/%2F/gi,'/').replace(/%3A/gi,':');const re=/aliexpress(?:\\\\/|\\/|\.)+com(?:\\\\/|\\/|\.)+item(?:\\\\/|\\/)(\\d{8,})/gi;let m;while((m=re.exec(decoded))&&out.length<80)addId(m[1],decoded.slice(Math.max(0,m.index-1500),Math.min(decoded.length,m.index+3000)));}catch{}}
+  for(const x of out.slice(0,120)){try{const d=await extractAliExpressDetails(x.source_url);if(d.page_title)x.title=d.page_title;if(Number.isFinite(d.costEur))x.cost=d.costEur;if(Number.isFinite(d.sold))x.sold=d.sold;if(Array.isArray(d.image_urls))x.image_urls=d.image_urls.slice(0,3);}catch{}}
+  console.log('CATALOG SOURCE',keyword,'items='+out.length);return out;
 }
 
 function catalogPass(x){
  const r=rules(),cost=Number(x.cost),title=String(x.title||'').toLowerCase();
- // HARD GATE: catalog candidates must have source URL and product ID before any Shopify write.
  if(!String(x.source_url||'').trim()||!String(x.id||'').trim())return false;
- const bad=/(earphone|headphone|bluetooth|speaker|smartwatch|watch phone|charger|cable|usb|led strip|camera|drone|gaming|projector|power bank|electronic|elektronik|kopfhörer|lautsprecher)/i.test(title);
- if(bad)return false; const junk=/(hook|hooks|hanging hook|adhesive hook|haken|box|boxes|storage box|organizer|organiser|aufbewahrung|rack|shelf|shelves|regal|holder|halter|stand|case|cover|bag|pouch|tasche|etui|hülle|keychain|key ring|schlüsselanhänger|sticker|decal|ornament|decoration|decor|deko|wall art|phone case|cable holder|clip|clamp|bracket)/i.test(title);
+ const isHeadphone=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(title);
+ const bad=/(smartwatch|watch phone|charger|cable|usb|led strip|camera|drone|gaming|projector|power bank|electronic|elektronik|speaker|lautsprecher)/i.test(title);
+ if(bad&&!isHeadphone)return false;
+ const junk=/(hook|hooks|hanging hook|adhesive hook|haken|box|boxes|storage box|organizer|organiser|aufbewahrung|rack|shelf|shelves|regal|holder|halter|stand|case|cover|bag|pouch|tasche|etui|hülle|keychain|key ring|schlüsselanhänger|sticker|decal|ornament|decoration|decor|deko|wall art|phone case|cable holder|clip|clamp|bracket)/i.test(title);
  if(junk)return false;
- const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|knife|messer|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro)/i.test(title);
+ const isKnife=/(kitchen knives?|chef knives?|cooking knives?|kitchen knife|messer küche|küchenmesser)/i.test(title);
+ const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|knife|messer|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
  if(!practical)return false;
- if(!Number.isFinite(cost)||cost<5||cost>r.maxCost)return false;
+ const maxCost=isHeadphone?27:Number(r.maxCost||10),minCost=isHeadphone?20:5;
+ if(!Number.isFinite(cost)||cost<minCost||cost>maxCost)return false;
  if(Number(x.sold||0)<2000)return false;
- if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|weapon|hunting knife|tactical knife|survival knife|pocket knife|butterfly knife|switchblade|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title))return false;
- const problem=/((?:clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|knife|messer|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam))/i.test(title);
+ if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|weapon|hunting knife|tactical knife|survival knife|pocket knife|butterfly knife|switchblade|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title)&&!isKnife)return false;
+ const problem=/(clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|knife|messer|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
  if(!problem)return false;
- const price=Math.max(39.90,Math.ceil(cost*3.5*100)/100);
- const ebay=ebayProfitability({selling_price:price,landed_cost_eur:cost});
- if(Number(ebay.profitEur||0)<12)return false;
- return price/cost>=Math.max(r.minRatio,3.5);
+ const targetPrice=isHeadphone?Math.max(69.90,Math.ceil(cost*2.9*100)/100):Math.max(39.90,Math.ceil(cost*3.5*100)/100);
+ const ebay=ebayProfitability({selling_price:targetPrice,landed_cost_eur:cost});
+ if(Number(ebay.estimatedProfitEur||0)<12)return false;
+ return targetPrice/cost>=Math.max(r.minRatio,isHeadphone?2.9:3.5);
 }
 
 function isDsersImportedCandidate(product){
@@ -466,8 +454,8 @@ async function catalogRun(){
     try{
      const details=await extractAliExpressDetails(x.source_url);
      candidate.title=String(details.page_title||candidate.title).trim();
-     candidate.euWarehouse=Boolean(details.euWarehouse);
-     if(candidate.euWarehouse===false && process.env.HOMESTRO_REQUIRE_EU_WAREHOUSE==='true')continue;
+     candidate.euWarehouse=Boolean(details.euWarehouse);\n     if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;candidate.sellingPriceEur=Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}\n     if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
+     if(candidate.euWarehouse!==true)continue;
     }catch(e){candidate.note+=' AliExpress Detaildaten konnten nicht vollständig geladen werden.';}
     const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
     const keyCount=Number(keywordCounts.get(k)||0);
