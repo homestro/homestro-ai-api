@@ -295,7 +295,7 @@ async function catalogSearch(keyword){
   const parseAli=(html)=>{
     const re=/(?:productId|product_id|productIdStr|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;let m;
     while((m=re.exec(html))&&ids.size<1000)addId(m[1],html.slice(Math.max(0,m.index-5000),Math.min(html.length,m.index+7000)));
-    const ur=/aliexpress(?:\\\\/|\\/|\.)+com(?:\\\\/|\\/|\.)+item(?:\\\\/|\\/)(\\d{8,})/gi;
+    const ur=/aliexpress[^"'<>]{0,80}item[\\/](\\d{8,})/gi;
     while((m=ur.exec(html))&&ids.size<1000)addId(m[1],html.slice(Math.max(0,m.index-5000),Math.min(html.length,m.index+7000)));
   };
   const urls=[
