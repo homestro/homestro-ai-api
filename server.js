@@ -454,7 +454,9 @@ async function catalogRun(){
     try{
      const details=await extractAliExpressDetails(x.source_url);
      candidate.title=String(details.page_title||candidate.title).trim();
-     candidate.euWarehouse=Boolean(details.euWarehouse);\n     if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;candidate.sellingPriceEur=Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}\n     if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
+     candidate.euWarehouse=Boolean(details.euWarehouse);
+     if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;candidate.sellingPriceEur=Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}
+     if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
      if(candidate.euWarehouse!==true)continue;
     }catch(e){candidate.note+=' AliExpress Detaildaten konnten nicht vollständig geladen werden.';}
     const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
