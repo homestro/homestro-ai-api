@@ -302,9 +302,9 @@ async function catalogSearch(keyword){
 
   const parseAli=(html)=>{
     const normalized=String(html||'').replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/').replace(/\\u002F/g,'/').replace(/\\\//g,'/');
-    const re=/(?:productId|product_id|productIdStr|itemId|item_id)\\s*["']?\\s*[:=]\\s*["']?(\\d{8,})/gi;let m;
+    const re=/(?:productId|product_id|productIdStr|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;let m;
     while((m=re.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
-    const ur=/aliexpress[^"'<>]{0,120}item\\/(\\d{8,})/gi;
+    const ur=/aliexpress[^"'<>]{0,120}item\/(\d{8,})/gi;
     while((m=ur.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
   };
 
