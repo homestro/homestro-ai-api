@@ -489,13 +489,13 @@ async function catalogRun(){
     if(catalogState.seen.has(x.id))continue;
     catalogState.seen.add(x.id);
     if(!catalogPass(x)){rejected++;continue;}
-    const selling=Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
+    const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(39.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
     const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
     const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
     try{
      const details=await extractAliExpressDetails(x.source_url);
      candidate.title=String(details.page_title||candidate.title).trim();
-     candidate.euWarehouse=Boolean(details.euWarehouse);
+     candidate.euWarehouse=(details.euWarehouse===true)||(x.euWarehouse===true);
      if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;candidate.sellingPriceEur=Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}
      if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
      if(candidate.euWarehouse!==true)continue;
