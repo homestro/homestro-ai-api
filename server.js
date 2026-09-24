@@ -273,7 +273,7 @@ app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
 const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
-const catalogKeywords=['cleaning tools','kitchen tools','kitchen gadgets','cooking tools','baking tools','kitchen knives','chef knives','cooking knives','messer küche','laundry tools','bathroom cleaning','car accessories','car cleaning','garden tools','gardening tools','DIY tools','hand tools','repair tools','measuring tools','pet care','pet grooming','dog training','cat care','fitness equipment','sports equipment','bike accessories','baby care','beauty tools','personal care','travel accessories','camping equipment','office tools','barbecue tools','home improvement','bluetooth headphones','wireless headphones','AI headphones','AI earbuds','noise cancelling headphones','kopfhörer bluetooth','ohrhörer bluetooth'];
+const catalogKeywords=['EU Stock kitchen tool','EU Stock kitchen gadget','EU Stock chef knife','EU Stock cleaning tool','EU Stock home cleaning','EU Stock travel accessory','EU Stock garden tools','EU Stock headphones','EU Stock bluetooth headphones','EU Stock earbuds','Poland Warehouse kitchen knife','Poland Warehouse kitchen tool','France Warehouse kitchen knife','Germany Warehouse kitchen tool','EU Warehouse cleaning tool','EU Warehouse garden tool','EU Stock wireless headphones','EU Stock noise cancelling headphones'];
 function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
 function catalogNum(v){
  const raw=String(v??'').trim().replace(/\s+/g,'');
