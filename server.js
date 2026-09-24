@@ -478,6 +478,8 @@ async function catalogRun(){
  try{
   const batch=Math.max(1,Number(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
   const candidates=[];
+  // Deduplicate only within the current scan. Persistent seen IDs caused valid products to be permanently skipped.
+  const runSeen=new Set();
   const titleSeen=new Set();
   const keywordCounts=new Map();
   for(const k of catalogKeywords){
@@ -486,7 +488,8 @@ async function catalogRun(){
    try{items=await catalogSearch(k);}catch(e){failed++;console.error('CATALOG SOURCE FAILED',k,e.message);continue;}
    for(const x of items){
     if(candidates.length>=batch)break;
-    if(catalogState.seen.has(x.id))continue;
+    if(runSeen.has(x.id))continue;
+    runSeen.add(x.id);
     catalogState.seen.add(x.id);
     if(!catalogPass(x)){rejected++;continue;}
     const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(39.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
@@ -498,8 +501,16 @@ async function catalogRun(){
      candidate.euWarehouse=(details.euWarehouse===true)||(x.euWarehouse===true);
      if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;candidate.sellingPriceEur=Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}
      if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
-     if(candidate.euWarehouse!==true)continue;
-    }catch(e){candidate.note+=' AliExpress Detaildaten konnten nicht vollständig geladen werden.';}
+     if(candidate.euWarehouse!==true){
+       if(x.euWarehouse===true)candidate.euWarehouse=true;
+       else continue;
+     }
+    }catch(e){
+     if(x.euWarehouse!==true){candidate.note+=' AliExpress Detaildaten konnten nicht vollständig geladen werden.';continue;}
+     candidate.euWarehouse=true;
+    }
+    // Re-apply the economic filter after detail enrichment so changed live data cannot bypass the rules.
+    if(!catalogPass({id:x.id,title:candidate.title,cost:candidate.costEur,sold:candidate.sold,source_url:candidate.url,euWarehouse:candidate.euWarehouse}))continue;
     const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
     const keyCount=Number(keywordCounts.get(k)||0);
     if(titleSeen.has(titleKey)||keyCount>=5)continue;
