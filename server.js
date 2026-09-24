@@ -304,29 +304,31 @@ async function catalogSearch(keyword){
     const normalized=String(html||'').replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/').replace(/\\u002F/g,'/').replace(/\\\//g,'/');
     const re=/(?:productId|product_id|productIdStr|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;let m;
     while((m=re.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
-    const ur=/aliexpress[^"'<>]{0,120}item\/(\d{8,})/gi;
+    const ur=/(?:aliexpress[^"'<>]{0,180})?(?:item\/|\/item\/)(\d{8,})(?:\.html)?/gi;
     while((m=ur.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
+    const shortUrl=/(?:aliexpress[^"'<>]{0,180})(?:\/i\/|\/item\/)(\d{8,})/gi;
+    while((m=shortUrl.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
   };
 
   const fetchText=async(url,headers={})=>{
     try{const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept-Language':'de-DE,de;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',...headers},redirect:'follow'});const html=await r.text();return r.ok?html:'';}catch{return '';}
   };
 
+  const slug=encodeURIComponent(keyword).replace(/%20/g,'-');
   const aliUrls=[
-    'https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html?g=y&page=1',
-    'https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html?SearchText='+encodeURIComponent(keyword),
-    'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)
+    'https://www.aliexpress.com/w/wholesale-'+slug+'.html?g=y&page=1',
+    'https://www.aliexpress.com/w/wholesale-'+slug+'.html?page=2',
+    'https://www.aliexpress.com/w/wholesale-'+slug+'.html?SearchText='+encodeURIComponent(keyword),
+    'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=1',
+    'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=2'
   ];
   for(const url of aliUrls){const html=await fetchText(url);if(html.length>5000)parseAli(html);if(out.length>=120)break;}
 
   // Search-engine fallbacks. These often survive AliExpress anti-bot pages and give real item IDs.
   if(out.length<8){
-    const q=encodeURIComponent('site:aliexpress.com/item '+keyword);
-    const sources=[
-      'https://www.bing.com/search?q='+q+'&count=50',
-      'https://www.google.com/search?q='+q+'&num=50',
-      'https://html.duckduckgo.com/html/?q='+q
-    ];
+    const queries=['site:aliexpress.com/item/ '+keyword,'site:aliexpress.com/item '+keyword+' orders','site:aliexpress.com '+keyword+' EU stock'];
+    const sources=[];
+    for(const query of queries){const q=encodeURIComponent(query);sources.push('https://www.bing.com/search?q='+q+'&count=50');sources.push('https://www.google.com/search?q='+q+'&num=50');sources.push('https://html.duckduckgo.com/html/?q='+q);}
     for(const u of sources){
       const html=await fetchText(u,{'Accept-Language':'en-US,en;q=0.9'});
       if(html)parseAli(html);
@@ -499,7 +501,7 @@ async function catalogRun(){
      const details=await extractAliExpressDetails(x.source_url);
      candidate.title=String(details.page_title||candidate.title).trim();
      candidate.euWarehouse=(details.euWarehouse===true)||(x.euWarehouse===true);
-     if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;candidate.sellingPriceEur=Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}
+     if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;const hp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);candidate.sellingPriceEur=hp?Math.max(69.90,Math.ceil(details.costEur*2.9*100)/100):Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}
      if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
      if(candidate.euWarehouse!==true){
        if(x.euWarehouse===true)candidate.euWarehouse=true;
@@ -529,6 +531,12 @@ async function catalogRun(){
 }
 
 app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
+function csvCell(v){const s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
+function catalogFeedRows(){return catalogState.candidates.map(x=>({id:x.id,title:x.title,url:x.url,cost_eur:x.costEur,selling_price_eur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,eu_warehouse:x.euWarehouse?'TRUE':'FALSE',estimated_profit_eur:x.estimatedProfitBeforeShippingVat,source:'AliExpress',status:'CANDIDATE'}));}
+function sendCatalogCsv(res){const rows=catalogFeedRows(),headers=['id','title','url','cost_eur','selling_price_eur','sold','ratio','eu_warehouse','estimated_profit_eur','source','status'];res.set('Content-Type','text/csv; charset=utf-8');res.send('\uFEFF'+headers.join(',')+'\n'+rows.map(r=>headers.map(h=>csvCell(r[h])).join(',')).join('\n'));}
+app.get('/feeds/products.csv',(_q,res)=>sendCatalogCsv(res));
+app.get('/feeds/google-sheet.csv',(_q,res)=>sendCatalogCsv(res));
+app.get('/feeds/youtube.json',(_q,res)=>res.json({ok:true,source:'Homestro candidate feed',generatedAt:new Date().toISOString(),items:catalogState.candidates.map(x=>({title:x.title,productUrl:x.url,hook:'Praktisches Produkt für den Alltag – jetzt bei Homestro entdecken.',description:'Entdecke '+x.title+' bei Homestro.de. Produktdaten und Verfügbarkeit vor dem Verkauf nochmals prüfen.',sellingPriceEur:x.sellingPriceEur}))}));
 app.get('/catalog/candidates-public',(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat}))}));
 
 app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
