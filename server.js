@@ -291,7 +291,7 @@ function catalogNum(v){
 }
 async function catalogSearch(keyword){
   const out=[],ids=new Set();
-  const addId=(id,context='',extra={})=>{id=String(id||'').replace(/[^0-9]/g,'');if(id.length<8||ids.has(id))return;ids.add(id);out.push({id,title:extra.title||keyword,cost:Number.isFinite(extra.cost)?extra.cost:NaN,sold:Number(extra.sold||0),image_urls:extra.image_urls||[],source_url:'https://www.aliexpress.com/item/'+id+'.html',context,euWarehouse:extra.euWarehouse===true});};
+  const addId=(id,context='',extra={})=>{id=String(id||'').replace(/[^0-9]/g,'');if(id.length<8||ids.has(id))return;ids.add(id);const ctx=String(context||'');const euEvidence=/(EU\\s*stock|EU\\s*warehouse|ships?\\s*from\\s*(?:Germany|Poland|Czech(?:ia| Republic)|Spain|France|Italy|Netherlands|Belgium|Austria)|\\b(?:Germany|Poland|Czechia|Czech Republic|Spain|France|Italy|Netherlands|Belgium|Austria)\\s*(?:warehouse|stock))/i.test(ctx);const soldMatch=ctx.match(/(?:orders?|sold|verkauft)\\s*[:：]?\\s*([0-9][0-9.,]*\\s*[kmb]?\\+?)/i);const costMatch=ctx.match(/(?:EUR|€|\\$)\\s*([0-9]+(?:[.,][0-9]{1,2})?)/i);out.push({id,title:extra.title||keyword,cost:Number.isFinite(extra.cost)?extra.cost:(costMatch?catalogNum(costMatch[1]):NaN),sold:Number(extra.sold||0)||(soldMatch?catalogNum(soldMatch[1]):0),image_urls:extra.image_urls||[],source_url:'https://www.aliexpress.com/item/'+id+'.html',context:ctx,euWarehouse:extra.euWarehouse===true||euEvidence});};
 
   // Verified launch seed: PandaFind found this AliExpress item explicitly labelled EU Stock,
   // with 2,457 units sold and EUR 15.48 at discovery time. Keep it as a starter while
