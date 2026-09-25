@@ -102,7 +102,12 @@ function absoluteUrl(u,base){try{return new URL(u,base).href;}catch{return null;
 async function aliExpressBrowserRead(url,{waitMs=3500}={}){
  try{
   const {chromium}=require('playwright');
-  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']});
+  const {execFileSync}=require('child_process');
+  let executablePath=process.env.CHROMIUM_PATH||'';
+  if(!executablePath){try{executablePath=execFileSync('sh',['-lc','command -v chromium || command -v chromium-browser || true'],{encoding:'utf8'}).trim();}catch{}}
+  const launchOptions={headless:true,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']};
+  if(executablePath)launchOptions.executablePath=executablePath;
+  const browser=await chromium.launch(launchOptions);
   try{
    const page=await browser.newPage({locale:'de-DE',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',viewport:{width:1440,height:1000}});
    await page.goto(String(url),{waitUntil:'domcontentloaded',timeout:30000});
