@@ -141,9 +141,11 @@ async function extractAliExpressDetails(url){
   }
   out.variants=combos;
   {
-    const prices=[...html.matchAll(/(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice)[^0-9]{0,80}(?:EUR|€)?\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+    const priceKeys=[...html.matchAll(/"(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice|minPrice|maxPrice|skuPrice|originalPrice)"\s*:\s*(?:"|')?([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+    const prices=[...html.matchAll(/(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice|minPrice|maxPrice|skuPrice|originalPrice)[^0-9]{0,100}(?:EUR|€|\$)?\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
     const eur=[...html.matchAll(/(?:€|EUR)\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
-    if([...prices,...eur].length)out.costEur=Math.min(...prices,...eur);
+    const eurAfter=[...html.matchAll(/([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+    if([...priceKeys,...prices,...eur,...eurAfter].length)out.costEur=Math.min(...priceKeys,...prices,...eur,...eurAfter);
     const sold=[...html.matchAll(/([0-9]+(?:[.,][0-9]+)?\s*[kKmMbB]?)\+?\s*(?:orders|sold|sales|units?)/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
     const orders=[...html.matchAll(/"(?:orders|orderCount|tradeCount|sold|sales)"\s*:\s*"?(\d+(?:[.,]\d+)?\s*[kKmMbB]?)"?/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
     out.sold=Math.max(0,...sold,...orders);
@@ -291,7 +293,7 @@ function catalogNum(v){
 }
 async function catalogSearch(keyword){
   const out=[],ids=new Set();
-  const addId=(id,context='',extra={})=>{id=String(id||'').replace(/[^0-9]/g,'');if(id.length<8||ids.has(id))return;ids.add(id);const ctx=String(context||'');const euEvidence=/(EU\\s*stock|EU\\s*warehouse|ships?\\s*from\\s*(?:Germany|Poland|Czech(?:ia| Republic)|Spain|France|Italy|Netherlands|Belgium|Austria)|\\b(?:Germany|Poland|Czechia|Czech Republic|Spain|France|Italy|Netherlands|Belgium|Austria)\\s*(?:warehouse|stock))/i.test(ctx);const soldMatch=ctx.match(/(?:orders?|sold|verkauft)\\s*[:：]?\\s*([0-9][0-9.,]*\\s*[kmb]?\\+?)/i);const costMatch=ctx.match(/(?:EUR|€|\\$)\\s*([0-9]+(?:[.,][0-9]{1,2})?)/i);out.push({id,title:extra.title||keyword,cost:Number.isFinite(extra.cost)?extra.cost:(costMatch?catalogNum(costMatch[1]):NaN),sold:Number(extra.sold||0)||(soldMatch?catalogNum(soldMatch[1]):0),image_urls:extra.image_urls||[],source_url:'https://www.aliexpress.com/item/'+id+'.html',context:ctx,euWarehouse:extra.euWarehouse===true||euEvidence});};
+  const addId=(id,context='',extra={})=>{id=String(id||'').replace(/[^0-9]/g,'');if(id.length<8||ids.has(id))return;ids.add(id);const ctx=String(context||'');const euEvidence=/(EU\\s*stock|EU\\s*warehouse|ships?\\s*from\\s*(?:Germany|Poland|Czech(?:ia| Republic)|Spain|France|Italy|Netherlands|Belgium|Austria)|\\b(?:Germany|Poland|Czechia|Czech Republic|Spain|France|Italy|Netherlands|Belgium|Austria)\\s*(?:warehouse|stock))/i.test(ctx);const soldMatch=ctx.match(/(?:orders?|sold|sales|units?|verkauft)\s*[:：]?\s*([0-9][0-9.,]*\s*[kmb]?\+?)/i)||ctx.match(/([0-9][0-9.,]*\s*[kmb]?\+?)\s*(?:orders?|sold|sales|units?)/i);const costMatch=ctx.match(/(?:EUR|€|\$)\s*([0-9]+(?:[.,][0-9]{1,2})?)/i)||ctx.match(/([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|€)/i);out.push({id,title:extra.title||keyword,cost:Number.isFinite(extra.cost)?extra.cost:(costMatch?catalogNum(costMatch[1]):NaN),sold:Number(extra.sold||0)||(soldMatch?catalogNum(soldMatch[1]):0),image_urls:extra.image_urls||[],source_url:'https://www.aliexpress.com/item/'+id+'.html',context:ctx,euWarehouse:extra.euWarehouse===true||euEvidence});};
 
   // Verified launch seed: PandaFind found this AliExpress item explicitly labelled EU Stock,
   // with 2,457 units sold and EUR 15.48 at discovery time. Keep it as a starter while
