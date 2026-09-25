@@ -547,6 +547,7 @@ async function homestroApifySourceSearch(keyword){
   if(sourceType==='cj-dropshipping')Object.assign(input,{warehouse:['DE','PL','ES']});
   if(sourceType==='bigbuy')Object.assign(input,{stockMin:50});
   const rows=await apifyRunActor(actor,input);
+  if(sourceType==='aliexpress-apify' && rows[0]) console.log('HOMESTRO_APIFY_SAMPLE_KEYS',JSON.stringify(Object.keys(rows[0]).slice(0,120)));
   for(const p of rows){
    const x=homestroNormalizeExternalItem(p,sourceType,keyword);
    if(x.title&&x.url)out.push(x);
