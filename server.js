@@ -644,7 +644,7 @@ function homestroExternalCandidatePass(x){
 
 async function catalogSearch(keyword){
   const out=[],ids=new Set();
-  const sourceMode=String(process.env.HOMESTRO_CATALOG_SOURCE||'cj').trim().toLowerCase();
+  const sourceMode=String(process.env.HOMESTRO_CATALOG_SOURCE||'apify').trim().toLowerCase();
   const externalItems=sourceMode==='cj'?await homestroCJSearch(keyword):await homestroApifySourceSearch(keyword);
   for(const x of externalItems){if(x?.id&&!ids.has(String(x.id))){ids.add(String(x.id));out.push(x);}}
   if(externalItems.length)console.log('CATALOG EXTERNAL SOURCE MERGED',keyword,'items='+externalItems.length);
