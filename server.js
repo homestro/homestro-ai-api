@@ -598,7 +598,7 @@ async function catalogSearch(keyword){
     for(const block of blocks)addSearchBlock(block,'search-engine');
 
     let pm;
-    const re=new RegExp('(?:productId|product_id|itemId|item_id)\\s*["\\']?\\s*[:=]\\s*["\\']?(\\d{8,})','gi');
+    const re=/(?:productId|product_id|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;
     while((pm=re.exec(normalized))&&ids.size<1000){
       const ctx=cleanText(normalized.slice(Math.max(0,pm.index-900),Math.min(normalized.length,pm.index+1500)));
       addId(pm[1],ctx,{source_type:'aliexpress-search'});
