@@ -575,9 +575,9 @@ async function catalogSearch(keyword){
 
     const blocks=[];
     const patterns=[
-      /<li[^>]*class=["'][^"']*\\bb_algo\\b[^"']*["'][^>]*>[\\s\\S]*?<\\/li>/gi,
-      /<div[^>]*class=["'][^"']*\\bMjjYud\\b[^"']*["'][^>]*>[\\s\\S]{0,18000}?<\\/div>/gi,
-      /<div[^>]*class=["'][^"']*\\bresult\\b[^"']*["'][^>]*>[\\s\\S]{0,12000}?<\\/div>/gi
+      new RegExp('<li[^>]*class=["\\']?[^"\\']*\\\\bb_algo\\\\b[^"\\']*["\\']?[^>]*>[\\\\s\\\\S]*?<\\\\/li>','gi'),
+      new RegExp('<div[^>]*class=["\\']?[^"\\']*\\\\bMjjYud\\\\b[^"\\']*["\\']?[^>]*>[\\\\s\\\\S]{0,18000}?<\\\\/div>','gi'),
+      new RegExp('<div[^>]*class=["\\']?[^"\\']*\\\\bresult\\\\b[^"\\']*["\\']?[^>]*>[\\\\s\\\\S]{0,12000}?<\\\\/div>','gi')
     ];
     for(const re of patterns){let bm;while((bm=re.exec(normalized))&&blocks.length<400)blocks.push(bm[0]);}
     for(const block of blocks)addSearchBlock(block,'search-engine');
