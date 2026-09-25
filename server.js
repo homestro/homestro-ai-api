@@ -155,7 +155,6 @@ async function extractAliExpressDetails(url){
     const reverse=new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,180}?(?:ships?\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)','i');
     out.euWarehouse=nearLabel.test(html)||reverse.test(html)||nearLabel.test(out.page_text)||reverse.test(out.page_text);
   }
-}
  }catch{}
  return out;
 }
