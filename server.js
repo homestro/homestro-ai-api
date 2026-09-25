@@ -528,12 +528,19 @@ async function homestroApifySourceSearch(keyword){
    searchQueries:[keyword],
    queries:[keyword],
    keyword,
+   searchKeyword:keyword,
+   searchQueries:[keyword],
    countryCode:'DE',
    locale:'de-DE',
    maxItems:Number(process.env.APIFY_SOURCE_MAX_ITEMS||25),
+   maxResults:Number(process.env.APIFY_SOURCE_MAX_ITEMS||25),
    shipToCountry:'DE',
    warehouses:['DE','PL','CZ','ES','FR','IT','NL','BE','AT'],
-   includeShipping:true
+   includeShipping:true,
+   scrapeFullProductDetails:true,
+   includeCustomerReviews:false,
+   maxReviewsPerProduct:0,
+   proxyConfiguration:{useApifyProxy:true,apifyProxyGroups:['RESIDENTIAL']}
   };
   if(sourceType==='amazon-fba')Object.assign(input,{domain:'amazon.de',marketplace:'DE',primeOnly:true,fulfillment:'FBA'});
   if(sourceType==='cj-dropshipping')Object.assign(input,{warehouse:['DE','PL','ES']});
@@ -597,6 +604,15 @@ async function catalogSearch(keyword){
   for(const x of apiItems){if(x?.id&&!ids.has(String(x.id))){ids.add(String(x.id));out.push(x);}}
   const feedItems=await homestroFeedSearch(keyword);
   for(const x of feedItems){if(x?.id&&!ids.has(String(x.id))){ids.add(String(x.id));out.push(x);}}
+  // HARD SAFETY: Apify/API/feed are now the only catalog discovery sources.
+  // Never fall back to direct AliExpress browser/search-engine scraping here.
+  if(out.length){
+    console.log('CATALOG PRIMARY SOURCES ONLY',keyword,'items='+out.length,'euConfirmed='+out.filter(x=>x.euWarehouse===true).length);
+    return out.slice(0,200);
+  }
+  console.log('CATALOG PRIMARY SOURCES EMPTY',keyword,'no-browser-fallback=true');
+  return [];
+
   if(out.filter(x=>x.euWarehouse===true).length>=Number(process.env.HOMESTRO_API_MIN_EU_CANDIDATES||8)){
     console.log('CATALOG API/FEED SUFFICIENT',keyword,'items='+out.length,'euConfirmed='+out.filter(x=>x.euWarehouse===true).length);
     return out.slice(0,200);
