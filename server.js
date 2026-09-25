@@ -148,13 +148,13 @@ async function extractAliExpressDetails(url){
   const euNames='Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|France|Frankreich|Spain|Spanien|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|EU|European Union|Europäische Union';
   const euCodes='DE|PL|CZ|ES|FR|IT|NL|BE|AT';
   const strong=[
-   new RegExp('(?:ships?\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom|sendFrom|originCountry|originCountryCode)[^]{0,500}?(?:'+euNames+'|'+euCodes+')','i'),
-   new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,220}?(?:warehouse|stock|ships?\\s*from|shipFrom|shippingFrom|deliverFrom|sendFrom|originCountry)','i'),
-   /"shipFrom"\\s*:\\s*"(?:Germany|Poland|Czechia|Spain|France|Italy|Netherlands|Belgium|Austria|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i,
-   /"warehouse(?:Location)?"\\s*:\\s*"(?:Germany|Poland|Czechia|Spain|France|Italy|Netherlands|Belgium|Austria|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i,
-   /"originCountry(?:Code)?"\\s*:\\s*"(?:Germany|Poland|Czechia|Spain|France|Italy|Netherlands|Belgium|Austria|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i
+   new RegExp('(?:ships?\\s*from|shipsFrom|shipFrom|shippingFrom|shippingCountry|warehouse(?:Location|Name)?|deliverFrom|deliveryFrom|sendFrom|originCountry|originCountryCode|fromCountry|fromCountryCode)[^]{0,900}?(?:'+euNames+'|'+euCodes+')','i'),
+   new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,450}?(?:warehouse|stock|ships?\\s*from|shipsFrom|shipFrom|shippingFrom|shippingCountry|warehouseName|deliverFrom|deliveryFrom|sendFrom|originCountry|originCountryCode|fromCountry)','i'),
+   /"shipFrom(?:Country|CountryName|Code)?"\\s*:\s*"?[A-Z]{2}"?/i,
+   /"shipsFrom(?:Country|CountryName|Code)?"\\s*:\s*"?[A-Z]{2}"?/i,
+   /"(?:shipFrom|shipsFrom|shippingFrom|shippingCountry|warehouseName|deliveryFrom|originCountry|originCountryCode|fromCountry|fromCountryCode)"\\s*:\s*"(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i,
+   /(?:Ships?\\s+From|Versand\\s+aus|Versandort|Warehouse)\\s*[:：-]?\\s*(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)/i
   ];
-  out.euWarehouse=strong.some(re=>re.test(normalized)||re.test(out.page_text));
  }catch{}
  return out;
 }
