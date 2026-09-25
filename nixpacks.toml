@@ -1,2 +1,26 @@
 [phases.setup]
-nixPkgs = ["chromium"]
+nixPkgs = [
+  "chromium",
+  "glib",
+  "nss",
+  "nspr",
+  "atk",
+  "at-spi2-atk",
+  "cups",
+  "dbus",
+  "expat",
+  "fontconfig",
+  "freetype",
+  "gdk-pixbuf",
+  "gtk3",
+  "pango",
+  "xorg.libX11",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libxcb",
+  "xorg.libXi",
+  "xorg.libXrender"
+]
