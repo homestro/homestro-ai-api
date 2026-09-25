@@ -497,8 +497,11 @@ async function catalogRun(){
     if(runSeen.has(x.id))continue;
     runSeen.add(x.id);
     catalogState.seen.add(x.id);
-    const rejectReason=catalogPassReason(x);
-    if(rejectReason){rejected++;if(rejected<=30)console.log('CATALOG REJECT',k,'reason='+rejectReason,'title='+String(x.title||'').slice(0,140),'cost='+String(x.cost),'sold='+String(x.sold));continue;}
+    // Source-search titles are often only the keyword. Do not apply title/category gates
+    // until the real AliExpress detail page has supplied the product title.
+    const preCost=Number(x.cost), preSold=Number(x.sold||0);
+    if(!Number.isFinite(preCost)||preCost<=0){rejected++;continue;}
+    if(preSold<2000){rejected++;continue;}
     const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(39.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
     const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
     const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
