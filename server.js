@@ -107,21 +107,44 @@ async function aliExpressBrowserRead(url,{waitMs=3500}={}){
   try{
    const candidates=[process.env.CHROMIUM_PATH,'/usr/bin/chromium','/usr/bin/chromium-browser','/root/.nix-profile/bin/chromium','/nix/var/nix/profiles/default/bin/chromium'].filter(Boolean);
    executablePath=candidates.find(p=>{try{return require('fs').existsSync(p);}catch{return false;}})||'';
-   if(!executablePath){
-    executablePath=execFileSync('sh',['-lc','command -v chromium || command -v chromium-browser || true'],{encoding:'utf8'}).trim();
-   }
+   if(!executablePath)executablePath=execFileSync('sh',['-lc','command -v chromium || command -v chromium-browser || true'],{encoding:'utf8'}).trim();
   }catch{}
   if(executablePath)console.log('ALIEXPRESS_CHROMIUM_PATH',executablePath);
   const launchOptions={headless:true,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']};
   if(executablePath)launchOptions.executablePath=executablePath;
   const browser=await chromium.launch(launchOptions);
   try{
-   const page=await browser.newPage({locale:'de-DE',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',viewport:{width:1440,height:1000}});
-   await page.goto(String(url),{waitUntil:'domcontentloaded',timeout:30000});
-   await page.waitForTimeout(waitMs);
-   return {html:await page.content(),text:await page.locator('body').innerText().catch(()=>''),url:page.url()};
+   const page=await browser.newPage({
+    locale:'de-DE',
+    userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    viewport:{width:1440,height:1000},
+    extraHTTPHeaders:{'Accept-Language':'de-DE,de;q=0.9,en;q=0.8'}
+   });
+   const response=await page.goto(String(url),{waitUntil:'domcontentloaded',timeout:30000});
+   const status=Number(response?.status()||0);
+   const finalUrl=page.url();
+   const redirectBlocked=/(passport\.aliexpress\.com|error\.aliexpress\.com|feedback|captcha|verify)/i.test(finalUrl);
+   if(redirectBlocked){
+    console.log('ALIEXPRESS_BROWSER_SOFT_BLOCK','redirect='+finalUrl);
+    return {html:'',text:'',url:finalUrl,status,blocked:true,reason:'redirect'};
+   }
+   const selectors=['h1','[data-pl="product-title"]','[class*="product-title"]','[class*="ProductTitle"]','meta[property="og:title"]','[class*="price"]','[class*="shipping"]','[class*="Ship"]'];
+   await Promise.race([
+    Promise.all(selectors.map(sel=>page.waitForSelector(sel,{state:'attached',timeout:9000}).catch(()=>null))),
+    page.waitForLoadState('networkidle',{timeout:12000}).catch(()=>null)
+   ]).catch(()=>null);
+   const html=await page.content();
+   const text=await page.locator('body').innerText().catch(()=> '');
+   const low=(String(text)+' '+String(html).slice(0,12000)).toLowerCase();
+   const soft=/(\bcaptcha\b|verify you are human|robot check|click to feedback|something went wrong|page not found|\b404\b|access denied|security verification)/i.test(low);
+   const hasProductSignal=/(buy now|add to cart|ship to|ships from|\bprice\b|\beur\b|\bus\$\b|\bsku\b|product details|\bquantity\b)/i.test(String(text));
+   if(soft || !hasProductSignal){
+    console.log('ALIEXPRESS_BROWSER_SOFT_BLOCK','status='+status,'url='+finalUrl,'signal='+hasProductSignal);
+    return {html,text:String(text).slice(0,20000),url:finalUrl,status,blocked:true,reason:soft?'content-marker':'no-product-signal'};
+   }
+   return {html,text:String(text).slice(0,20000),url:finalUrl,status,blocked:false,reason:'product-signal'};
   }finally{await browser.close();}
- }catch(e){console.log('ALIEXPRESS_BROWSER_ERROR',String(e?.message||e));return {html:'',text:'',url:String(url||'')};}
+ }catch(e){console.log('ALIEXPRESS_BROWSER_ERROR',String(e?.message||e));return {html:'',text:'',url:String(url||''),status:0,blocked:true,reason:'browser-error'};}
 }
 
 async function extractAliExpressDetails(url){
@@ -141,13 +164,13 @@ async function extractAliExpressDetails(url){
   }
   // AliExpress may return an unusable HTML shell to a normal HTTP request.
   // When that happens, retry the same product through rendered Chromium.
-  const unusable=(h)=>/404|not found|feedback|something went wrong/i.test(String(h||''));
+  const unusable=(h)=>/404|not found|feedback|something went wrong|captcha|verify you are human|robot check|security verification|access denied/i.test(String(h||''));
   if(process.env.ALIEXPRESS_BROWSER_ENABLED!=='false' && (!html || unusable(html) || html.length<12000)){
    const browserUrls=[original];
    if(id)browserUrls.push('https://www.aliexpress.com/item/'+id+'.html?gatewayAdapt=glo2deu','https://www.aliexpress.com/item/'+id+'.html?spm=a2g0o.productlist.0.0');
    for(const bu of [...new Set(browserUrls)]){
     const b=await aliExpressBrowserRead(bu,{waitMs:6500});
-    if(b.html && !unusable(b.html)){
+    if(!b.blocked && b.html && !unusable(b.html)){
       html=b.html;
       out.page_text=String(b.text||'').slice(0,20000);
       break;
