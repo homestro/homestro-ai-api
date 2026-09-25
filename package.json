@@ -5,7 +5,8 @@
   "description": "Homestro AI Control API - LIVE runtime refresh 2026-09-16",
   "main": "server.js",
   "scripts": {
-    "start": "node ./railway-bootstrap.js"
+    "start": "node ./railway-bootstrap.js",
+    "postinstall": "npx playwright install chromium"
   },
   "engines": {
     "node": ">=20"
