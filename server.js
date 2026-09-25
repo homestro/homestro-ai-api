@@ -603,6 +603,7 @@ async function draftAutopilotRun(){
 
 async function catalogRun(){
  if(catalogState.running)return;
+ console.log('CATALOG RUN VERSION','eu-evidence-v2','batch='+String(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
  catalogState.running=true;
  let rejected=0,failed=0; const rejectionReasons=new Map();
  const reject=(reason)=>{rejected++;rejectionReasons.set(reason,Number(rejectionReasons.get(reason)||0)+1);};
