@@ -363,6 +363,51 @@ function catalogNum(v){
  return Number.isFinite(n)?n:NaN;
 }
 
+async function homestroCJSearch(keyword){
+  const token=String(process.env.CJ_API_KEY||'').trim();
+  if(!token){ console.log('CJ_SOURCE_DISABLED','reason=no-CJ_API_KEY'); return []; }
+  const endpoint=String(process.env.CJ_API_ENDPOINT||'https://developers.cjdropshipping.com/api2.0/v1/product/query').trim();
+  const pageSize=Math.min(Math.max(Number(process.env.CJ_API_PAGE_SIZE||50),1),100);
+  const pageNum=Math.max(Number(process.env.CJ_API_PAGE||1),1);
+  const requestBody={keyWord:String(keyword||'').trim(),countryCode:String(process.env.CJ_COUNTRY_CODE||'DE').trim(),pageSize,pageNum,verifiedWarehouse:1};
+  try{
+    const r=await fetch(endpoint,{method:'POST',headers:{'CJ-Access-Token':token,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(requestBody)});
+    const raw=await r.text(); let d={}; try{d=JSON.parse(raw);}catch{throw new Error('CJ API returned non-JSON HTTP '+r.status);}
+    if(!r.ok)throw new Error('CJ API HTTP '+r.status+' '+String(d.message||d.msg||''));
+    if(d?.code&&Number(d.code)!==200)throw new Error('CJ API code '+d.code+': '+String(d.message||d.msg||'unknown error'));
+    const root=d?.data||d?.result||d;
+    const list=root?.list||root?.records||root?.productList||root?.products||root?.content||[];
+    const arr=Array.isArray(list)?list:(list?[list]:[]);
+    const eu=new Set(['DE','GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
+    const euNorm=v=>{const x=String(v??'').trim().toUpperCase();return Boolean(x&&(eu.has(x)||[...eu].some(c=>x.includes(c))));};
+    const firstString=(o,keys)=>{for(const k of keys){const v=o?.[k];if(v!==undefined&&v!==null&&String(v).trim())return String(v).trim();}return '';};
+    const firstNumber=(o,keys)=>{for(const k of keys){const n=catalogNum(o?.[k]);if(Number.isFinite(n))return n;}return NaN;};
+    const out=[];
+    for(const p of arr){
+      const id=firstString(p,['id','productId','product_id','pid','sku']);
+      const url=firstString(p,['productUrl','product_url','url','productDetailUrl','product_detail_url','detailUrl']);
+      if(!id||!url)continue;
+      const title=firstString(p,['nameEn','name','productName','product_name','title'])||String(keyword||'').trim();
+      const cost=firstNumber(p,['sellPrice','sell_price','salePrice','sale_price','price','discountPrice']);
+      const sold=firstNumber(p,['sales','sold','orders','orderCount','ordersCount','saleNum','salesCount']);
+      const direct=firstString(p,['warehouseCountry','warehouse_country','shipFromCountry','ship_from_country','countryCode','country','warehouse']);
+      const warehouseValues=[direct,
+        ...(Array.isArray(p.warehouseList)?p.warehouseList:[]).flatMap(x=>[x?.countryCode,x?.country,x?.warehouseCountry,x?.warehouseName]),
+        ...(Array.isArray(p.warehouses)?p.warehouses:[]).flatMap(x=>[x?.countryCode,x?.country,x?.warehouseCountry,x?.warehouseName]),
+        ...(Array.isArray(p.variants)?p.variants:[]).flatMap(x=>[x?.warehouseCountry,x?.warehouse_country,x?.shipFromCountry,x?.ship_from_country,x?.countryCode,x?.country])
+      ].filter(Boolean);
+      const euWarehouse=warehouseValues.some(euNorm);
+      const warehouse=warehouseValues.find(euNorm)||direct;
+      out.push({id:String(id),title,cost,sold:Number.isFinite(sold)?sold:0,source_url:url,euWarehouse,warehouse:String(warehouse||''),source_type:'cj-api',
+        context:JSON.stringify({countryCode:requestBody.countryCode,warehouse:String(warehouse||''),verifiedWarehouse:1}),
+        evidence:euWarehouse?'CJ Dropshipping API: explicit EU warehouse evidence '+String(warehouse):'CJ Dropshipping API: no explicit EU warehouse evidence'});
+    }
+    console.log('CJ_SOURCE',keyword,'items='+out.length,'euConfirmed='+out.filter(x=>x.euWarehouse===true).length);
+    if(arr[0])console.log('CJ_SAMPLE_KEYS',JSON.stringify(Object.keys(arr[0]).slice(0,120)));
+    return out;
+  }catch(e){console.error('CJ_SOURCE_FAILED',keyword,String(e?.message||e));return [];}
+}
+
 async function homestroAffiliateApiSearch(keyword){
   const appKey=String(process.env.ALIEXPRESS_APP_KEY||'').trim();
   const appSecret=String(process.env.ALIEXPRESS_APP_SECRET||'').trim();
@@ -599,7 +644,8 @@ function homestroExternalCandidatePass(x){
 
 async function catalogSearch(keyword){
   const out=[],ids=new Set();
-  const externalItems=await homestroApifySourceSearch(keyword);
+  const sourceMode=String(process.env.HOMESTRO_CATALOG_SOURCE||'cj').trim().toLowerCase();
+  const externalItems=sourceMode==='cj'?await homestroCJSearch(keyword):await homestroApifySourceSearch(keyword);
   for(const x of externalItems){if(x?.id&&!ids.has(String(x.id))){ids.add(String(x.id));out.push(x);}}
   if(externalItems.length)console.log('CATALOG EXTERNAL SOURCE MERGED',keyword,'items='+externalItems.length);
   const apiItems=await homestroAffiliateApiSearch(keyword);
