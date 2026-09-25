@@ -351,28 +351,30 @@ async function catalogSearch(keyword){
   console.log('CATALOG SOURCE',keyword,'items='+out.length);
   return out;
 }
-function catalogPass(x){
+function catalogPassReason(x){
  const r=rules(),cost=Number(x.cost),title=String(x.title||'').toLowerCase();
- if(!String(x.source_url||'').trim()||!String(x.id||'').trim())return false;
+ if(!String(x.source_url||'').trim()||!String(x.id||'').trim())return 'missing-id-or-url';
  const isHeadphone=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(title);
  const bad=/(smartwatch|watch phone|charger|cable|usb|led strip|camera|drone|gaming|projector|power bank|electronic|elektronik|speaker|lautsprecher)/i.test(title);
- if(bad&&!isHeadphone)return false;
+ if(bad&&!isHeadphone)return 'blocked-electronics';
  const junk=/(hook|hooks|hanging hook|adhesive hook|haken|box|boxes|storage box|organizer|organiser|aufbewahrung|rack|shelf|shelves|regal|holder|halter|stand|case|cover|bag|pouch|tasche|etui|hülle|keychain|key ring|schlüsselanhänger|sticker|decal|ornament|decoration|decor|deko|wall art|phone case|cable holder|clip|clamp|bracket)/i.test(title);
- if(junk)return false;
+ if(junk)return 'junk-generic-accessory';
  const isKnife=/(kitchen knives?|chef knives?|cooking knives?|kitchen knife|messer küche|küchenmesser)/i.test(title);
  const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|knife|messer|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
- if(!practical)return false;
+ if(!practical)return 'not-practical';
  const maxCost=isHeadphone?27:Number(r.maxCost||10),minCost=isHeadphone?10:5;
- if(!Number.isFinite(cost)||cost<minCost||cost>maxCost)return false;
- if(Number(x.sold||0)<(isHeadphone?2000:2000))return false;
- if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|weapon|hunting knife|tactical knife|survival knife|pocket knife|butterfly knife|switchblade|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title)&&!isKnife)return false;
+ if(!Number.isFinite(cost)||cost<minCost||cost>maxCost)return 'cost-outside-range:'+String(cost);
+ if(Number(x.sold||0)<2000)return 'sold-under-2000:'+String(x.sold||0);
+ if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|weapon|hunting knife|tactical knife|survival knife|pocket knife|butterfly knife|switchblade|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title)&&!isKnife)return 'blocked-category';
  const problem=/(clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|knife|messer|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
- if(!problem)return false;
+ if(!problem)return 'no-problem-signal';
  const targetPrice=isHeadphone?Math.max(69.90,Math.ceil(cost*2.9*100)/100):Math.max(39.90,Math.ceil(cost*3.5*100)/100);
  const ebay=ebayProfitability({selling_price:targetPrice,landed_cost_eur:cost});
- if(Number(ebay.estimatedProfitEur||0)<12)return false;
- return targetPrice/cost>=Math.max(r.minRatio,isHeadphone?2.9:3.5);
+ if(Number(ebay.estimatedProfitEur||0)<12)return 'profit-under-12:'+String(Math.round(ebay.estimatedProfitEur||0));
+ if(targetPrice/cost<Math.max(r.minRatio,isHeadphone?2.9:3.5))return 'ratio-too-low';
+ return '';
 }
+function catalogPass(x){return !catalogPassReason(x);}
 
 function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
@@ -493,7 +495,8 @@ async function catalogRun(){
     if(runSeen.has(x.id))continue;
     runSeen.add(x.id);
     catalogState.seen.add(x.id);
-    if(!catalogPass(x)){rejected++;continue;}
+    const rejectReason=catalogPassReason(x);
+    if(rejectReason){rejected++;if(rejected<=30)console.log('CATALOG REJECT',k,'reason='+rejectReason,'title='+String(x.title||'').slice(0,140),'cost='+String(x.cost),'sold='+String(x.sold));continue;}
     const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(39.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
     const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
     const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
