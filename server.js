@@ -326,7 +326,20 @@ async function catalogSearch(keyword){
 
   // Search-engine fallbacks. These often survive AliExpress anti-bot pages and give real item IDs.
   if(out.length<8){
-    const queries=['site:aliexpress.com/item/ '+keyword,'site:aliexpress.com/item '+keyword+' orders','site:aliexpress.com '+keyword+' EU stock'];
+    const countries=['Germany','Poland','Czech Republic','Spain','France','Italy','Netherlands','Belgium','Austria'];
+    const queries=[
+      'site:aliexpress.com/item/ '+keyword+' "Ships From" ('+countries.join(' OR ')+')',
+      'site:aliexpress.com/item/ '+keyword+' "Ships From Poland"',
+      'site:aliexpress.com/item/ '+keyword+' "Ships From Germany"',
+      'site:aliexpress.com/item/ '+keyword+' "Ships From Czech Republic"',
+      'site:aliexpress.com/item/ '+keyword+' "Ships From France"',
+      'site:aliexpress.com/item/ '+keyword+' "Ships From Spain"',
+      'site:aliexpress.com/item/ '+keyword+' "Ships From Italy"',
+      'site:aliexpress.com/item/ '+keyword+' "Ships From Netherlands"',
+      'site:aliexpress.com/item/ '+keyword+' "EU warehouse"',
+      'site:aliexpress.com/item/ '+keyword+' "EU stock"',
+      'site:aliexpress.com/item '+keyword+' orders'
+    ];
     const sources=[];
     for(const query of queries){const q=encodeURIComponent(query);sources.push('https://www.bing.com/search?q='+q+'&count=50');sources.push('https://www.google.com/search?q='+q+'&num=50');sources.push('https://html.duckduckgo.com/html/?q='+q);}
     for(const u of sources){
