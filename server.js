@@ -51,7 +51,7 @@ app.get('/health',(_q,res)=>res.json({ok:true,service:'homestro-ai-api',timestam
 app.get('/api/status',apiKey,(_q,res)=>res.json({ok:true,service:'homestro-ai-api',shopifyConfigured:Boolean(cfg().domain),openaiConfigured:Boolean(process.env.OPENAI_API_KEY),imageValidation:'strict-vision'}));
 app.get('/api/shopify/connection',apiKey,async(_q,res)=>{try{const d=await shopifyGraphQL('{shop{name myshopifyDomain}}');res.json({ok:true,connected:true,shop:d.shop});}catch(e){res.status(e.status||502).json({ok:false,connected:false,error:e.message});}});
 app.get('/api/shopify/products',apiKey,async(req,res)=>{try{const first=Math.min(Math.max(Number(req.query.limit)||20,1),50),q=String(req.query.query||'').trim();const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title handle status vendor productType tags totalInventory priceRangeV2{minVariantPrice{amount currencyCode}maxVariantPrice{amount currencyCode}}variants(first:100){nodes{id title price sku inventoryQuantity selectedOptions{name value}image{id url altText}}}media(first:50){nodes{mediaContentType alt}}seo{title description}}pageInfo{hasNextPage endCursor}}}',{first,query:q||null});res.json({ok:true,...d.products});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
-function rules(){return{maxCost:Number(process.env.MAX_PRODUCT_COST||10),minSellingPrice:Number(process.env.MIN_SELLING_PRICE||34.9),minRatio:Number(process.env.MIN_PRICE_COST_RATIO||3)};}
+function rules(){return{maxCost:Number(process.env.MAX_PRODUCT_COST||15),minSellingPrice:Number(process.env.MIN_SELLING_PRICE||34.9),minRatio:Number(process.env.MIN_PRICE_COST_RATIO||3)};}
 function validateProduct(cost,sellingPrice,ratio){const r=rules();return{valid:Number.isFinite(cost)&&Number.isFinite(sellingPrice)&&Number.isFinite(ratio)&&cost<=r.maxCost&&sellingPrice>=r.minSellingPrice&&ratio>=r.minRatio,product:{cost,sellingPrice,ratio},rules:r};}
 app.post('/api/products/validate',apiKey,(req,res)=>{const cost=Number(req.body?.cost),sellingPrice=Number(req.body?.sellingPrice),ratio=Number(req.body?.ratio);if(![cost,sellingPrice,ratio].every(Number.isFinite))return res.status(400).json({ok:false,error:'cost, sellingPrice and ratio must be numbers.'});res.json({ok:true,...validateProduct(cost,sellingPrice,ratio)});});
 // HOMESTRO_EBAY_PROFIT_GATE
@@ -364,16 +364,16 @@ function catalogPassReason(x){
  const isKnife=/(kitchen knives?|chef knives?|cooking knives?|kitchen knife|messer küche|küchenmesser)/i.test(title);
  const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|knife|messer|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
  if(!practical)return 'not-practical';
- const maxCost=isHeadphone?27:Number(r.maxCost||10),minCost=isHeadphone?10:5;
+ const maxCost=isHeadphone?27:Number(r.maxCost||15),minCost=isHeadphone?10:3;
  if(!Number.isFinite(cost)||cost<minCost||cost>maxCost)return 'cost-outside-range:'+String(cost);
- if(Number(x.sold||0)<2000)return 'sold-under-2000:'+String(x.sold||0);
+ if(Number(x.sold||0)<1000)return 'sold-under-1000:'+String(x.sold||0);
  if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|weapon|hunting knife|tactical knife|survival knife|pocket knife|butterfly knife|switchblade|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title)&&!isKnife)return 'blocked-category';
  const problem=/(clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|knife|messer|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
  if(!problem)return 'no-problem-signal';
- const targetPrice=isHeadphone?Math.max(69.90,Math.ceil(cost*2.9*100)/100):Math.max(39.90,Math.ceil(cost*3.5*100)/100);
+ const targetPrice=isHeadphone?Math.max(69.90,Math.ceil(cost*2.9*100)/100):Math.max(34.90,Math.ceil(cost*3*100)/100);
  const ebay=ebayProfitability({selling_price:targetPrice,landed_cost_eur:cost});
  if(Number(ebay.estimatedProfitEur||0)<12)return 'profit-under-12:'+String(Math.round(ebay.estimatedProfitEur||0));
- if(targetPrice/cost<Math.max(r.minRatio,isHeadphone?2.9:3.5))return 'ratio-too-low';
+ if(targetPrice/cost<Math.max(r.minRatio,isHeadphone?2.9:3))return 'ratio-too-low';
  return '';
 }
 function catalogPass(x){return !catalogPassReason(x);}
@@ -505,14 +505,14 @@ async function catalogRun(){
     if(Number.isFinite(preCost)&&preCost<=0){rejected++;continue;}
     // Never reject on search-result sales: the snippet can contain stale or partial order data.
     // The authoritative sold count is taken from the real detail page below.
-    const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(39.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
+    const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(69.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(34.90,Math.ceil(Number(x.cost)*3*100)/100);
     const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
     const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
     try{
      const details=await extractAliExpressDetails(x.source_url);
      candidate.title=String(details.page_title||candidate.title).trim();
      candidate.euWarehouse=(details.euWarehouse===true)||(x.euWarehouse===true);
-     if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;const hp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);candidate.sellingPriceEur=hp?Math.max(69.90,Math.ceil(details.costEur*2.9*100)/100):Math.max(39.90,Math.ceil(details.costEur*3.5*100)/100);}
+     if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;const hp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);candidate.sellingPriceEur=hp?Math.max(69.90,Math.ceil(details.costEur*2.9*100)/100):Math.max(34.90,Math.ceil(details.costEur*3*100)/100);}
      if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
      if(candidate.euWarehouse!==true){
        if(x.euWarehouse===true)candidate.euWarehouse=true;
@@ -529,7 +529,7 @@ async function catalogRun(){
       rejected++; continue;
     }
     const finalHp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);
-    candidate.sellingPriceEur=finalHp?Math.max(69.90,Math.ceil(candidate.costEur*2.9*100)/100):Math.max(39.90,Math.ceil(candidate.costEur*3.5*100)/100);
+    candidate.sellingPriceEur=finalHp?Math.max(69.90,Math.ceil(candidate.costEur*2.9*100)/100):Math.max(34.90,Math.ceil(candidate.costEur*3*100)/100);
     candidate.ratio=Number((candidate.sellingPriceEur/candidate.costEur).toFixed(2));
     const finalEbay=ebayProfitability({selling_price:candidate.sellingPriceEur,landed_cost_eur:candidate.costEur});
     candidate.estimatedProfitBeforeShippingVat=Number(finalEbay.estimatedProfitEur||0);
