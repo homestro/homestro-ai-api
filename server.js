@@ -965,15 +965,24 @@ async function catalogRun(){
     if(candidates.length>=batch)break;
     if(runSeen.has(x.id))continue;
     runSeen.add(x.id); catalogState.seen.add(x.id);
+    if(String(x.source_role||'supplier')==='market_reference'){
+      console.log('CATALOG MARKET-REFERENCE',k,x.id,'source='+String(x.source_type||'unknown'),'title='+String(x.title||'').slice(0,120));
+      continue;
+    }
+    const externalReason=homestroExternalCandidatePass(x);
+    if(externalReason){reject(externalReason);continue;}
     if(Number.isFinite(Number(x.cost))&&Number(x.cost)<=0){reject('invalid-cost');continue;}
 
     // catalogSearch already fetched/enriched the AliExpress detail page. Reuse that evidence.
     // A second unconditional fetch caused valid EU-stock items to disappear when AliExpress
     // returned a transient/blocked response on the second request.
     const candidate={
-      id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),
-      costEur:Number(x.cost),sold:Number(x.sold||0),euWarehouse:x.euWarehouse===true,
-      sellingPriceEur:0,ratio:0,estimatedProfitBeforeShippingVat:0,
+      id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url||x.url||''),
+      costEur:Number(x.costEur??x.cost),sold:Number(x.sold||0),euWarehouse:x.euWarehouse===true,
+      source_type:String(x.source_type||'aliexpress'),source_role:String(x.source_role||'supplier'),
+      warehouse:String(x.warehouse||''),sellingPriceEur:0,ratio:0,estimatedProfitBeforeShippingVat:0,
+      marketChecked:false,marketLowestPriceEur:NaN,marketStatus:'NOT_CHECKED',marketOffers:[],
+      recommendedSellingPriceEur:0,
       note:'Preis-/EU-Filter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'
     };
 
@@ -1008,8 +1017,29 @@ async function catalogRun(){
 
     const hp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);
     candidate.sellingPriceEur=hp?Math.max(69.90,Math.ceil(candidate.costEur*2.9*100)/100):Math.max(34.90,Math.ceil(candidate.costEur*3*100)/100);
+    candidate.recommendedSellingPriceEur=candidate.sellingPriceEur;
+    if(process.env.HOMESTRO_MARKET_CHECK_ENABLED!=='false'){
+      const market=await homestroCompetitivePrice(candidate);
+      Object.assign(candidate,{
+        marketChecked:Boolean(market.marketChecked),
+        marketLowestPriceEur:Number.isFinite(market.marketLowestPriceEur)?market.marketLowestPriceEur:NaN,
+        marketStatus:String(market.marketStatus||'NOT_CHECKED'),
+        marketOffers:Array.isArray(market.marketOffers)?market.marketOffers:[],
+        recommendedSellingPriceEur:Number(market.recommendedSellingPriceEur||candidate.sellingPriceEur)
+      });
+      if(candidate.marketStatus==='UNCOMPETITIVE_PRICE'){
+        reject('UNCOMPETITIVE_PRICE');
+        console.log('CATALOG REJECT',k,x.id,'reason=UNCOMPETITIVE_PRICE','our='+candidate.sellingPriceEur,'market='+candidate.marketLowestPriceEur);
+        continue;
+      }
+      candidate.sellingPriceEur=candidate.recommendedSellingPriceEur||candidate.sellingPriceEur;
+    }
     candidate.ratio=Number((candidate.sellingPriceEur/candidate.costEur).toFixed(2));
     candidate.estimatedProfitBeforeShippingVat=Number(ebayProfitability({selling_price:candidate.sellingPriceEur,landed_cost_eur:candidate.costEur}).estimatedProfitEur||0);
+    if(candidate.estimatedProfitBeforeShippingVat<12){
+      reject('profit-under-12-after-market-price');
+      continue;
+    }
 
     const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
     const keyCount=Number(keywordCounts.get(k)||0);
@@ -1032,8 +1062,8 @@ async function catalogRun(){
 
 app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
 function csvCell(v){const s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
-function catalogFeedRows(){return catalogState.candidates.map(x=>({id:x.id,title:x.title,url:x.url,cost_eur:x.costEur,selling_price_eur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,eu_warehouse:x.euWarehouse?'TRUE':'FALSE',estimated_profit_eur:x.estimatedProfitBeforeShippingVat,source:'AliExpress',status:'CANDIDATE'}));}
-function sendCatalogCsv(res){const rows=catalogFeedRows(),headers=['id','title','url','cost_eur','selling_price_eur','sold','ratio','eu_warehouse','estimated_profit_eur','source','status'];res.set('Content-Type','text/csv; charset=utf-8');res.send('\uFEFF'+headers.join(',')+'\n'+rows.map(r=>headers.map(h=>csvCell(r[h])).join(',')).join('\n'));}
+function catalogFeedRows(){return catalogState.candidates.map(x=>({id:x.id,title:x.title,url:x.url,cost_eur:x.costEur,selling_price_eur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,eu_warehouse:x.euWarehouse?'TRUE':'FALSE',warehouse:x.warehouse||'',market_checked:x.marketChecked?'TRUE':'FALSE',market_lowest_price_eur:Number.isFinite(x.marketLowestPriceEur)?x.marketLowestPriceEur:'',market_status:x.marketStatus||'NOT_CHECKED',recommended_selling_price_eur:x.recommendedSellingPriceEur||x.sellingPriceEur,estimated_profit_eur:x.estimatedProfitBeforeShippingVat,source:x.source_type||'AliExpress',status:'CANDIDATE'}));}
+function sendCatalogCsv(res){const rows=catalogFeedRows(),headers=['id','title','url','cost_eur','selling_price_eur','sold','ratio','eu_warehouse','warehouse','market_checked','market_lowest_price_eur','market_status','recommended_selling_price_eur','estimated_profit_eur','source','status'];res.set('Content-Type','text/csv; charset=utf-8');res.send('\uFEFF'+headers.join(',')+'\n'+rows.map(r=>headers.map(h=>csvCell(r[h])).join(',')).join('\n'));}
 app.get('/feeds/products.csv',(_q,res)=>sendCatalogCsv(res));
 app.get('/feeds/google-sheet.csv',(_q,res)=>sendCatalogCsv(res));
 app.get('/feeds/youtube.json',(_q,res)=>res.json({ok:true,source:'Homestro candidate feed',generatedAt:new Date().toISOString(),items:catalogState.candidates.map(x=>({title:x.title,productUrl:x.url,hook:'Praktisches Produkt für den Alltag – jetzt bei Homestro entdecken.',description:'Entdecke '+x.title+' bei Homestro.de. Produktdaten und Verfügbarkeit vor dem Verkauf nochmals prüfen.',sellingPriceEur:x.sellingPriceEur}))}));
