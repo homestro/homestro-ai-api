@@ -972,3 +972,181 @@ async function processExistingDraftProduct(productId,token){
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
+ const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
+ const eligible=d.products.nodes.filter(isDsersImportedCandidate).filter(p=>!p.tags?.includes('homestro-ai-processed-existing')&&!p.tags?.includes('homestro-ai-failed-existing')).slice(0,Math.min(Math.max(Number(limit)||5,1),10));
+ const results=[];
+ for(const p of eligible){
+  try{results.push(await processExistingDraftProduct(p.id,token));}
+  catch(e){
+   try{
+    const current=await shopifyGraphQL('query($id:ID!){product(id:$id){tags}}',{id:p.id},token);
+    const tags=[...new Set([...(current.product?.tags||[]),'homestro-ai-failed-existing'])];
+    await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags}},token);
+   }catch{}
+   results.push({id:p.id,title:p.title,processed:false,error:e.message});
+  }
+ }
+ return results;
+}
+const draftAutopilotState={running:false,lastRun:null,lastError:null,processed:0,skipped:0};
+function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
+async function draftAutopilotRun(){
+ if(draftAutopilotState.running)return;
+ draftAutopilotState.running=true;
+ try{
+  const token=await getClientToken();
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft"){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{},token);
+  const nodes=d.products.nodes||[];
+  draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
+  const eligible=nodes.filter(isDsersImportedCandidate).filter(p=>!p.tags?.includes('homestro-ai-processed-existing')&&!p.tags?.includes('homestro-ai-failed-existing')).slice(0,5);
+  let done=0;
+  for(const p of eligible){
+   try{await processExistingDraftProduct(p.id,token);done++;}
+   catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);}
+  }
+  draftAutopilotState.processed+=done;
+  draftAutopilotState.lastRun=new Date().toISOString();
+  draftAutopilotState.lastError=null;
+  console.log('DRAFT AUTOPILOT COMPLETE','eligible='+eligible.length,'processed='+done,'skipped='+draftAutopilotState.skipped);
+ }catch(e){draftAutopilotState.lastRun=new Date().toISOString();draftAutopilotState.lastError=e.message;console.error('DRAFT AUTOPILOT FAILED',e.message);}
+ finally{draftAutopilotState.running=false;}
+}
+
+
+async function catalogRun(){
+ if(catalogState.running)return;
+ console.log('CATALOG RUN VERSION','eu-evidence-v2','batch='+String(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
+ catalogState.running=true;
+ let rejected=0,failed=0; const rejectionReasons=new Map(); const reject=(reason)=>{rejected++;rejectionReasons.set(reason,Number(rejectionReasons.get(reason)||0)+1);};
+ try{
+  const batch=Math.max(1,Number(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
+  const candidates=[],runSeen=new Set(),titleSeen=new Set(),keywordCounts=new Map();
+  for(const k of catalogKeywords){
+   if(candidates.length>=batch)break;
+   let items=[];
+   try{items=await catalogSearch(k);}catch(e){failed++;console.error('CATALOG SOURCE FAILED',k,e.message);continue;}
+   for(const x of items){
+    if(candidates.length>=batch)break;
+    if(runSeen.has(x.id))continue;
+    runSeen.add(x.id); catalogState.seen.add(x.id);
+    if(String(x.source_role||'supplier')==='market_reference'){
+      console.log('CATALOG MARKET-REFERENCE',k,x.id,'source='+String(x.source_type||'unknown'),'title='+String(x.title||'').slice(0,120));
+      continue;
+    }
+    const externalReason=homestroExternalCandidatePass(x);
+    if(externalReason){reject(externalReason);continue;}
+    if(Number.isFinite(Number(x.cost))&&Number(x.cost)<=0){reject('invalid-cost');continue;}
+
+    // catalogSearch already fetched/enriched the AliExpress detail page. Reuse that evidence.
+    // A second unconditional fetch caused valid EU-stock items to disappear when AliExpress
+    // returned a transient/blocked response on the second request.
+    const candidate={
+      id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url||x.url||''),
+      costEur:Number(x.costEur??x.cost),sold:Number(x.sold||0),euWarehouse:x.euWarehouse===true,
+      source_type:String(x.source_type||'aliexpress'),source_role:String(x.source_role||'supplier'),
+      warehouse:String(x.warehouse||''),sellingPriceEur:0,ratio:0,estimatedProfitBeforeShippingVat:0,
+      marketChecked:false,marketLowestPriceEur:NaN,marketStatus:'NOT_CHECKED',marketOffers:[],
+      recommendedSellingPriceEur:0,
+      note:'Preis-/EU-Filter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'
+    };
+
+    // Only retry detail enrichment when catalogSearch did not obtain a required field.
+    // Never replace positive EU evidence with a failed second fetch.
+    const missingDetail=!candidate.euWarehouse||!Number.isFinite(candidate.costEur)||candidate.costEur<=0||candidate.sold<1000||!candidate.title;
+    if(missingDetail){
+      try{
+        const details=await extractAliExpressDetails(x.source_url);
+        if(details.page_title)candidate.title=String(details.page_title).trim();
+        if(Number.isFinite(details.costEur)&&details.costEur>0)candidate.costEur=details.costEur;
+        if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
+        if(details.euWarehouse===true)candidate.euWarehouse=true;
+      }catch{}
+    }
+
+    if(candidate.euWarehouse!==true){
+      reject('eu-warehouse-not-confirmed');
+      console.log('CATALOG REJECT',k,x.id,'reason=eu-warehouse-not-confirmed','title='+String(candidate.title||'').slice(0,120));
+      continue;
+    }
+
+    const finalReason=catalogPassReason({
+      id:candidate.id,title:candidate.title,cost:candidate.costEur,sold:candidate.sold,
+      source_url:candidate.url,euWarehouse:candidate.euWarehouse
+    });
+    if(finalReason){
+      reject(finalReason);
+      console.log('CATALOG REJECT',k,x.id,'reason='+finalReason,'title='+String(candidate.title||'').slice(0,120),'cost='+candidate.costEur,'sold='+candidate.sold,'eu='+candidate.euWarehouse);
+      continue;
+    }
+
+    const hp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);
+    candidate.sellingPriceEur=hp?Math.max(69.90,Math.ceil(candidate.costEur*2.9*100)/100):Math.max(34.90,Math.ceil(candidate.costEur*3*100)/100);
+    candidate.recommendedSellingPriceEur=candidate.sellingPriceEur;
+    if(process.env.HOMESTRO_MARKET_CHECK_ENABLED!=='false'){
+      const market=await homestroCompetitivePrice(candidate);
+      Object.assign(candidate,{
+        marketChecked:Boolean(market.marketChecked),
+        marketLowestPriceEur:Number.isFinite(market.marketLowestPriceEur)?market.marketLowestPriceEur:NaN,
+        marketStatus:String(market.marketStatus||'NOT_CHECKED'),
+        marketOffers:Array.isArray(market.marketOffers)?market.marketOffers:[],
+        recommendedSellingPriceEur:Number(market.recommendedSellingPriceEur||candidate.sellingPriceEur)
+      });
+      if(candidate.marketStatus==='UNCOMPETITIVE_PRICE'){
+        reject('UNCOMPETITIVE_PRICE');
+        console.log('CATALOG REJECT',k,x.id,'reason=UNCOMPETITIVE_PRICE','our='+candidate.sellingPriceEur,'market='+candidate.marketLowestPriceEur);
+        continue;
+      }
+      candidate.sellingPriceEur=candidate.recommendedSellingPriceEur||candidate.sellingPriceEur;
+    }
+    candidate.ratio=Number((candidate.sellingPriceEur/candidate.costEur).toFixed(2));
+    candidate.estimatedProfitBeforeShippingVat=Number(ebayProfitability({selling_price:candidate.sellingPriceEur,landed_cost_eur:candidate.costEur}).estimatedProfitEur||0);
+    if(candidate.estimatedProfitBeforeShippingVat<12){
+      reject('profit-under-12-after-market-price');
+      continue;
+    }
+
+    const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
+    const keyCount=Number(keywordCounts.get(k)||0);
+    if(titleSeen.has(titleKey)){reject('duplicate-title');continue;}
+    if(keyCount>=5){reject('keyword-cap');continue;}
+    titleSeen.add(titleKey); keywordCounts.set(k,keyCount+1); candidates.push(candidate);
+   }
+  }
+  catalogState.candidates=candidates;
+  catalogState.rejected+=rejected;
+  catalogState.lastRun=new Date().toISOString();
+  catalogState.lastError=null;
+  console.log('CATALOG REJECTION SUMMARY',JSON.stringify(Object.fromEntries(rejectionReasons)));
+  console.log('CATALOG CANDIDATE RUN COMPLETE','candidates='+candidates.length,'rejected='+rejected,'failed='+failed);
+ }catch(e){
+  catalogState.lastRun=new Date().toISOString();catalogState.lastError=e.message;
+  console.error('CATALOG RUN FAILED',e.message);
+ }finally{catalogState.running=false;}
+}
+
+app.get('/api/catalog/sources',apiKey,(_q,res)=>res.json({ok:true,apifyConfigured:Boolean(process.env.APIFY_API_TOKEN),actors:{aliexpress:Boolean(process.env.APIFY_ALIEXPRESS_ACTOR_ID),cj:Boolean(process.env.APIFY_CJ_ACTOR_ID),bigbuy:Boolean(process.env.APIFY_BIGBUY_ACTOR_ID),amazon:Boolean(process.env.APIFY_AMAZON_ACTOR_ID),googleShopping:Boolean(process.env.APIFY_GOOGLE_SHOPPING_ACTOR_ID)},marketCheckEnabled:process.env.HOMESTRO_MARKET_CHECK_ENABLED!=='false',marketCountry:process.env.HOMESTRO_MARKET_COUNTRY||'DE'}));
+app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
+function csvCell(v){const s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
+function catalogFeedRows(){return catalogState.candidates.map(x=>({id:x.id,title:x.title,url:x.url,cost_eur:x.costEur,selling_price_eur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,eu_warehouse:x.euWarehouse?'TRUE':'FALSE',warehouse:x.warehouse||'',market_checked:x.marketChecked?'TRUE':'FALSE',market_lowest_price_eur:Number.isFinite(x.marketLowestPriceEur)?x.marketLowestPriceEur:'',market_status:x.marketStatus||'NOT_CHECKED',recommended_selling_price_eur:x.recommendedSellingPriceEur||x.sellingPriceEur,estimated_profit_eur:x.estimatedProfitBeforeShippingVat,source:x.source_type||'AliExpress',status:'CANDIDATE'}));}
+function sendCatalogCsv(res){const rows=catalogFeedRows(),headers=['id','title','url','cost_eur','selling_price_eur','sold','ratio','eu_warehouse','warehouse','market_checked','market_lowest_price_eur','market_status','recommended_selling_price_eur','estimated_profit_eur','source','status'];res.set('Content-Type','text/csv; charset=utf-8');res.send('\uFEFF'+headers.join(',')+'\n'+rows.map(r=>headers.map(h=>csvCell(r[h])).join(',')).join('\n'));}
+app.get('/feeds/products.csv',(_q,res)=>sendCatalogCsv(res));
+app.get('/feeds/google-sheet.csv',(_q,res)=>sendCatalogCsv(res));
+app.get('/feeds/youtube.json',(_q,res)=>res.json({ok:true,source:'Homestro candidate feed',generatedAt:new Date().toISOString(),items:catalogState.candidates.map(x=>({title:x.title,productUrl:x.url,hook:'Praktisches Produkt für den Alltag – jetzt bei Homestro entdecken.',description:'Entdecke '+x.title+' bei Homestro.de. Produktdaten und Verfügbarkeit vor dem Verkauf nochmals prüfen.',sellingPriceEur:x.sellingPriceEur}))}));
+app.get('/catalog/candidates-public',(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat}))}));
+
+app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
+app.get('/api/catalog/process-existing-test',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||5),5),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
+app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+app.post('/api/catalog/run',apiKey,async(_q,res)=>{if(catalogState.running)return res.json({ok:true,skipped:true});catalogRun();res.json({ok:true,started:true});});
+if(process.env.HOMESTRO_CATALOG_ENABLED!=='false'){setTimeout(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),10000);setInterval(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),catalogInterval());}
+
+app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'homestro-catalog-autopilot',enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',intervalMs:catalogInterval(),running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+
+
+app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skippedNonDsers:draftAutopilotState.skipped}));
+if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
+ setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
+}
+
+app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
