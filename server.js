@@ -509,9 +509,11 @@ async function catalogSearch(keyword){
     }
   }
 
-  // Only fetch detail pages for candidates that already have independent EU evidence.
-  // Do not let a blocked/generic detail page overwrite a real search-result title.
-  for(const x of out.filter(x=>x.euWarehouse===true).slice(0,80)){
+  // Verify a bounded sample of discovered products on their actual detail pages.
+  // Search-result snippets often hide the selected warehouse, so browser detail verification
+  // must also run for candidates without prior EU evidence. This keeps EU strict while
+  // preventing the search parser from discarding valid EU-stock products too early.
+  for(const x of out.slice(0,40)){
     try{
       const d=await extractAliExpressDetails(x.source_url);
       const dt=plausibleTitle(d.page_title);
