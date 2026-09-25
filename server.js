@@ -447,8 +447,7 @@ async function homestroFeedSearch(keyword){
       const id=String(p.id||p.product_id||p.productId||'').replace(/[^0-9]/g,'');
       const url=String(p.url||p.product_url||p.productUrl||p.product_detail_url||'').trim()||(id?'https://www.aliexpress.com/item/'+id+'.html':'');
       const ship=String(p.ship_from_country||p.shipFromCountry||p.warehouse_country||p.warehouseCountry||'').trim();
-      return {id,title:String(p.title||p.product_title||keyword),cost:Number(String(p.cost_eur||p.cost||p.sale_price||'').replace(',','.')),sold:catalogNum(p.sold||p.orders||p.sales||0),source_url:url,euWarehouse:Boolean(p.eu_warehouse)||[...eu].some(c=>ship.toUpperCase().includes(c)),source_type:'homestro-feed',context:JSON.stringify(p),evidence:'Configured sourcing feed'};
-    }).filter(x=>x.id&&x.source_url);
+      return {id,title:String(p.title||p.product_title||keyword),cost:Number(String(p.cost_eur||p.cost||p.sale_price||'').replace(',','.')),sold:catalogNum(p.sold||p.orders||p.sales||0),source_url:url,euWarehouse:Boolean(p.eu_warehouse)||[...eu].some(c=>ship.toUpperCase().includes(c)),source_type:'homestro-feed',context:JSON.stringify(p),evidence:'Configured sourcing feed'};    }).filter(x=>x.id&&x.source_url);
   }catch(e){console.error('HOMESTRO_SOURCE_FEED_FAILED',String(e?.message||e));return [];}
 }
 
@@ -575,9 +574,9 @@ async function catalogSearch(keyword){
 
     const blocks=[];
     const patterns=[
-      new RegExp('<li[^>]*class=["\\']?[^"\\']*\\\\bb_algo\\\\b[^"\\']*["\\']?[^>]*>[\\\\s\\\\S]*?<\\\\/li>','gi'),
-      new RegExp('<div[^>]*class=["\\']?[^"\\']*\\\\bMjjYud\\\\b[^"\\']*["\\']?[^>]*>[\\\\s\\\\S]{0,18000}?<\\\\/div>','gi'),
-      new RegExp('<div[^>]*class=["\\']?[^"\\']*\\\\bresult\\\\b[^"\\']*["\\']?[^>]*>[\\\\s\\\\S]{0,12000}?<\\\\/div>','gi')
+      /<li[^>]*class=["']?[^"']*\\bb_algo\\b[^"']*["']?[^>]*>[\\s\\S]*?<\\/li>/gi,
+      /<div[^>]*class=["']?[^"']*\\bMjjYud\\b[^"']*["']?[^>]*>[\\s\\S]{0,18000}?<\\/div>/gi,
+      /<div[^>]*class=["']?[^"']*\\bresult\\b[^"']*["']?[^>]*>[\\s\\S]{0,12000}?<\\/div>/gi
     ];
     for(const re of patterns){let bm;while((bm=re.exec(normalized))&&blocks.length<400)blocks.push(bm[0]);}
     for(const block of blocks)addSearchBlock(block,'search-engine');
@@ -897,8 +896,7 @@ app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'hom
 
 app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skippedNonDsers:draftAutopilotState.skipped}));
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
- setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000);
- setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
+ setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
