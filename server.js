@@ -480,7 +480,7 @@ async function draftAutopilotRun(){
 async function catalogRun(){
  if(catalogState.running)return;
  catalogState.running=true;
- let rejected=0,failed=0;
+ let rejected=0,failed=0; const rejectionReasons=new Map(); const reject=(reason)=>{rejected++; rejectionReasons.set(reason,Number(rejectionReasons.get(reason)||0)+1);};
  try{
   const batch=Math.max(1,Number(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
   const candidates=[];
@@ -502,31 +502,36 @@ async function catalogRun(){
     const preCost=Number(x.cost), preSold=Number(x.sold||0);
     // Search-result snippets are often incomplete. Unknown cost/sales must be enriched
     // from the real detail page before rejection; only explicit bad values are rejected here.
-    if(Number.isFinite(preCost)&&preCost<=0){rejected++;continue;}
+    if(Number.isFinite(preCost)&&preCost<=0){reject('invalid-cost');continue;}
     // Never reject on search-result sales: the snippet can contain stale or partial order data.
     // The authoritative sold count is taken from the real detail page below.
     const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(69.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(34.90,Math.ceil(Number(x.cost)*3*100)/100);
     const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
     const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
     try{
-     const details=await extractAliExpressDetails(x.source_url);
-     candidate.title=String(details.page_title||candidate.title).trim();
+     // catalogSearch already enriches these records. Reuse that evidence first and only
+     // fetch the detail page again when a required field is actually missing.
+     let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:Boolean(x.euWarehouse),costEur:Number(x.cost),sold:Number(x.sold||0)};
+     const needDetail=!details.euWarehouse||!Number.isFinite(details.costEur)||details.costEur<=0||details.sold<1000||!String(x.title||'').trim();
+     if(needDetail) details=await extractAliExpressDetails(x.source_url);
+     candidate.title=String(details.page_title||x.title||candidate.title).trim();
      candidate.euWarehouse=(details.euWarehouse===true)||(x.euWarehouse===true);
      if(Number.isFinite(details.costEur)&&details.costEur>0){candidate.costEur=details.costEur;const hp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);candidate.sellingPriceEur=hp?Math.max(69.90,Math.ceil(details.costEur*2.9*100)/100):Math.max(34.90,Math.ceil(details.costEur*3*100)/100);}
      if(Number.isFinite(details.sold)&&details.sold>0)candidate.sold=details.sold;
      if(candidate.euWarehouse!==true){
-       if(x.euWarehouse===true)candidate.euWarehouse=true;
-       else continue;
+       reject('eu-warehouse-not-confirmed');
+       console.log('CATALOG REJECT',k,x.id,'reason=eu-warehouse-not-confirmed','title='+String(candidate.title||'').slice(0,120));
+       continue;
      }
     }catch(e){
-     if(x.euWarehouse!==true){candidate.note+=' AliExpress Detaildaten konnten nicht vollständig geladen werden.';continue;}
-     candidate.euWarehouse=true;
+     if(x.euWarehouse===true){candidate.euWarehouse=true;}
+     else {reject('detail-fetch-no-eu'); console.log('CATALOG REJECT',k,x.id,'reason=detail-fetch-no-eu'); continue;}
     }
     // Re-apply the economic filter after detail enrichment so changed live data cannot bypass the rules.
     const finalReason=catalogPassReason({id:x.id,title:candidate.title,cost:candidate.costEur,sold:candidate.sold,source_url:candidate.url,euWarehouse:candidate.euWarehouse});
     if(finalReason){
       console.log('CATALOG REJECT',k,x.id,'reason='+finalReason,'title='+String(candidate.title||'').slice(0,120),'cost='+candidate.costEur,'sold='+candidate.sold,'eu='+candidate.euWarehouse);
-      rejected++; continue;
+      reject(finalReason); continue;
     }
     const finalHp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);
     candidate.sellingPriceEur=finalHp?Math.max(69.90,Math.ceil(candidate.costEur*2.9*100)/100):Math.max(34.90,Math.ceil(candidate.costEur*3*100)/100);
@@ -535,7 +540,7 @@ async function catalogRun(){
     candidate.estimatedProfitBeforeShippingVat=Number(finalEbay.estimatedProfitEur||0);
     const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
     const keyCount=Number(keywordCounts.get(k)||0);
-    if(titleSeen.has(titleKey)||keyCount>=5)continue;
+    if(titleSeen.has(titleKey)){reject('duplicate-title');continue;} if(keyCount>=5){reject('keyword-cap');continue;}
     titleSeen.add(titleKey);
     keywordCounts.set(k,keyCount+1);
     candidates.push(candidate);
@@ -545,7 +550,7 @@ async function catalogRun(){
   catalogState.rejected+=rejected;
   catalogState.lastRun=new Date().toISOString();
   catalogState.lastError=null;
-  console.log('CATALOG CANDIDATE RUN COMPLETE','candidates='+candidates.length,'rejected='+rejected,'failed='+failed);
+  console.log('CATALOG REJECTION SUMMARY',JSON.stringify(Object.fromEntries(rejectionReasons))); console.log('CATALOG CANDIDATE RUN COMPLETE','candidates='+candidates.length,'rejected='+rejected,'failed='+failed);
  }catch(e){catalogState.lastRun=new Date().toISOString();catalogState.lastError=e.message;console.error('CATALOG RUN FAILED',e.message);}
  finally{catalogState.running=false;}
 }
