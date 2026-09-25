@@ -574,7 +574,7 @@ async function homestroCompetitivePrice(candidate){
  const price=Number(candidate.sellingPriceEur||0);
  const floor=market.lowestPriceEur;
  const maxOver=Math.max(0,Number(process.env.HOMESTRO_MAX_MARKET_OVERPRICE||0.15));
- const adjusted=Math.min(price,Math.max(0,Math.round((floor*(1-maxOver))*100)/100));
+ const adjusted=Math.min(price,Math.round(floor*100)/100);
  return {...candidate,marketChecked:true,marketLowestPriceEur:floor,marketOffers:market.offers,marketSource:market.source,
    marketStatus:price<=floor?'AT_OR_BELOW_MARKET':(price>floor*(1+maxOver)?'UNCOMPETITIVE_PRICE':'WITHIN_MARKET_BAND'),
    recommendedSellingPriceEur:price<=floor?price:adjusted};
@@ -1060,6 +1060,7 @@ async function catalogRun(){
  }finally{catalogState.running=false;}
 }
 
+app.get('/api/catalog/sources',apiKey,(_q,res)=>res.json({ok:true,apifyConfigured:Boolean(process.env.APIFY_API_TOKEN),actors:{aliexpress:Boolean(process.env.APIFY_ALIEXPRESS_ACTOR_ID),cj:Boolean(process.env.APIFY_CJ_ACTOR_ID),bigbuy:Boolean(process.env.APIFY_BIGBUY_ACTOR_ID),amazon:Boolean(process.env.APIFY_AMAZON_ACTOR_ID),googleShopping:Boolean(process.env.APIFY_GOOGLE_SHOPPING_ACTOR_ID)},marketCheckEnabled:process.env.HOMESTRO_MARKET_CHECK_ENABLED!=='false',marketCountry:process.env.HOMESTRO_MARKET_COUNTRY||'DE'}));
 app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
 function csvCell(v){const s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
 function catalogFeedRows(){return catalogState.candidates.map(x=>({id:x.id,title:x.title,url:x.url,cost_eur:x.costEur,selling_price_eur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,eu_warehouse:x.euWarehouse?'TRUE':'FALSE',warehouse:x.warehouse||'',market_checked:x.marketChecked?'TRUE':'FALSE',market_lowest_price_eur:Number.isFinite(x.marketLowestPriceEur)?x.marketLowestPriceEur:'',market_status:x.marketStatus||'NOT_CHECKED',recommended_selling_price_eur:x.recommendedSellingPriceEur||x.sellingPriceEur,estimated_profit_eur:x.estimatedProfitBeforeShippingVat,source:x.source_type||'AliExpress',status:'CANDIDATE'}));}
