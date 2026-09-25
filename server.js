@@ -454,8 +454,20 @@ async function catalogSearch(keyword){
     if(out.length>=120)break;
   }
 
-  // The fallback threshold is confirmed EU candidates, NOT total IDs.
+  // Browser discovery: render AliExpress search results like a real browser when plain HTML
+  // does not expose reliable EU-stock evidence.
   const confirmedEU=()=>out.filter(x=>x.euWarehouse===true).length;
+  if(confirmedEU()<8 && process.env.ALIEXPRESS_BROWSER_ENABLED!=='false'){
+    for(const u of aliUrls.slice(0,3)){
+      try{
+        const b=await aliExpressBrowserRead(u,{waitMs:5000});
+        if(b.html)parseAliSearch(b.html);
+        if(confirmedEU()>=8)break;
+      }catch{}
+    }
+  }
+
+  // The fallback threshold is confirmed EU candidates, NOT total IDs.
   if(confirmedEU()<8){
     const countries=['Germany','Poland','Czech Republic','Spain','France','Italy','Netherlands','Belgium','Austria'];
     const queries=[
