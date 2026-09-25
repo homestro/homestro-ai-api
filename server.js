@@ -139,10 +139,21 @@ async function extractAliExpressDetails(url){
     if(r.ok){const h=await r.text(); if(h.length>5000){html=h;break;}}
    }catch{}
   }
-  if(!html && process.env.ALIEXPRESS_BROWSER_ENABLED!=='false'){
-   const b=await aliExpressBrowserRead(original);
-   if(b.html)html=b.html;
-   if(b.text)out.page_text=String(b.text).slice(0,20000);
+  // AliExpress may return an unusable HTML shell to a normal HTTP request.
+  // When that happens, retry the same product through rendered Chromium.
+  const unusable=(h)=>/404|not found|feedback|something went wrong/i.test(String(h||''));
+  if(process.env.ALIEXPRESS_BROWSER_ENABLED!=='false' && (!html || unusable(html) || html.length<12000)){
+   const browserUrls=[original];
+   if(id)browserUrls.push('https://www.aliexpress.com/item/'+id+'.html?gatewayAdapt=glo2deu','https://www.aliexpress.com/item/'+id+'.html?spm=a2g0o.productlist.0.0');
+   for(const bu of [...new Set(browserUrls)]){
+    const b=await aliExpressBrowserRead(bu,{waitMs:6500});
+    if(b.html && !unusable(b.html)){
+      html=b.html;
+      out.page_text=String(b.text||'').slice(0,20000);
+      break;
+    }
+    if(b.text)out.page_text=String(b.text).slice(0,20000);
+   }
   }
   if(!html)return out;
   const normalized=html.replace(/\\u002F/g,'/').replace(/\\\//g,'/').replace(/\\u0026/g,'&');
