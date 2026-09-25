@@ -549,37 +549,49 @@ async function catalogSearch(keyword){
     for(const id of idsFound)addId(id,text,{title,euWarehouse:true,source_type});
   };
 
-  const parseAliSearch=(html)=>{
+  const parseAliSearch=(html)=>{ 
     const normalized=String(html||'')
       .replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/')
-      .replace(/\\u002F/g,'/').replace(/\\\//g,'/');
+      .replace(/\\u002F/g,'/').replace(/\\\\\//g,'/');
 
-    // Preserve one search-result container at a time so EU evidence cannot leak
-    // from a different product/result into this candidate.
+    // Search engines often split URL, title and snippet into separate nested
+    // elements. Parse each AliExpress URL independently and keep EU evidence
+    // local to that result only.
+    const seenLocal=new Set();
+    const urlRe=/(?:https?:\\/\\/(?:www\\.)?aliexpress\\.com)?(?:\\/item\\/|\\/i\\/)(\\d{8,})(?:\\.html)?/gi;
+    let m;
+    while((m=urlRe.exec(normalized))&&ids.size<1000){
+      const id=m[1];
+      const key=id+'@'+Math.floor(m.index/2500);
+      if(seenLocal.has(key))continue;
+      seenLocal.add(key);
+      const local=cleanText(normalized.slice(Math.max(0,m.index-1800),Math.min(normalized.length,m.index+2200)));
+      const eu=/(EU\\s*stock|EU\\s*warehouse|ships?\\s*from\\s*(?:Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)|\\b(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)\\s*(?:warehouse|stock))/i.test(local);
+      const titleMatch=local.match(/(?:product|title|name)[^\\n:]{0,30}[:：]\\s*([^\\n]{10,240})/i);
+      const priceMatch=local.match(/(?:EUR|€)\\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+(?:[.,][0-9]{1,2})?)\\s*(?:EUR|€)/i);
+      const soldMatch=local.match(/(?:orders?|sold|sales|units?|verkauft)\\s*[:：]?\\s*([0-9][0-9.,]*\\s*[kmb]?\\+?)|([0-9][0-9.,]*\\s*[kmb]?\\+?)\\s*(?:orders?|sold|sales|units?)/i);
+      const title=titleMatch?plausibleTitle(titleMatch[1]):'';
+      const cost=priceMatch?catalogNum(priceMatch[1]||priceMatch[2]):NaN;
+      const sold=soldMatch?catalogNum(soldMatch[1]||soldMatch[2]):0;
+      if(eu)addId(id,local,{title,cost,sold,euWarehouse:true,source_type:'search-engine-local'});
+      else addId(id,local,{title,cost,sold,euWarehouse:false,source_type:'search-engine-local'});
+    }
+
+    // Retain structured result containers as a second parser.
     const blocks=[];
     const patterns=[
-      /<li[^>]*class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>[\s\S]*?<\/li>/gi,
-      /<div[^>]*class=["'][^"']*\bMjjYud\b[^"']*["'][^>]*>[\s\S]{0,18000}?<\/div>/gi,
-      /<div[^>]*class=["'][^"']*\bresult\b[^"']*["'][^>]*>[\s\S]{0,12000}?<\/div>/gi
+      /<li[^>]*class=["'][^"']*\\bb_algo\\b[^"']*["'][^>]*>[\\s\\S]*?<\\/li>/gi,
+      /<div[^>]*class=["'][^"']*\\bMjjYud\\b[^"']*["'][^>]*>[\\s\\S]{0,18000}?<\\/div>/gi,
+      /<div[^>]*class=["'][^"']*\\bresult\\b[^"']*["'][^>]*>[\\s\\S]{0,12000}?<\\/div>/gi
     ];
-    for(const re of patterns){
-      let m;
-      while((m=re.exec(normalized))&&blocks.length<400)blocks.push(m[0]);
-    }
+    for(const re of patterns){let bm;while((bm=re.exec(normalized))&&blocks.length<400)blocks.push(bm[0]);}
     for(const block of blocks)addSearchBlock(block,'search-engine');
 
-    // Never use a wide +/-5000 character window for EU evidence. A small local
-    // context is only used for non-EU discovery from direct AliExpress pages.
-    let m;
-    const re=/(?:productId|product_id|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;
-    while((m=re.exec(normalized))&&ids.size<1000){
-      const ctx=cleanText(normalized.slice(Math.max(0,m.index-1000),Math.min(normalized.length,m.index+1600)));
-      addId(m[1],ctx,{source_type:'aliexpress-search'});
-    }
-    const ur=/(?:https?:\/\/(?:www\.)?aliexpress\.com)?(?:\/item\/|\/i\/)(\d{8,})(?:\.html)?/gi;
-    while((m=ur.exec(normalized))&&ids.size<1000){
-      const ctx=cleanText(normalized.slice(Math.max(0,m.index-1000),Math.min(normalized.length,m.index+1600)));
-      addId(m[1],ctx,{source_type:'aliexpress-search'});
+    let pm;
+    const re=/(?:productId|product_id|itemId|item_id)\\s*["']?\\s*[:=]\\s*["']?(\\d{8,})/gi;
+    while((pm=re.exec(normalized))&&ids.size<1000){
+      const ctx=cleanText(normalized.slice(Math.max(0,pm.index-900),Math.min(normalized.length,pm.index+1500)));
+      addId(pm[1],ctx,{source_type:'aliexpress-search'});
     }
   };
 
