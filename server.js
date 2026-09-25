@@ -99,6 +99,19 @@ async function aiProduct(input){
 }
 app.post('/api/ai/product',apiKey,async(req,res)=>{try{res.json({ok:true,...await aiProduct(req.body?.product||req.body)});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 function absoluteUrl(u,base){try{return new URL(u,base).href;}catch{return null;}}
+async function aliExpressBrowserRead(url,{waitMs=3500}={}){
+ try{
+  const {chromium}=require('playwright');
+  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']});
+  try{
+   const page=await browser.newPage({locale:'de-DE',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',viewport:{width:1440,height:1000}});
+   await page.goto(String(url),{waitUntil:'domcontentloaded',timeout:30000});
+   await page.waitForTimeout(waitMs);
+   return {html:await page.content(),text:await page.locator('body').innerText().catch(()=>''),url:page.url()};
+  }finally{await browser.close();}
+ }catch(e){console.log('ALIEXPRESS_BROWSER_ERROR',String(e?.message||e));return {html:'',text:'',url:String(url||'')};}
+}
+
 async function extractAliExpressDetails(url){
  const out={image_urls:[],variants:[],options:[],page_title:'',page_text:'',euWarehouse:false,costEur:NaN,sold:0};
  try{
@@ -113,6 +126,11 @@ async function extractAliExpressDetails(url){
     const r=await fetch(u,{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept-Language':'de-DE,de;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8'},redirect:'follow'});
     if(r.ok){const h=await r.text(); if(h.length>5000){html=h;break;}}
    }catch{}
+  }
+  if(!html && process.env.ALIEXPRESS_BROWSER_ENABLED!=='false'){
+   const b=await aliExpressBrowserRead(original);
+   if(b.html)html=b.html;
+   if(b.text)out.page_text=String(b.text).slice(0,20000);
   }
   if(!html)return out;
   const normalized=html.replace(/\\u002F/g,'/').replace(/\\\//g,'/').replace(/\\u0026/g,'&');
@@ -155,6 +173,16 @@ async function extractAliExpressDetails(url){
    /"(?:shipFrom|shipsFrom|shippingFrom|shippingCountry|warehouseName|deliveryFrom|originCountry|originCountryCode|fromCountry|fromCountryCode)"\\s*:\s*"(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i,
    /(?:Ships?\\s+From|Versand\\s+aus|Versandort|Warehouse)\\s*[:：-]?\\s*(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)/i
   ];
+  out.euWarehouse=strong.some(re=>re.test(normalized)) || strong.some(re=>re.test(out.page_text));
+  if(!out.euWarehouse && process.env.ALIEXPRESS_BROWSER_ENABLED!=='false'){
+   const b=await aliExpressBrowserRead(original,{waitMs:4500});
+   const bt=String(b.text||'');
+   out.page_text=(out.page_text+' '+bt).slice(0,20000);
+   out.euWarehouse=/(?:Ships?\\s+From|Versand\\s+aus|Versandort|Warehouse)\\s*[:：-]?\\s*(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)/i.test(bt)
+    ||/(?:EU\\s*stock|EU\\s*warehouse)/i.test(bt);
+   const btTitle=bt.match(/[^\\n]{8,220}/)?.[0];
+   if(btTitle&&!out.page_title)out.page_title=btTitle.trim();
+  }
  }catch{}
  return out;
 }
