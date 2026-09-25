@@ -104,7 +104,10 @@ async function aliExpressBrowserRead(url,{waitMs=3500}={}){
   const {chromium}=require('playwright');
   const {execFileSync}=require('child_process');
   let executablePath=process.env.CHROMIUM_PATH||'';
-  if(!executablePath){try{executablePath=execFileSync('sh',['-lc','command -v chromium || command -v chromium-browser || true'],{encoding:'utf8'}).trim();}catch{}}
+  if(!executablePath){
+   try{executablePath=execFileSync('sh',['-lc','for p in /root/.nix-profile/bin/chromium /nix/var/nix/profiles/default/bin/chromium /usr/bin/chromium /usr/bin/chromium-browser; do if [ -x "$p" ]; then echo "$p"; break; fi; done'],{encoding:'utf8'}).trim();}catch{}
+  }
+  if(executablePath)console.log('ALIEXPRESS_CHROMIUM_PATH',executablePath);
   const launchOptions={headless:true,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']};
   if(executablePath)launchOptions.executablePath=executablePath;
   const browser=await chromium.launch(launchOptions);
