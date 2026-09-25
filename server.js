@@ -503,7 +503,8 @@ async function catalogRun(){
     // Search-result snippets are often incomplete. Unknown cost/sales must be enriched
     // from the real detail page before rejection; only explicit bad values are rejected here.
     if(Number.isFinite(preCost)&&preCost<=0){rejected++;continue;}
-    if(Number.isFinite(preSold)&&preSold>0&&preSold<2000){rejected++;continue;}
+    // Never reject on search-result sales: the snippet can contain stale or partial order data.
+    // The authoritative sold count is taken from the real detail page below.
     const isHeadphoneCandidate=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(String(x.title||'')); const selling=isHeadphoneCandidate?Math.max(39.90,Math.ceil(Number(x.cost)*2.9*100)/100):Math.max(39.90,Math.ceil(Number(x.cost)*3.5*100)/100);
     const ebay=ebayProfitability({selling_price:selling,landed_cost_eur:Number(x.cost)});
     const candidate={id:String(x.id),keyword:k,title:String(x.title||'').trim(),url:String(x.source_url),costEur:Number(x.cost),sellingPriceEur:selling,sold:Number(x.sold||0),ratio:Number((selling/Number(x.cost)).toFixed(2)),euWarehouse:null,estimatedProfitBeforeShippingVat:Number(ebay.estimatedProfitEur||0),note:'Preisfilter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'};
@@ -522,7 +523,16 @@ async function catalogRun(){
      candidate.euWarehouse=true;
     }
     // Re-apply the economic filter after detail enrichment so changed live data cannot bypass the rules.
-    if(!catalogPass({id:x.id,title:candidate.title,cost:candidate.costEur,sold:candidate.sold,source_url:candidate.url,euWarehouse:candidate.euWarehouse}))continue;
+    const finalReason=catalogPassReason({id:x.id,title:candidate.title,cost:candidate.costEur,sold:candidate.sold,source_url:candidate.url,euWarehouse:candidate.euWarehouse});
+    if(finalReason){
+      console.log('CATALOG REJECT',k,x.id,'reason='+finalReason,'title='+String(candidate.title||'').slice(0,120),'cost='+candidate.costEur,'sold='+candidate.sold,'eu='+candidate.euWarehouse);
+      rejected++; continue;
+    }
+    const finalHp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);
+    candidate.sellingPriceEur=finalHp?Math.max(69.90,Math.ceil(candidate.costEur*2.9*100)/100):Math.max(39.90,Math.ceil(candidate.costEur*3.5*100)/100);
+    candidate.ratio=Number((candidate.sellingPriceEur/candidate.costEur).toFixed(2));
+    const finalEbay=ebayProfitability({selling_price:candidate.sellingPriceEur,landed_cost_eur:candidate.costEur});
+    candidate.estimatedProfitBeforeShippingVat=Number(finalEbay.estimatedProfitEur||0);
     const titleKey=String(candidate.title||'').toLowerCase().replace(/[^a-z0-9äöüß]+/g,' ').trim();
     const keyCount=Number(keywordCounts.get(k)||0);
     if(titleSeen.has(titleKey)||keyCount>=5)continue;
