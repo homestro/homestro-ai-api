@@ -450,8 +450,149 @@ async function homestroFeedSearch(keyword){
 }
 
 
+
+/* HOMESTRO_MULTI_SOURCE_V1
+ * Source adapters are deliberately credential/config driven.
+ * Apify is used as a sourcing/market-intelligence execution layer; no CAPTCHA,
+ * stealth, proxy evasion, or anti-bot bypass is performed.
+ */
+const HOMESTRO_EU_COUNTRIES=new Set(['DE','GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
+function homestroEuWarehouseValue(v){
+ const s=String(v??'').trim().toUpperCase();
+ if(!s)return false;
+ return [...HOMESTRO_EU_COUNTRIES].some(c=>s===c||s.includes(c));
+}
+function homestroSourcePrice(v){
+ const n=Number(String(v??'').replace(',','.').replace(/[^\d.-]/g,''));
+ return Number.isFinite(n)?n:NaN;
+}
+function homestroSourceSold(v){const n=catalogNum(v);return Number.isFinite(n)?n:0;}
+
+async function apifyRunActor(actorId,input,{timeoutMs=90000}={}){
+ const token=String(process.env.APIFY_API_TOKEN||'').trim();
+ if(!token||!actorId)return [];
+ const id=String(actorId).trim();
+ try{
+  const start=await fetch('https://api.apify.com/v2/acts/'+encodeURIComponent(id)+'/runs?token='+encodeURIComponent(token),{
+   method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(input||{})
+  });
+  const sd=await start.json().catch(()=>({}));
+  if(!start.ok||!sd?.data?.id)throw new Error('Apify actor start HTTP '+start.status);
+  const runId=sd.data.id,datasetId=sd.data.defaultDatasetId;
+  const deadline=Date.now()+timeoutMs;
+  let status='';
+  while(Date.now()<deadline){
+   const rr=await fetch('https://api.apify.com/v2/actor-runs/'+encodeURIComponent(runId)+'?token='+encodeURIComponent(token),{headers:{'Accept':'application/json'}});
+   const rd=await rr.json().catch(()=>({}));
+   status=String(rd?.data?.status||'');
+   if(['SUCCEEDED','FAILED','ABORTED','TIMED-OUT'].includes(status))break;
+   await new Promise(r=>setTimeout(r,2500));
+  }
+  if(status!=='SUCCEEDED')throw new Error('Apify actor run '+status);
+  if(!datasetId)return [];
+  const dr=await fetch('https://api.apify.com/v2/datasets/'+encodeURIComponent(datasetId)+'/items?token='+encodeURIComponent(token)+'&format=json',{headers:{'Accept':'application/json'}});
+  if(!dr.ok)throw new Error('Apify dataset HTTP '+dr.status);
+  const data=await dr.json().catch(()=>[]);
+  return Array.isArray(data)?data:[];
+ }catch(e){
+  console.error('HOMESTRO_APIFY_FAILED',id,String(e?.message||e));
+  return [];
+ }
+}
+
+function homestroNormalizeExternalItem(p,sourceType,keyword){
+ const id=String(p?.productId||p?.product_id||p?.id||p?.asin||p?.sku||'').trim();
+ const url=String(p?.productUrl||p?.product_url||p?.url||p?.detailUrl||p?.detail_url||'').trim();
+ const title=String(p?.title||p?.name||p?.productTitle||p?.product_title||keyword||'').trim();
+ const cost=homestroSourcePrice(p?.costEur??p?.cost_eur??p?.cost??p?.wholesalePrice??p?.wholesale_price??p?.price);
+ const sold=homestroSourceSold(p?.sold??p?.orders??p?.sales??p?.unitsSold??p?.ordersCount??p?.bsrSales);
+ const warehouse=String(p?.shipFromCountry??p?.ship_from_country??p?.warehouseCountry??p?.warehouse_country??p?.warehouse??p?.fulfillmentCountry??p?.fulfillment_country??'').trim();
+ const eu=Boolean(p?.euWarehouse??p?.eu_warehouse??p?.euStock??p?.eu_stock)||homestroEuWarehouseValue(warehouse)||Boolean(p?.isFba||p?.amazonFba);
+ return {id:id||('ext-'+crypto.createHash('sha1').update(sourceType+'|'+title+'|'+url).digest('hex').slice(0,16)),title,cost,sold,url,source_url:url,costEur:cost,euWarehouse:eu,warehouse,source_type:sourceType,source_role:sourceType==='amazon-fba'?'market_reference':'supplier',context:JSON.stringify(p).slice(0,12000),evidence:warehouse?'external source warehouse='+warehouse:'external source'};
+}
+
+async function homestroApifySourceSearch(keyword){
+ const token=String(process.env.APIFY_API_TOKEN||'').trim();
+ if(!token)return [];
+ const out=[];
+ const jobs=[
+  ['APIFY_ALIEXPRESS_ACTOR_ID','aliexpress-apify'],
+  ['APIFY_CJ_ACTOR_ID','cj-dropshipping'],
+  ['APIFY_BIGBUY_ACTOR_ID','bigbuy'],
+  ['APIFY_AMAZON_ACTOR_ID','amazon-fba']
+ ];
+ for(const [envName,sourceType] of jobs){
+  const actor=String(process.env[envName]||'').trim();
+  if(!actor)continue;
+  const input={
+   searchQueries:[keyword],
+   queries:[keyword],
+   keyword,
+   countryCode:'DE',
+   locale:'de-DE',
+   maxItems:Number(process.env.APIFY_SOURCE_MAX_ITEMS||25),
+   shipToCountry:'DE',
+   warehouses:['DE','PL','CZ','ES','FR','IT','NL','BE','AT'],
+   includeShipping:true
+  };
+  if(sourceType==='amazon-fba')Object.assign(input,{domain:'amazon.de',marketplace:'DE',primeOnly:true,fulfillment:'FBA'});
+  if(sourceType==='cj-dropshipping')Object.assign(input,{warehouse:['DE','PL','ES']});
+  if(sourceType==='bigbuy')Object.assign(input,{stockMin:50});
+  const rows=await apifyRunActor(actor,input);
+  for(const p of rows){
+   const x=homestroNormalizeExternalItem(p,sourceType,keyword);
+   if(x.title&&x.url)out.push(x);
+  }
+ }
+ if(out.length)console.log('HOMESTRO_APIFY_SOURCES',keyword,'items='+out.length,'euConfirmed='+out.filter(x=>x.euWarehouse).length);
+ return out;
+}
+
+async function homestroMarketCheck(title){
+ const actor=String(process.env.APIFY_GOOGLE_SHOPPING_ACTOR_ID||'').trim();
+ const token=String(process.env.APIFY_API_TOKEN||'').trim();
+ if(!actor||!token)return {checked:false,lowestPriceEur:NaN,offers:[],source:'not-configured'};
+ const rows=await apifyRunActor(actor,{
+  searchQueries:[String(title||'')],
+  queries:[String(title||'')],
+  countryCode:String(process.env.HOMESTRO_MARKET_COUNTRY||'DE'),
+  languageCode:'de',
+  maxItems:Number(process.env.APIFY_MARKET_MAX_ITEMS||10)
+ });
+ const offers=[];
+ for(const p of rows){
+  const price=homestroSourcePrice(p?.priceEur??p?.price_eur??p?.price??p?.currentPrice??p?.productPrice);
+  if(Number.isFinite(price)&&price>0)offers.push({priceEur:price,store:String(p?.merchant||p?.store||p?.seller||'').trim(),url:String(p?.url||p?.productUrl||'').trim()});
+ }
+ offers.sort((a,b)=>a.priceEur-b.priceEur);
+ return {checked:true,lowestPriceEur:offers[0]?.priceEur??NaN,offers:offers.slice(0,10),source:'apify-google-shopping'};
+}
+
+async function homestroCompetitivePrice(candidate){
+ const market=await homestroMarketCheck(candidate.title);
+ if(!market.checked||!Number.isFinite(market.lowestPriceEur)||market.lowestPriceEur<=0)return {...candidate,marketChecked:false};
+ const price=Number(candidate.sellingPriceEur||0);
+ const floor=market.lowestPriceEur;
+ const maxOver=Math.max(0,Number(process.env.HOMESTRO_MAX_MARKET_OVERPRICE||0.15));
+ const adjusted=Math.min(price,Math.max(0,Math.round((floor*(1-maxOver))*100)/100));
+ return {...candidate,marketChecked:true,marketLowestPriceEur:floor,marketOffers:market.offers,marketSource:market.source,
+   marketStatus:price<=floor?'AT_OR_BELOW_MARKET':(price>floor*(1+maxOver)?'UNCOMPETITIVE_PRICE':'WITHIN_MARKET_BAND'),
+   recommendedSellingPriceEur:price<=floor?price:adjusted};
+}
+
+function homestroExternalCandidatePass(x){
+ if(String(x.source_role||'supplier')==='market_reference')return '';
+ if(!x.euWarehouse)return 'eu-warehouse-not-confirmed';
+ if(!Number.isFinite(Number(x.costEur))||Number(x.costEur)<=0)return 'invalid-cost';
+ if(Number(x.sold||0)<Number(process.env.HOMESTRO_EXTERNAL_MIN_SOLD||100))return 'external-sales-under-threshold';
+ return '';
+}
+
 async function catalogSearch(keyword){
   const out=[],ids=new Set();
+  const externalItems=await homestroApifySourceSearch(keyword);
+  for(const x of externalItems){if(x?.id&&!ids.has(String(x.id))){ids.add(String(x.id));out.push(x);}}
+  if(externalItems.length)console.log('CATALOG EXTERNAL SOURCE MERGED',keyword,'items='+externalItems.length);
   const apiItems=await homestroAffiliateApiSearch(keyword);
   for(const x of apiItems){if(x?.id&&!ids.has(String(x.id))){ids.add(String(x.id));out.push(x);}}
   const feedItems=await homestroFeedSearch(keyword);
