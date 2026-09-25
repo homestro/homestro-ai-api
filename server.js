@@ -102,61 +102,59 @@ function absoluteUrl(u,base){try{return new URL(u,base).href;}catch{return null;
 async function extractAliExpressDetails(url){
  const out={image_urls:[],variants:[],options:[],page_title:'',page_text:'',euWarehouse:false,costEur:NaN,sold:0};
  try{
-  const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; HomestroCatalog/4.1)','Accept-Language':'en-US,en;q=0.9'},redirect:'follow'});
-  if(!r.ok)return out;
-  const html=await r.text();
-  const strip=new RegExp('<script[^>]*>[\\s\\S]*?</script>','gi');
-  const style=new RegExp('<style[^>]*>[\\s\\S]*?</style>','gi');
-  out.page_text=html.replace(strip,' ').replace(style,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,20000);
-  const titleMatch=html.match(new RegExp('<title[^>]*>([\\s\\S]*?)</title>','i'));
-  out.page_title=String(titleMatch?.[1]||'').replace(/<[^>]+>/g,' ').trim();
-  const urls=[];
-  const add=u=>{try{let v=String(u).replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&').replace(/\\\\\//g,'/');if(/^https?:\/\//i.test(v))urls.push(v.replace(/\\\\/g,''));}catch{}};
-  let m;
-  const metaRe=new RegExp("<meta[^>]+(?:property|name)=\"(?:og:image|twitter:image)\"[^>]+content=\"([^\"]+)\"[^>]*>","gi");
-  while((m=metaRe.exec(html))&&urls.length<12)add(m[1]);
-  const jsonImageRe=new RegExp('"(?:image|images|imageUrl|imageURL)"\\s*:\\s*"(https?:[^"\\\\]+)"','gi');
-  while((m=jsonImageRe.exec(html))&&urls.length<40)add(m[1]);
+  const original=String(url||'').trim(); if(!original)return out;
+  const idMatch=original.match(/\/item\/(\d+)\.html/i)||original.match(/\/i\/(\d+)/i);
+  const id=idMatch?.[1]||'';
+  const urls=[original];
+  if(id) urls.push('https://www.aliexpress.com/item/'+id+'.html?gatewayAdapt=glo2deu', 'https://www.aliexpress.com/i/item/'+id+'.html', 'https://m.aliexpress.com/item/'+id+'.html');
+  let html='';
+  for(const u of [...new Set(urls)]){
+   try{
+    const r=await fetch(u,{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept-Language':'de-DE,de;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8'},redirect:'follow'});
+    if(r.ok){const h=await r.text(); if(h.length>5000){html=h;break;}}
+   }catch{}
+  }
+  if(!html)return out;
+  const normalized=html.replace(/\\u002F/g,'/').replace(/\\\//g,'/').replace(/\\u0026/g,'&');
+  const strip=new RegExp('<script[^>]*>[\\s\\S]*?</script>','gi'),style=new RegExp('<style[^>]*>[\\s\\S]*?</style>','gi');
+  out.page_text=normalized.replace(strip,' ').replace(style,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/gi,' ').replace(/\\s+/g,' ').slice(0,20000);
+  const titleMatch=normalized.match(new RegExp('<title[^>]*>([\\s\\S]*?)</title>','i'));
+  out.page_title=String(titleMatch?.[1]||'').replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').trim();
+
+  const urlsFound=[],add=u=>{try{const v=String(u).replace(/\\\\u002F/g,'/').replace(/\\\\u0026/g,'&').replace(/\\\\\\//g,'/').replace(/\\\\/g,'');if(/^https?:\/\//i.test(v))urlsFound.push(v);}catch{}};
+  let m; const metaRe=new RegExp("<meta[^>]+(?:property|name)=\"(?:og:image|twitter:image)\"[^>]+content=\"([^\"]+)\"[^>]*>","gi");
+  while((m=metaRe.exec(normalized))&&urlsFound.length<12)add(m[1]);
+  const jsonImageRe=new RegExp('"(?:image|images|imageUrl|imageURL)"\\s*:\\s*"([^"]+)"','gi');
+  while((m=jsonImageRe.exec(normalized))&&urlsFound.length<40)add(m[1]);
   const imgRe=new RegExp("(?:src|data-src|data-original)=\"(https?:[^\"]+)\"","gi");
-  while((m=imgRe.exec(html))&&urls.length<60)add(m[1]);
-  out.image_urls=[...new Set(urls.filter(u=>!/logo|icon|avatar|sprite/i.test(u)))].slice(0,20);
+  while((m=imgRe.exec(normalized))&&urlsFound.length<60)add(m[1]);
+  out.image_urls=[...new Set(urlsFound.filter(u=>!/logo|icon|avatar|sprite/i.test(u)))].slice(0,20);
 
   const valueMap=new Map(),optionDefs=[];
   const optRe=new RegExp('"skuPropertyName"\\s*:\\s*"([^"]+)"[\\s\\S]{0,12000}?"skuPropertyValues"\\s*:\\s*\\[([\\s\\S]*?)\\]','gi');
-  while((m=optRe.exec(html))&&optionDefs.length<3){
-   const name=m[1].trim(),vals=[];
-   let vm;const vr=new RegExp('"propertyValueId"\\s*:\\s*"?([0-9]+)"?[\\s\\S]{0,500}?"propertyValueDisplayName"\\s*:\\s*"([^"]+)"','gi');
-   while((vm=vr.exec(m[2]))&&vals.length<100){
-    const id=vm[1],label=vm[2].trim();if(!valueMap.has(id))valueMap.set(id,{name:label,option:name});
-    if(!vals.some(v=>v.name===label))vals.push({name:label,id});
-   }
-   if(vals.length)optionDefs.push({name,values:vals.map(v=>v.name)});
-  }
+  while((m=optRe.exec(normalized))&&optionDefs.length<3){const name=m[1].trim(),vals=[];let vm;const vr=new RegExp('"propertyValueId"\\s*:\\s*"?([0-9]+)"?[\\s\\S]{0,500}?"propertyValueDisplayName"\\s*:\\s*"([^"]+)"','gi');while((vm=vr.exec(m[2]))&&vals.length<100){const id=vm[1],label=vm[2].trim();if(!valueMap.has(id))valueMap.set(id,{name:label,option:name});if(!vals.some(v=>v.name===label))vals.push({name:label,id});}if(vals.length)optionDefs.push({name,values:vals.map(v=>v.name)});}
   out.options=optionDefs;
-  const combos=[],seen=new Set();
-  const skuRe=new RegExp('"([0-9]+(?::[0-9]+)+)"\\s*:\\s*\\{[\\s\\S]{0,2500}?"skuId"\\s*:','g');
-  while((m=skuRe.exec(html))&&combos.length<100){
-   const parts=m[1].split(':').map(id=>valueMap.get(id)).filter(Boolean);
-   if(parts.length){const combo=parts.map(v=>({optionName:v.option,name:v.name}));const key=JSON.stringify(combo);if(!seen.has(key)){seen.add(key);combos.push(combo);}}
-  }
+  const combos=[],seen=new Set(),skuRe=new RegExp('"([0-9]+(?::[0-9]+)+)"\\s*:\\s*\\{[\\s\\S]{0,2500}?"skuId"\\s*:','g');
+  while((m=skuRe.exec(normalized))&&combos.length<100){const parts=m[1].split(':').map(x=>valueMap.get(x)).filter(Boolean);if(parts.length){const combo=parts.map(v=>({optionName:v.option,name:v.name}));const key=JSON.stringify(combo);if(!seen.has(key)){seen.add(key);combos.push(combo);}}}
   out.variants=combos;
-  {
-    const priceKeys=[...html.matchAll(/"(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice|minPrice|maxPrice|skuPrice|originalPrice)"\s*:\s*(?:"|')?([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
-    const prices=[...html.matchAll(/(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice|minPrice|maxPrice|skuPrice|originalPrice)[^0-9]{0,100}(?:EUR|€|\$)?\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
-    const eur=[...html.matchAll(/(?:€|EUR)\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
-    const eurAfter=[...html.matchAll(/([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
-    if([...priceKeys,...prices,...eur,...eurAfter].length)out.costEur=Math.min(...priceKeys,...prices,...eur,...eurAfter);
-    const sold=[...html.matchAll(/([0-9]+(?:[.,][0-9]+)?\s*[kKmMbB]?)\+?\s*(?:orders|sold|sales|units?)/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
-    const orders=[...html.matchAll(/"(?:orders|orderCount|tradeCount|sold|sales)"\s*:\s*"?(\d+(?:[.,]\d+)?\s*[kKmMbB]?)"?/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
-    out.sold=Math.max(0,...sold,...orders);
-  }
-  {
-    const euNames='Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|France|Frankreich|Spain|Spanien|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|EU|European Union|Europäische Union';
-    const euCodes='DE|PL|CZ|ES|FR|IT|NL|BE|AT';
-    const nearLabel=new RegExp('(?:ships?\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)[^]{0,300}?(?:'+euNames+'|'+euCodes+')','i');
-    const reverse=new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,180}?(?:ships?\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)','i');
-    out.euWarehouse=nearLabel.test(html)||reverse.test(html)||nearLabel.test(out.page_text)||reverse.test(out.page_text);
-  }
+
+  const prices=[...normalized.matchAll(/"(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice|minPrice|maxPrice|skuPrice|originalPrice)"\\s*:\\s*(?:"|')?([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+  const eur=[...normalized.matchAll(/(?:€|EUR)\\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi),...normalized.matchAll(/([0-9]{1,3}(?:[.,][0-9]{1,2})?)\\s*(?:€|EUR)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+  if([...prices,...eur].length)out.costEur=Math.min(...prices,...eur);
+  const sold=[...normalized.matchAll(/([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)\\+?\\s*(?:orders|sold|sales|units?)/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
+  const orders=[...normalized.matchAll(/"(?:orders|orderCount|tradeCount|sold|sales)"\\s*:\\s*"?([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)"?/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
+  out.sold=Math.max(0,...sold,...orders);
+
+  const euNames='Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|France|Frankreich|Spain|Spanien|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|EU|European Union|Europäische Union';
+  const euCodes='DE|PL|CZ|ES|FR|IT|NL|BE|AT';
+  const strong=[
+   new RegExp('(?:ships?\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom|sendFrom|originCountry|originCountryCode)[^]{0,500}?(?:'+euNames+'|'+euCodes+')','i'),
+   new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,220}?(?:warehouse|stock|ships?\\s*from|shipFrom|shippingFrom|deliverFrom|sendFrom|originCountry)','i'),
+   /"shipFrom"\\s*:\\s*"(?:Germany|Poland|Czechia|Spain|France|Italy|Netherlands|Belgium|Austria|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i,
+   /"warehouse(?:Location)?"\\s*:\\s*"(?:Germany|Poland|Czechia|Spain|France|Italy|Netherlands|Belgium|Austria|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i,
+   /"originCountry(?:Code)?"\\s*:\\s*"(?:Germany|Poland|Czechia|Spain|France|Italy|Netherlands|Belgium|Austria|DE|PL|CZ|ES|FR|IT|NL|BE|AT)"/i
+  ];
+  out.euWarehouse=strong.some(re=>re.test(normalized)||re.test(out.page_text));
  }catch{}
  return out;
 }
