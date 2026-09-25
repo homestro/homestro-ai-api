@@ -140,20 +140,21 @@ async function extractAliExpressDetails(url){
    if(parts.length){const combo=parts.map(v=>({optionName:v.option,name:v.name}));const key=JSON.stringify(combo);if(!seen.has(key)){seen.add(key);combos.push(combo);}}
   }
   out.variants=combos;
-    {
-    const prices=[...html.matchAll(/(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice)[^0-9]{0,80}(?:EUR|€)?\\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
-    const eur=[...html.matchAll(/(?:€|EUR)\\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+  {
+    const prices=[...html.matchAll(/(?:price|salePrice|discountPrice|formattedPrice|currentPrice|productPrice)[^0-9]{0,80}(?:EUR|€)?\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
+    const eur=[...html.matchAll(/(?:€|EUR)\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/gi)].map(m=>Number(String(m[1]).replace(',','.'))).filter(n=>Number.isFinite(n)&&n>=2&&n<=100);
     if([...prices,...eur].length)out.costEur=Math.min(...prices,...eur);
-    const sold=[...html.matchAll(/([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)\\+?\\s*(?:orders|sold|sales|units?)/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
-    const orders=[...html.matchAll(/"(?:orders|orderCount|tradeCount|sold|sales)"\\s*:\\s*"?([0-9]+(?:[.,][0-9]+)?\\s*[kKmMbB]?)"?/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
+    const sold=[...html.matchAll(/([0-9]+(?:[.,][0-9]+)?\s*[kKmMbB]?)\+?\s*(?:orders|sold|sales|units?)/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
+    const orders=[...html.matchAll(/"(?:orders|orderCount|tradeCount|sold|sales)"\s*:\s*"?(\d+(?:[.,]\d+)?\s*[kKmMbB]?)"?/gi)].map(m=>catalogNum(m[1])).filter(Number.isFinite);
     out.sold=Math.max(0,...sold,...orders);
   }
-{
-  const euNames='Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|France|Frankreich|Spain|Spanien|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|EU|European Union|Europäische Union';
-  const euCodes='DE|PL|CZ|ES|FR|IT|NL|BE|AT';
-  const nearLabel=new RegExp('(?:ships?\\\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)[^]{0,300}?(?:'+euNames+'|'+euCodes+')','i');
-  const reverse=new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,180}?(?:ships?\\\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)','i');
-  out.euWarehouse=nearLabel.test(html)||reverse.test(html)||nearLabel.test(out.page_text)||reverse.test(out.page_text);
+  {
+    const euNames='Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|France|Frankreich|Spain|Spanien|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich|EU|European Union|Europäische Union';
+    const euCodes='DE|PL|CZ|ES|FR|IT|NL|BE|AT';
+    const nearLabel=new RegExp('(?:ships?\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)[^]{0,300}?(?:'+euNames+'|'+euCodes+')','i');
+    const reverse=new RegExp('(?:'+euNames+'|'+euCodes+')[^]{0,180}?(?:ships?\\s*from|shipFrom|shippingFrom|warehouse(?:Location)?|deliverFrom)','i');
+    out.euWarehouse=nearLabel.test(html)||reverse.test(html)||nearLabel.test(out.page_text)||reverse.test(out.page_text);
+  }
 }
  }catch{}
  return out;
