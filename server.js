@@ -197,8 +197,7 @@ async function extractAliExpressDetails(url){
   const valueMap=new Map(),optionDefs=[];
   const optRe=new RegExp('"skuPropertyName"\\s*:\\s*"([^"]+)"[\\s\\S]{0,12000}?"skuPropertyValues"\\s*:\\s*\\[([\\s\\S]*?)\\]','gi');
   while((m=optRe.exec(normalized))&&optionDefs.length<3){const name=m[1].trim(),vals=[];let vm;const vr=new RegExp('"propertyValueId"\\s*:\\s*"?([0-9]+)"?[\\s\\S]{0,500}?"propertyValueDisplayName"\\s*:\\s*"([^"]+)"','gi');while((vm=vr.exec(m[2]))&&vals.length<100){const id=vm[1],label=vm[2].trim();if(!valueMap.has(id))valueMap.set(id,{name:label,option:name});if(!vals.some(v=>v.name===label))vals.push({name:label,id});}if(vals.length)optionDefs.push({name,values:vals.map(v=>v.name)});}
-  out.options=optionDefs;
-  const combos=[],seen=new Set(),skuRe=new RegExp('"([0-9]+(?::[0-9]+)+)"\\s*:\\s*\\{[\\s\\S]{0,2500}?"skuId"\\s*:','g');
+  out.options=optionDefs;  const combos=[],seen=new Set(),skuRe=new RegExp('"([0-9]+(?::[0-9]+)+)"\\s*:\\s*\\{[\\s\\S]{0,2500}?"skuId"\\s*:','g');
   while((m=skuRe.exec(normalized))&&combos.length<100){const parts=m[1].split(':').map(x=>valueMap.get(x)).filter(Boolean);if(parts.length){const combo=parts.map(v=>({optionName:v.option,name:v.name}));const key=JSON.stringify(combo);if(!seen.has(key)){seen.add(key);combos.push(combo);}}}
   out.variants=combos;
 
@@ -397,8 +396,7 @@ async function homestroAffiliateApiSearch(keyword){
     const root=d?.aliexpress_affiliate_product_query_response?.resp_result?.result
       ||d?.aliexpress_affiliate_product_query_response?.result
       ||d?.resp_result?.result
-      ||d?.result
-      ||d;
+      ||d?.result      ||d;
     const list=root?.products?.product||root?.products||root?.product||[];
     const arr=Array.isArray(list)?list:(list?[list]:[]);
     const eu=new Set(['DE','GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','TSchechien'.toUpperCase(),'ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
@@ -573,12 +571,30 @@ async function catalogSearch(keyword){
     }
 
     const blocks=[];
-    const patterns=[
-      /<li[^>]*class=["']?[^"']*b_algo[^"']*["']?[^>]*>[\\s\\S]*?<\\/li>/gi,
-      /<div[^>]*class=["']?[^"']*MjjYud[^"']*["']?[^>]*>[\\s\\S]{0,18000}?<\\/div>/gi,
-      /<div[^>]*class=["']?[^"']*result[^"']*["']?[^>]*>[\\s\\S]{0,12000}?<\\/div>/gi
-    ];
-    for(const re of patterns){let bm;while((bm=re.exec(normalized))&&blocks.length<400)blocks.push(bm[0]);}
+    function collectHtmlBlocks(tag,className,maxBlockLength){
+      let pos=0;
+      const open='<'+tag;
+      const close='</'+tag+'>';
+      while(pos<normalized.length&&blocks.length<400){
+        const a=normalized.indexOf(open,pos);
+        if(a<0)break;
+        const openEnd=normalized.indexOf('>',a);
+        if(openEnd<0)break;
+        const header=normalized.slice(a,openEnd+1);
+        if(header.includes(className)){
+          const b=normalized.indexOf(close,openEnd+1);
+          if(b<0)break;
+          const endPos=b+close.length;
+          if(endPos-a<=maxBlockLength)blocks.push(normalized.slice(a,endPos));
+          pos=endPos;
+        }else{
+          pos=openEnd+1;
+        }
+      }
+    }
+    collectHtmlBlocks('li','b_algo',30000);
+    collectHtmlBlocks('div','MjjYud',18000);
+    collectHtmlBlocks('div','result',12000);
     for(const block of blocks)addSearchBlock(block,'search-engine');
 
     let pm;
@@ -597,8 +613,7 @@ async function catalogSearch(keyword){
     'https://www.aliexpress.com/w/wholesale-'+slug+'.html?SearchText='+encodeURIComponent(keyword),
     'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=1',
     'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=2'
-  ];
-  for(const url of aliUrls){
+  ];  for(const url of aliUrls){
     const html=await fetchText(url);
     if(html.length>5000)parseAliSearch(html);
     if(out.length>=120)break;
@@ -797,8 +812,7 @@ async function catalogRun(){
  if(catalogState.running)return;
  console.log('CATALOG RUN VERSION','eu-evidence-v2','batch='+String(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
  catalogState.running=true;
- let rejected=0,failed=0; const rejectionReasons=new Map();
- const reject=(reason)=>{rejected++;rejectionReasons.set(reason,Number(rejectionReasons.get(reason)||0)+1);};
+ let rejected=0,failed=0; const rejectionReasons=new Map(); const reject=(reason)=>{rejected++;rejectionReasons.set(reason,Number(rejectionReasons.get(reason)||0)+1);};
  try{
   const batch=Math.max(1,Number(process.env.HOMESTRO_CANDIDATE_BATCH||process.env.HOMESTRO_CATALOG_BATCH||100));
   const candidates=[],runSeen=new Set(),titleSeen=new Set(),keywordCounts=new Map();
