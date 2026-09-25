@@ -554,11 +554,8 @@ async function catalogSearch(keyword){
       .replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/')
       .replace(/\\u002F/g,'/').replace(/\\\\\//g,'/');
 
-    // Search engines often split URL, title and snippet into separate nested
-    // elements. Parse each AliExpress URL independently and keep EU evidence
-    // local to that result only.
     const seenLocal=new Set();
-    const urlRe=/(?:https?:\\/\\/(?:www\\.)?aliexpress\\.com)?(?:\\/item\\/|\\/i\\/)(\\d{8,})(?:\\.html)?/gi;
+    const urlRe=new RegExp('(?:https?:\\/\\/(?:www\\.)?aliexpress\\.com)?(?:\\/item\\/|\\/i\\/)(\\d{8,})(?:\\.html)?','gi');
     let m;
     while((m=urlRe.exec(normalized))&&ids.size<1000){
       const id=m[1];
@@ -573,11 +570,9 @@ async function catalogSearch(keyword){
       const title=titleMatch?plausibleTitle(titleMatch[1]):'';
       const cost=priceMatch?catalogNum(priceMatch[1]||priceMatch[2]):NaN;
       const sold=soldMatch?catalogNum(soldMatch[1]||soldMatch[2]):0;
-      if(eu)addId(id,local,{title,cost,sold,euWarehouse:true,source_type:'search-engine-local'});
-      else addId(id,local,{title,cost,sold,euWarehouse:false,source_type:'search-engine-local'});
+      addId(id,local,{title,cost,sold,euWarehouse:eu,source_type:'search-engine-local'});
     }
 
-    // Retain structured result containers as a second parser.
     const blocks=[];
     const patterns=[
       /<li[^>]*class=["'][^"']*\\bb_algo\\b[^"']*["'][^>]*>[\\s\\S]*?<\\/li>/gi,
@@ -588,7 +583,7 @@ async function catalogSearch(keyword){
     for(const block of blocks)addSearchBlock(block,'search-engine');
 
     let pm;
-    const re=/(?:productId|product_id|itemId|item_id)\\s*["']?\\s*[:=]\\s*["']?(\\d{8,})/gi;
+    const re=new RegExp('(?:productId|product_id|itemId|item_id)\\s*["\\']?\\s*[:=]\\s*["\\']?(\\d{8,})','gi');
     while((pm=re.exec(normalized))&&ids.size<1000){
       const ctx=cleanText(normalized.slice(Math.max(0,pm.index-900),Math.min(normalized.length,pm.index+1500)));
       addId(pm[1],ctx,{source_type:'aliexpress-search'});
