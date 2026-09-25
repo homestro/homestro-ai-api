@@ -530,6 +530,7 @@ async function homestroApifySourceSearch(keyword){
    keyword,
    searchKeyword:keyword,
    searchQueries:[keyword],
+   startUrls:[{url:'https://www.aliexpress.com/w/wholesale-'+encodeURIComponent(keyword).replace(/%20/g,'-')+'.html'}],
    countryCode:'DE',
    locale:'de-DE',
    maxItems:Number(process.env.APIFY_SOURCE_MAX_ITEMS||25),
