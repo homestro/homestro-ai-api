@@ -291,29 +291,127 @@ function catalogNum(v){
 }
 async function catalogSearch(keyword){
   const out=[],ids=new Set();
-  const addId=(id,context='',extra={})=>{id=String(id||'').replace(/[^0-9]/g,'');if(id.length<8||ids.has(id))return;ids.add(id);const ctx=String(context||'');const euEvidence=/(EU\\s*stock|EU\\s*warehouse|ships?\\s*from\\s*(?:Germany|Poland|Czech(?:ia| Republic)|Spain|France|Italy|Netherlands|Belgium|Austria)|\\b(?:Germany|Poland|Czechia|Czech Republic|Spain|France|Italy|Netherlands|Belgium|Austria)\\s*(?:warehouse|stock))/i.test(ctx);const soldMatch=ctx.match(/(?:orders?|sold|sales|units?|verkauft)\s*[:：]?\s*([0-9][0-9.,]*\s*[kmb]?\+?)/i)||ctx.match(/([0-9][0-9.,]*\s*[kmb]?\+?)\s*(?:orders?|sold|sales|units?)/i);const costMatch=ctx.match(/(?:EUR|€|\$)\s*([0-9]+(?:[.,][0-9]{1,2})?)/i)||ctx.match(/([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|€)/i);out.push({id,title:extra.title||keyword,cost:Number.isFinite(extra.cost)?extra.cost:(costMatch?catalogNum(costMatch[1]):NaN),sold:Number(extra.sold||0)||(soldMatch?catalogNum(soldMatch[1]):0),image_urls:extra.image_urls||[],source_url:'https://www.aliexpress.com/item/'+id+'.html',context:ctx,euWarehouse:extra.euWarehouse===true||euEvidence});};
+  const cleanText=(html)=>String(html||'')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi,' ')
+    .replace(/<[^>]+>/g,' ')
+    .replace(/&nbsp;/gi,' ')
+    .replace(/&amp;/gi,'&')
+    .replace(/&quot;/gi,'"')
+    .replace(/&#39;|&apos;/gi,"'")
+    .replace(/\s+/g,' ')
+    .trim();
 
-  // Verified launch seed: PandaFind found this AliExpress item explicitly labelled EU Stock,
-  // with 2,457 units sold and EUR 15.48 at discovery time. Keep it as a starter while
-  // live AliExpress HTML/search access is repaired. It is still re-checked by detail fetch.
+  const plausibleTitle=(t)=>{
+    const s=cleanText(t);
+    if(!s)return '';
+    if(/^(?:ali ?express|search|page not found|access denied|just a moment|something went wrong)$/i.test(s))return '';
+    if(/(?:search results|404|not found|access denied)/i.test(s)&&s.length<220)return '';
+    if(s.length<8||s.length>500)return '';
+    return s;
+  };
+
+  const addId=(id,context='',extra={})=>{
+    id=String(id||'').replace(/[^0-9]/g,'');
+    if(id.length<8||ids.has(id))return;
+    ids.add(id);
+    const ctx=String(context||'');
+    const euEvidence=/(EU\s*stock|EU\s*warehouse|ships?\s*from\s*(?:Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)|\b(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)\s*(?:warehouse|stock))/i.test(ctx);
+    const soldMatch=ctx.match(/(?:orders?|sold|sales|units?|verkauft)\s*[:：]?\s*([0-9][0-9.,]*\s*[kmb]?\+?)/i)
+      ||ctx.match(/([0-9][0-9.,]*\s*[kmb]?\+?)\s*(?:orders?|sold|sales|units?)/i);
+    const costMatch=ctx.match(/(?:EUR|€|\$)\s*([0-9]+(?:[.,][0-9]{1,2})?)/i)
+      ||ctx.match(/([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|€)/i);
+
+    out.push({
+      id,
+      title:plausibleTitle(extra.title)||keyword,
+      cost:Number.isFinite(extra.cost)?extra.cost:(costMatch?catalogNum(costMatch[1]):NaN),
+      sold:Number(extra.sold||0)||(soldMatch?catalogNum(soldMatch[1]):0),
+      image_urls:Array.isArray(extra.image_urls)?extra.image_urls:[],
+      source_url:'https://www.aliexpress.com/item/'+id+'.html',
+      context:ctx,
+      evidence:ctx.slice(0,3000),
+      euWarehouse:extra.euWarehouse===true||euEvidence,
+      source_type:extra.source_type||'unknown'
+    });
+  };
+
   if(/headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai/i.test(keyword)){
-    addId('1005008550894374','PandaFind EU Stock seed',{title:'Soundcore P20I Wireless Bluetooth 5.3 Earbuds EU Stock',cost:15.48,sold:2457,euWarehouse:true});
+    addId('1005008550894374','PandaFind EU Stock seed',{
+      title:'Soundcore P20I Wireless Bluetooth 5.3 Earbuds EU Stock',
+      cost:15.48,sold:2457,euWarehouse:true,source_type:'seed'
+    });
   }
 
-  const parseAli=(html)=>{
-    const normalized=String(html||'').replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/').replace(/\\u002F/g,'/').replace(/\\\//g,'/');
-    const re=/(?:productId|product_id|productIdStr|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;let m;
-    while((m=re.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
-    const ur=/(?:aliexpress[^"'<>]{0,180})?(?:item\/|\/item\/)(\d{8,})(?:\.html)?/gi;
-    while((m=ur.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
-    const shortUrl=/(?:aliexpress[^"'<>]{0,180})(?:\/i\/|\/item\/)(\d{8,})/gi;
-    while((m=shortUrl.exec(normalized))&&ids.size<1000)addId(m[1],normalized.slice(Math.max(0,m.index-5000),Math.min(normalized.length,m.index+7000)));
-  };
-
   const fetchText=async(url,headers={})=>{
-    try{const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept-Language':'de-DE,de;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',...headers},redirect:'follow'});const html=await r.text();return r.ok?html:'';}catch{return '';}
+    try{
+      const r=await fetch(url,{headers:{
+        'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+        'Accept-Language':'de-DE,de;q=0.9,en;q=0.8',
+        'Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+        ...headers
+      },redirect:'follow'});
+      const html=await r.text();
+      return r.ok?html:'';
+    }catch{return '';}
   };
 
+  const addSearchBlock=(block,source_type)=>{
+    const text=cleanText(block);
+    if(!text)return;
+    const idsFound=new Set();
+    const linkRe=/(?:https?:\/\/(?:www\.)?aliexpress\.com)?(?:\/item\/|\/i\/)(\d{8,})(?:\.html)?/gi;
+    let m;
+    while((m=linkRe.exec(block)))idsFound.add(m[1]);
+    if(!idsFound.size){
+      const p=block.match(/(?:productId|product_id|itemId|item_id)["']?\s*[:=]\s*["']?(\d{8,})/i);
+      if(p)idsFound.add(p[1]);
+    }
+    if(!idsFound.size)return;
+
+    const tm=block.match(/<h[1-6][^>]*>([\s\S]{0,1000}?)<\/h[1-6]>/i)
+      ||block.match(/<a[^>]*>([\s\S]{0,1000}?)<\/a>/i);
+    const title=tm?plausibleTitle(tm[1]):'';
+    const eu=/(EU\s*stock|EU\s*warehouse|ships?\s*from\s*(?:Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)|\b(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)\s*(?:warehouse|stock))/i.test(text);
+    if(!eu)return;
+    for(const id of idsFound)addId(id,text,{title,euWarehouse:true,source_type});
+  };
+
+  const parseAliSearch=(html)=>{
+    const normalized=String(html||'')
+      .replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/')
+      .replace(/\\u002F/g,'/').replace(/\\\//g,'/');
+
+    // Preserve one search-result container at a time so EU evidence cannot leak
+    // from a different product/result into this candidate.
+    const blocks=[];
+    const patterns=[
+      /<li[^>]*class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>[\s\S]*?<\/li>/gi,
+      /<div[^>]*class=["'][^"']*\bMjjYud\b[^"']*["'][^>]*>[\s\S]{0,18000}?<\/div>/gi,
+      /<div[^>]*class=["'][^"']*\bresult\b[^"']*["'][^>]*>[\s\S]{0,12000}?<\/div>/gi
+    ];
+    for(const re of patterns){
+      let m;
+      while((m=re.exec(normalized))&&blocks.length<400)blocks.push(m[0]);
+    }
+    for(const block of blocks)addSearchBlock(block,'search-engine');
+
+    // Never use a wide +/-5000 character window for EU evidence. A small local
+    // context is only used for non-EU discovery from direct AliExpress pages.
+    let m;
+    const re=/(?:productId|product_id|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;
+    while((m=re.exec(normalized))&&ids.size<1000){
+      const ctx=cleanText(normalized.slice(Math.max(0,m.index-1000),Math.min(normalized.length,m.index+1600)));
+      addId(m[1],ctx,{source_type:'aliexpress-search'});
+    }
+    const ur=/(?:https?:\/\/(?:www\.)?aliexpress\.com)?(?:\/item\/|\/i\/)(\d{8,})(?:\.html)?/gi;
+    while((m=ur.exec(normalized))&&ids.size<1000){
+      const ctx=cleanText(normalized.slice(Math.max(0,m.index-1000),Math.min(normalized.length,m.index+1600)));
+      addId(m[1],ctx,{source_type:'aliexpress-search'});
+    }
+  };
+
+  // First direct AliExpress discovery.
   const slug=encodeURIComponent(keyword).replace(/%20/g,'-');
   const aliUrls=[
     'https://www.aliexpress.com/w/wholesale-'+slug+'.html?g=y&page=1',
@@ -322,10 +420,15 @@ async function catalogSearch(keyword){
     'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=1',
     'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=2'
   ];
-  for(const url of aliUrls){const html=await fetchText(url);if(html.length>5000)parseAli(html);if(out.length>=120)break;}
+  for(const url of aliUrls){
+    const html=await fetchText(url);
+    if(html.length>5000)parseAliSearch(html);
+    if(out.length>=120)break;
+  }
 
-  // Search-engine fallbacks. These often survive AliExpress anti-bot pages and give real item IDs.
-  if(out.length<8){
+  // The fallback threshold is confirmed EU candidates, NOT total IDs.
+  const confirmedEU=()=>out.filter(x=>x.euWarehouse===true).length;
+  if(confirmedEU()<8){
     const countries=['Germany','Poland','Czech Republic','Spain','France','Italy','Netherlands','Belgium','Austria'];
     const queries=[
       'site:aliexpress.com/item/ '+keyword+' "Ships From" ('+countries.join(' OR ')+')',
@@ -341,27 +444,37 @@ async function catalogSearch(keyword){
       'site:aliexpress.com/item '+keyword+' orders'
     ];
     const sources=[];
-    for(const query of queries){const q=encodeURIComponent(query);sources.push('https://www.bing.com/search?q='+q+'&count=50');sources.push('https://www.google.com/search?q='+q+'&num=50');sources.push('https://html.duckduckgo.com/html/?q='+q);}
+    for(const query of queries){
+      const q=encodeURIComponent(query);
+      sources.push('https://www.bing.com/search?q='+q+'&count=50');
+      sources.push('https://www.google.com/search?q='+q+'&num=50');
+      sources.push('https://html.duckduckgo.com/html/?q='+q);
+    }
     for(const u of sources){
       const html=await fetchText(u,{'Accept-Language':'en-US,en;q=0.9'});
-      if(html)parseAli(html);
-      if(out.length>=80)break;
+      if(html)parseAliSearch(html);
+      if(confirmedEU()>=80)break;
     }
   }
 
-  // Enrich real IDs from AliExpress detail pages. If a seeded EU-stock product is blocked,
-  // retain the seed data but do not invent new EU warehouse evidence.
-  for(const x of out.slice(0,120)){
+  // Only fetch detail pages for candidates that already have independent EU evidence.
+  // Do not let a blocked/generic detail page overwrite a real search-result title.
+  for(const x of out.filter(x=>x.euWarehouse===true).slice(0,80)){
     try{
       const d=await extractAliExpressDetails(x.source_url);
-      if(d.page_title)x.title=d.page_title;
+      const dt=plausibleTitle(d.page_title);
+      const generic=String(x.title||'').trim().toLowerCase()===String(keyword||'').trim().toLowerCase();
+      if(dt&&!generic)x.title=dt;
       if(Number.isFinite(d.costEur)&&d.costEur>0)x.cost=d.costEur;
       if(Number.isFinite(d.sold)&&d.sold>0)x.sold=d.sold;
       if(Array.isArray(d.image_urls))x.image_urls=d.image_urls.slice(0,3);
       if(d.euWarehouse===true)x.euWarehouse=true;
-    }catch{}
+      x.detail_fetch='attempted';
+      x.detail_title=dt||'';
+    }catch{ x.detail_fetch='failed'; }
   }
-  console.log('CATALOG SOURCE',keyword,'items='+out.length);
+
+  console.log('CATALOG SOURCE',keyword,'items='+out.length,'euConfirmed='+confirmedEU());
   return out;
 }
 function catalogPassReason(x){
