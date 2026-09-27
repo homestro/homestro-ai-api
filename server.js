@@ -993,7 +993,7 @@ async function draftAutopilotRun(){
  draftAutopilotState.running=true;
  try{
   const token=await getClientToken();
-  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft"){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{},token);
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{},token);
   const nodes=d.products.nodes||[];
   draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
   const eligible=nodes.filter(isDsersImportedCandidate).slice(0,50);
