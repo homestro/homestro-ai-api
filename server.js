@@ -89,7 +89,7 @@ async function aiProduct(input){
  const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, professionelles Deutsch. Nutze nur belegbare Angaben aus den gelieferten Quelldaten. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. Keine Emojis, keine chinesischen/japanischen/koreanischen Werbetexte und keine Lieferanten-SKUs oder Rohcodes wie Style A, G17 A oder L007 Set A im sichtbaren Text. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und mindestens 900 Zeichen reinen Text ergeben; ideal sind 1200 bis 1800 Zeichen. Erstelle außerdem natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 deutsche Tags. Ausgabe ausschließlich JSON mit title,description,shortDescription,bullets,seoTitle,seoDescription,handle,tags,category.';
  const payload=JSON.stringify(input,null,2);
  async function call(extra){
-  const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:(extra||'')+'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\\n'+payload}]}],text:{format:{type:'json_object'}},max_output_tokens:2200})});
+  const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:(extra||'')+'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\\n'+payload}]}],text:{format:{type:'json_object'}},max_output_tokens:4000})});
   const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{throw Object.assign(new Error('OpenAI returned non-JSON HTTP '+r.status),{status:502});}
   if(!r.ok)throw Object.assign(new Error(d?.error?.message||'OpenAI request failed'),{status:502});
   const text=d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'';
@@ -998,9 +998,15 @@ async function draftAutopilotRun(){
   draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
   const eligible=nodes.filter(isDsersImportedCandidate).slice(0,50);
   let done=0;
-  for(const p of eligible){
-   try{await processExistingDraftProduct(p.id,token);done++;}
-   catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);}
+  const concurrency=3;
+  for(let i=0;i<eligible.length;i+=concurrency){
+   const chunk=eligible.slice(i,i+concurrency);
+   const results=await Promise.all(chunk.map(async p=>{
+    try{await processExistingDraftProduct(p.id,token);return {ok:true,id:p.id};}
+    catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);return {ok:false,id:p.id};}
+   }));
+   done+=results.filter(x=>x.ok).length;
+   console.log('DRAFT AUTOPILOT PROGRESS','batch='+Math.floor(i/concurrency+1),'done='+done,'target='+eligible.length);
   }
   draftAutopilotState.processed+=done;
   draftAutopilotState.lastRun=new Date().toISOString();
