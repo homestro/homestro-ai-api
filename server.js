@@ -917,14 +917,12 @@ function catalogPass(x){return !catalogPassReason(x);}
 function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
- const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String).join(' ');
- const desc=String(product?.description||'');
- const mf=Array.isArray(product?.metafields)?product.metafields:[];
- const values=mf.map(x=>String(x?.value||'')).join(' ');
- const all=tags+' '+desc+' '+values;
- // Without the DSers API, the reliable source marker we can enforce is an AliExpress item URL
- // carried by the imported Shopify product. Products without this marker are never touched.
- return new RegExp('https?:\\\\/\\\\/(?:www\\.)?aliexpress\\\\.com\\\\/item\\\\/\\\\d+\\\\.html','i').test(all);
+ const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
+ if(tags.includes('homestro-ai-processed-existing')||tags.includes('homestro-ai-failed-existing'))return false;
+ // DSers API is not connected yet. For the current migration batch, Shopify DRAFT
+ // products are the trusted DSers-imported queue; purchase cost comes from
+ // variants.inventoryItem.unitCost. Never touch ACTIVE products.
+ return true;
 }
 
 async function processExistingDraftProduct(productId,token){
@@ -972,8 +970,8 @@ async function processExistingDraftProduct(productId,token){
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
- const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
- const eligible=d.products.nodes.filter(isDsersImportedCandidate).filter(p=>!p.tags?.includes('homestro-ai-processed-existing')&&!p.tags?.includes('homestro-ai-failed-existing')).slice(0,Math.min(Math.max(Number(limit)||5,1),10));
+ const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
+ const eligible=d.products.nodes.filter(isDsersImportedCandidate).slice(0,Math.min(Math.max(Number(limit)||50,1),50));
  const results=[];
  for(const p of eligible){
   try{results.push(await processExistingDraftProduct(p.id,token));}
@@ -998,7 +996,7 @@ async function draftAutopilotRun(){
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft"){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{},token);
   const nodes=d.products.nodes||[];
   draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
-  const eligible=nodes.filter(isDsersImportedCandidate).filter(p=>!p.tags?.includes('homestro-ai-processed-existing')&&!p.tags?.includes('homestro-ai-failed-existing')).slice(0,5);
+  const eligible=nodes.filter(isDsersImportedCandidate).slice(0,50);
   let done=0;
   for(const p of eligible){
    try{await processExistingDraftProduct(p.id,token);done++;}
