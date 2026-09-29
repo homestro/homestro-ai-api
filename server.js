@@ -81,6 +81,19 @@ function cleanJson(t){const s=String(t||'').trim().replace(/^```(?:json)?\s*/i,'
 function homestroStripEmoji(v){return String(v||'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[ \t]{2,}/g,' ').trim();}
 function homestroPlain(v){return String(v||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/\s+/g,' ').trim();}
 function homestroCleanHandle(v,title){const raw=String(v||title||'homestro-produkt').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'');return raw.replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80)||'homestro-produkt';}
+function homestroInferCategory(title,existing=''){
+ const e=String(existing||'').trim(); if(e)return e;
+ const t=String(title||'').toLowerCase();
+ if(/kopfhörer|ohrhörer|headphone|earbud|bluetooth|hifiman|lenovo.*xp|headset/i.test(t))return 'Elektronik';
+ if(/nagel|gel-polish|gel polish|manikür|nagelfeil/i.test(t))return 'Beauty & Pflege';
+ if(/hund|katze|katz|hunde|leckerchen|haustier/i.test(t))return 'Haustiere';
+ if(/küche|messer|dosenöffner|onigiri|sieb|besteck|reis|abfluss/i.test(t))return 'Küche';
+ if(/sport|fitness|pilates|kurzhantel|vibrationsplatte|push.?up|trainings/i.test(t))return 'Sport & Fitness';
+ if(/baby|kind|pyjama|kapuzenhandtuch/i.test(t))return 'Baby & Kinder';
+ if(/garten|werkzeug|fahrrad|auto|autoreinigung/i.test(t))return 'Garten & Heimwerken';
+ if(/schwamm|handtuch|reiniger|reinigung|haushalt|organizer|besteck/i.test(t))return 'Haushalt & Wohnen';
+ return 'Haushalt & Wohnen';
+}
 function homestroSanitizeProduct(p,input){const x={...(p||{})};x.title=homestroStripEmoji(x.title||input?.title||'Produkt');x.description=String(x.description||'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').trim();x.seoTitle=homestroStripEmoji(x.seoTitle||x.title).slice(0,70);x.seoDescription=homestroStripEmoji(x.seoDescription||homestroPlain(x.description)).slice(0,320);x.handle=homestroCleanHandle(x.handle,x.title);x.category=homestroStripEmoji(x.category||input?.category||input?.productType||'');x.tags=[...new Set((Array.isArray(x.tags)?x.tags:[]).map(homestroStripEmoji).filter(Boolean))];return x;}
 function homestroVariantLabel(name){
  let v=homestroStripEmoji(name);
@@ -945,8 +958,8 @@ function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
- if(tags.includes('homestro-ai-complete'))return false;
- // Historical processed/failed tags do not block a migration retry.
+ // A product is complete only when the image stage has explicitly verified it.
+ if(tags.includes('homestro-ai-complete')&&tags.includes('homestro-ai-images-verified'))return false;
  return true;
 }
 
@@ -1041,14 +1054,14 @@ async function processExistingDraftProduct(productId,token){
    seoDescription:String(p.seo?.description||homestroPlain(fallbackDescription)).trim(),
    handle:homestroCleanHandle('',fallbackTitle),
    tags:Array.isArray(p.tags)?p.tags:[],
-   category:String(p.productType||'').trim()
-  },{title:fallbackTitle,category:p.productType});
+   category:homestroInferCategory(fallbackTitle,p.productType)
+  },{title:fallbackTitle,category:homestroInferCategory(fallbackTitle,p.productType)});
  }
  if(!x.title)throw new Error('Product has no usable title');
  const baseTags=Array.isArray(x.tags)?x.tags:[];
  const oldTags=Array.isArray(p.tags)?p.tags:[];
- const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing'].includes(String(t))),...baseTags,'homestro-ai-processed-existing',...(profitPending?['homestro-profit-pending']:['homestro-profit-checked'])])];
- const category=String(x.category||p.productType||'').trim();
+ const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing','homestro-ai-complete','homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-rejected','⚠️-chybi-foto','⚠️-nizka-cena'].includes(String(t))),...baseTags,'homestro-ai-processed-existing',...(profitPending?['homestro-profit-pending']:['homestro-profit-checked'])])];
+ const category=homestroInferCategory(x.title||p.title,x.category||p.productType);
  const input={id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),productType:category,tags,seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}};
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
  const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description productType seo{title description} tags}userErrors{field message}}}',{input},token);
@@ -1064,9 +1077,9 @@ async function processExistingDraftProduct(productId,token){
    media={count:details.image_urls.length,validation:'image-pending'};
   }
  }
- const completeTags=[...new Set([...tags,'homestro-ai-complete'])];
- if(media.validation==='image-pending'||media.validation==='image-pending-no-api'||media.validation==='not-run')completeTags.push('homestro-ai-image-pending');
- await setProductTags(productId,[...new Set(completeTags)],token);
+ const imagePending=media.validation==='image-pending'||media.validation==='image-pending-no-api'||media.validation==='not-run';
+ const completeTags=[...new Set([...tags,...(imagePending?['homestro-ai-image-pending']:['homestro-ai-images-verified','homestro-ai-complete'])])];
+ await setProductTags(productId,completeTags,token);
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
@@ -1095,17 +1108,26 @@ async function runDraftImageQA(){
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-checked'))).slice(0,50);
+  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'))).slice(0,50);
   console.log('DRAFT IMAGE QA QUEUE','drafts='+nodes.length,'eligible='+imageEligible.length);
   for(const p of imageEligible){
    try{
     const result=await repairExistingDraftImages(p.id,p,token);
-    const tags=[...new Set([...(p.tags||[]).map(String),'homestro-ai-images-checked'])];
-    const u=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags}},token);
+    const tags=[...(p.tags||[]).map(String)].filter(t=>!['homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-complete','homestro-ai-images-verified'].includes(t));
+    tags.push('homestro-ai-images-verified','homestro-ai-complete');
+    const u=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags:[...new Set(tags)]}},token);
     const errs=u.productUpdate?.userErrors||[];
     if(errs.length)throw new Error(errs.map(x=>x.message).join('; '));
     console.log('DRAFT IMAGE REPAIR COMPLETE',p.id,'checked='+result.checked,'kept='+result.kept,'removed='+result.removed,'generated='+result.generated);
-   }catch(e){console.error('DRAFT IMAGE REPAIR FAILED',p.id,e.message);}
+   }catch(e){
+    try{
+      const current=await shopifyGraphQL('query($id:ID!){product(id:$id){tags}}',{id:p.id},token);
+      const tags=[...(current.product?.tags||[]).map(String)].filter(t=>!['homestro-ai-complete','homestro-ai-images-verified','homestro-ai-images-checked'].includes(t));
+      tags.push('homestro-ai-image-pending');
+      await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags:[...new Set(tags)]}});
+    }catch{}
+    console.error('DRAFT IMAGE REPAIR FAILED',p.id,e.message);
+   }
   }
  }catch(e){console.error('DRAFT IMAGE QA FAILED',e.message);}
  finally{draftAutopilotState.imageRunning=false;}
