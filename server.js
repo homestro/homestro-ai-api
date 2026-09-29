@@ -82,7 +82,24 @@ function homestroStripEmoji(v){return String(v||'').replace(/[\u{1F000}-\u{1FAFF
 function homestroPlain(v){return String(v||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/\s+/g,' ').trim();}
 function homestroCleanHandle(v,title){const raw=String(v||title||'homestro-produkt').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'');return raw.replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80)||'homestro-produkt';}
 function homestroSanitizeProduct(p,input){const x={...(p||{})};x.title=homestroStripEmoji(x.title||input?.title||'Produkt');x.description=String(x.description||'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').trim();x.seoTitle=homestroStripEmoji(x.seoTitle||x.title).slice(0,70);x.seoDescription=homestroStripEmoji(x.seoDescription||homestroPlain(x.description)).slice(0,320);x.handle=homestroCleanHandle(x.handle,x.title);x.category=homestroStripEmoji(x.category||input?.category||input?.productType||'');x.tags=[...new Set((Array.isArray(x.tags)?x.tags:[]).map(homestroStripEmoji).filter(Boolean))];return x;}
-function homestroVariantLabel(name){let v=homestroStripEmoji(name);const colors={white:'Weiß',red:'Rot',green:'Grün',grey:'Grau',gray:'Grau',black:'Schwarz',blue:'Blau',navy:'Marineblau',pink:'Rosa',rose:'Rosa',beige:'Beige',brown:'Braun',orange:'Orange',yellow:'Gelb',purple:'Lila',violet:'Violett',silver:'Silber',gold:'Gold'};if(colors[v.toLowerCase()])return colors[v.toLowerCase()];let m=v.match(/^Style\s*([A-Z])$/i);if(m)return 'Ausführung '+m[1].toUpperCase();m=v.match(/^Style\s*([A-Z])\s*[-–— ]\s*(\d+)\s*(?:PC|PCS)/i);if(m)return m[2]+'er-Set – Ausführung '+m[1].toUpperCase();return v;}
+function homestroVariantLabel(name){
+ let v=homestroStripEmoji(name);
+ const exact={white:'Weiß',red:'Rot',green:'Grün',grey:'Grau',gray:'Grau',black:'Schwarz',blue:'Blau',navy:'Marineblau',pink:'Rosa',rose:'Rosa',beige:'Beige',brown:'Braun',orange:'Orange',yellow:'Gelb',purple:'Lila',violet:'Violett',silver:'Silber',gold:'Gold',germany:'Deutschland',poland:'Polen',france:'Frankreich','united states':'Vereinigte Staaten','mainland china':'China (Festland)',pump:'Pumpe'};
+ if(exact[v.toLowerCase()])return exact[v.toLowerCase()];
+ v=v.replace(/\\bChristmas Tree\\b/gi,'Weihnachtsbaum').replace(/\\bMainland China\\b/gi,'China (Festland)').replace(/\\bSky Blue\\b/gi,'Himmelblau').replace(/\\bGrey Camo\\b/gi,'Tarnmuster Grau').replace(/\\bDefault Title\\b/gi,'Standardausführung').replace(/\\bType\\s+(\\d+)\\b/gi,'Ausführung $1').replace(/\\bStyle\\s*([A-Z])\\b/gi,'Ausführung $1').replace(/\\bWiRot\\b/gi,'Weiß/Rot').replace(/\\bFiber Rubber Base\\b/gi,'Faser-Gummibasis').replace(/\\bRubber Base\\b/gi,'Gummibasis').replace(/\\bBase\\b/gi,'Basis').replace(/\\bTop\\b/gi,'Überlack').replace(/\\bVest for Men\\b/gi,'Weste für Herren').replace(/\\bVest for Women\\b/gi,'Weste für Damen').replace(/\\bAdapter PC\\b/gi,'PC-Adapter').replace(/\\bwith lights\\b/gi,'mit Beleuchtung');
+ v=v.replace(/\\b(\\d+)\\s*pcs\\b/gi,'$1 Stück').replace(/\\b(\\d+)\\s*pc\\b/gi,'$1 Stück').replace(/\\bbottles?\\b/gi,'Flaschen').replace(/\\bblue\\b/gi,'Blau').replace(/\\bblule\\b/gi,'Blau').replace(/\\bwhite\\b/gi,'Weiß').replace(/\\bblack\\b/gi,'Schwarz').replace(/\\bgrey\\b/gi,'Grau').replace(/\\bgray\\b/gi,'Grau').replace(/\\bred\\b/gi,'Rot').replace(/\\bgreen\\b/gi,'Grün').replace(/\\bpink\\b/gi,'Rosa').replace(/\\bpurple\\b/gi,'Lila').replace(/\\bviolet\\b/gi,'Violett').replace(/\\byellow\\b/gi,'Gelb').replace(/\\borange\\b/gi,'Orange').replace(/\\bbrown\\b/gi,'Braun').replace(/\\bbeige\\b/gi,'Beige').replace(/\\bsilver\\b/gi,'Silber').replace(/\\bgold\\b/gi,'Gold').replace(/\\bGermany\\b/gi,'Deutschland').replace(/\\bPoland\\b/gi,'Polen').replace(/\\bfrance\\b/gi,'Frankreich').replace(/\\bUnited States\\b/gi,'Vereinigte Staaten').replace(/\\bChina Mainland\\b/gi,'China (Festland)').replace(/\\bChina\\b/gi,'China');
+ v=v.replace(/(\\d+)\\s*[xX]\\s*(\\d+)/g,'$1 × $2 cm');
+ let m=v.match(/^Style\\s*([A-Z])\\s*[-–— ]\\s*(\\d+)\\s*(?:PC|PCS)/i);if(m)return m[2]+'er-Set – Ausführung '+m[1].toUpperCase();
+ m=v.match(/^Style\\s*([A-Z])$/i);if(m)return 'Ausführung '+m[1].toUpperCase();
+ return v.trim();
+}
+async function homestroUpdateVariantNames(productId,variants,token){
+ const updates=(variants||[]).map(v=>{const optionValues=(v.selectedOptions||[]).map(o=>({optionName:o.name,name:homestroVariantLabel(o.value)}));return {id:v.id,optionValues,changed:optionValues.some((x,i)=>x.name!==v.selectedOptions[i].value)};}).filter(x=>x.changed).map(({id,optionValues})=>({id,optionValues}));
+ if(!updates.length)return 0;
+ const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants){productVariants{id title selectedOptions{name value}}userErrors{field message}}}',{productId,variants:updates},token);
+ const e=d.productVariantsBulkUpdate?.userErrors||[];if(e.length)throw new Error(e.map(x=>x.message).join('; '));
+ return (d.productVariantsBulkUpdate?.productVariants||[]).length;
+}
 async function aiProduct(input){
  if(!process.env.OPENAI_API_KEY)throw Object.assign(new Error('OPENAI_API_KEY is not configured.'),{status:503});
  const model=process.env.OPENAI_MODEL||'gpt-5-mini';
@@ -965,9 +982,10 @@ async function processExistingDraftProduct(productId,token){
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
  const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description seo{title description} tags}userErrors{field message}}}',{input},token);
  if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
+ const variantsUpdated=await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token);
  let media={count:0,validation:'not-run'};
  if(src&&details.image_urls?.length)media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
