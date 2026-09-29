@@ -4,7 +4,7 @@ application_url = "https://homestro-ai-api-fixed-current-production.up.railway.a
 embedded = true
 
 [access_scopes]
-scopes = "read_products,write_products"
+scopes = "read_products,write_products,write_files"
 
 [build]
 automatically_update_urls_on_dev = false
