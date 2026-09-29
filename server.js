@@ -1040,13 +1040,17 @@ async function processExistingDrafts(limit,token){
 const draftAutopilotState={running:false,lastRun:null,lastError:null,processed:0,skipped:0};
 function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
 async function draftAutopilotRun(){
- if(draftAutopilotState.running)return;
+ console.log('DRAFT AUTOPILOT START');
+ if(draftAutopilotState.running){console.log('DRAFT AUTOPILOT SKIP already-running');return;}
  draftAutopilotState.running=true;
  try{
   const token=await getClientToken();
+  console.log('DRAFT AUTOPILOT SHOPIFY TOKEN OK');
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
+  console.log('DRAFT IMAGE QA QUEUE', 'drafts='+nodes.length);
   const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-checked'))).slice(0,50);
+  console.log('DRAFT IMAGE QA ELIGIBLE','count='+imageEligible.length);
   for(let i=0;i<imageEligible.length;i+=2){
    const chunk=imageEligible.slice(i,i+2);
    await Promise.all(chunk.map(async p=>{
