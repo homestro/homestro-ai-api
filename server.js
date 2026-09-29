@@ -918,7 +918,6 @@ function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
- if(tags.includes('homestro-ai-processed-existing')||tags.includes('homestro-ai-failed-existing'))return false;
  // DSers API is not connected yet. For the current migration batch, Shopify DRAFT
  // products are the trusted DSers-imported queue; purchase cost comes from
  // variants.inventoryItem.unitCost. Never touch ACTIVE products.
