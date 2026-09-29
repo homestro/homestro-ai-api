@@ -106,6 +106,22 @@ function homestroVariantLabel(name){
  m=v.match(/^Style\\s*([A-Z])$/i);if(m)return 'Ausführung '+m[1].toUpperCase();
  return v.trim();
 }
+function homestroGermanOptionName(name){
+ const v=String(name||'').trim();
+ const map={color:'Farbe',colors:'Farbe',colour:'Farbe',colours:'Farbe',size:'Größe',style:'Ausführung','ships from':'Versand aus','ship from':'Versand aus','emitting color':'Lichtfarbe','outer diameter':'Außendurchmesser',series:'Serie','grit':'Körnung'};
+ return map[v.toLowerCase()]||v;
+}
+async function homestroUpdateOptionNames(productId,options,token){
+ const updates=(options||[]).map(o=>({id:o.id,name:homestroGermanOptionName(o.name)})).filter(o=>o.id&&o.name&&o.name!==String((options||[]).find(x=>x.id===o.id)?.name||''));
+ if(!updates.length)return 0;
+ let changed=0;
+ for(const u of updates){
+  const d=await shopifyGraphQL('mutation($productId:ID!,$optionId:ID!,$option:ProductOptionUpdateInput!){productOptionUpdate(productId:$productId,optionId:$optionId,option:$option){product{id options{id name}}userErrors{field message}}}',{productId,optionId:u.id,option:{name:u.name}},token);
+  const e=d.productOptionUpdate?.userErrors||[]; if(e.length)throw new Error(e.map(x=>x.message).join('; '));
+  changed++;
+ }
+ return changed;
+}
 async function homestroUpdateVariantNames(productId,variants,token){
  const updates=(variants||[]).map(v=>{const optionValues=(v.selectedOptions||[]).map(o=>({optionName:o.name,name:homestroVariantLabel(o.value)}));return {id:v.id,optionValues,changed:optionValues.some((x,i)=>x.name!==v.selectedOptions[i].value)};}).filter(x=>x.changed).map(({id,optionValues})=>({id,optionValues}));
  if(!updates.length)return 0;
@@ -197,8 +213,7 @@ async function extractAliExpressDetails(url){
   if(id) urls.push('https://www.aliexpress.com/item/'+id+'.html?gatewayAdapt=glo2deu', 'https://www.aliexpress.com/i/item/'+id+'.html', 'https://m.aliexpress.com/item/'+id+'.html');
   let html='';
   for(const u of [...new Set(urls)]){
-   try{
-    const r=await fetch(u,{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept-Language':'de-DE,de;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8'},redirect:'follow'});
+   try{    const r=await fetch(u,{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept-Language':'de-DE,de;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8'},redirect:'follow'});
     if(r.ok){const h=await r.text(); if(h.length>5000){html=h;break;}}
    }catch{}
   }
@@ -397,8 +412,7 @@ function catalogNum(v){
  if(s.includes(',')&&s.includes('.')) x=s.lastIndexOf(',')>s.lastIndexOf('.')?s.replace(/\./g,'').replace(',','.'):s.replace(/,/g,'');
  else if(s.includes(',')&&/,[0-9]{3}$/.test(s)) x=s.replace(/,/g,'');
  else x=s.replace(',','.');
- let n=Number(x); if(!Number.isFinite(n))return NaN;
- if(suffix==='k')n*=1000; else if(suffix==='m')n*=1000000; else if(suffix==='b')n*=1000000000;
+ let n=Number(x); if(!Number.isFinite(n))return NaN; if(suffix==='k')n*=1000; else if(suffix==='m')n*=1000000; else if(suffix==='b')n*=1000000000;
  return Number.isFinite(n)?n:NaN;
 }
 
@@ -598,7 +612,6 @@ function homestroNormalizeExternalItem(p,sourceType,keyword){
  const warehouse=structuredWarehouse||((blob.match(/(?:Versand\\s+aus\\s+)(Deutschland|Polen|Tschechien|Spanien|Frankreich|Italien|Niederlande|Belgien|Österreich)/i)||[])[1]||'');
  return {id:id||('ext-'+crypto.createHash('sha1').update(sourceType+'|'+title+'|'+url).digest('hex').slice(0,16)),title,cost,sold,url,source_url:url,costEur:cost,euWarehouse:eu,warehouse,availability,source_type:sourceType,source_role:sourceType==='amazon-fba'?'market_reference':'supplier',context:JSON.stringify(p).slice(0,12000),evidence:warehouse?'external source warehouse='+warehouse:(explicitEu?'explicit EU warehouse evidence in Zen result':'external source')};
 }
-
 async function homestroApifySourceSearch(keyword){
  const token=String(process.env.APIFY_API_TOKEN||'').trim();
  if(!token)return [];
@@ -797,8 +810,7 @@ async function catalogSearch(keyword){
       .replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/')
       .replace(/\\u002F/g,'/').replace(/\\\\\//g,'/');
 
-    const seenLocal=new Set();
-    const urlRe=new RegExp('(?:https?:\\/\\/(?:www\\.)?aliexpress\\.com)?(?:\\/item\\/|\\/i\\/)(\\d{8,})(?:\\.html)?','gi');
+    const seenLocal=new Set();    const urlRe=new RegExp('(?:https?:\\/\\/(?:www\\.)?aliexpress\\.com)?(?:\\/item\\/|\\/i\\/)(\\d{8,})(?:\\.html)?','gi');
     let m;
     while((m=urlRe.exec(normalized))&&ids.size<1000){
       const id=m[1];
@@ -958,7 +970,6 @@ function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
- // A product is complete only when the image stage has explicitly verified it.
  if(tags.includes('homestro-ai-complete')&&tags.includes('homestro-ai-images-verified'))return false;
  return true;
 }
@@ -997,8 +1008,7 @@ async function repairExistingDraftImages(productId,product,token){
  return {checked:mediaNodes.length,kept:keep.length-generated,removed:remove.length,generated,validation:'strict-ai-vision'};
 }
 
-async function processExistingDraftProduct(productId,token){
- const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
+async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');if(!isDsersImportedCandidate(p))throw new Error('Safety guard: DRAFT is not recognized as a DSers/AliExpress import; skipped');
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
@@ -1046,16 +1056,30 @@ async function processExistingDraftProduct(productId,token){
  // instead of repeatedly marking an already-imported DSers product as failed.
  if(!x){
   const fallbackTitle=homestroStripEmoji(String(p.title||details.page_title||'Produkt')).trim();
-  const fallbackDescription=String(desc||'').trim();
+  const category=homestroInferCategory(fallbackTitle,p.productType);
+  const sourcePlain=homestroPlain(details.page_text||desc||'');
+  const existingPlain=homestroPlain(desc);
+  const base=sourcePlain||existingPlain||'';
+  const safeText=base.replace(/(?:aliexpress|ali express|seller|supplier|shopify|sku|shipping|ships from|buy now|add to cart)/gi,' ').replace(/\\s+/g,' ').trim();
+  const variantText=(p.variants?.nodes||[]).map(v=>(v.selectedOptions||[]).map(o=>homestroGermanOptionName(o.name)+': '+homestroVariantLabel(o.value)).join(' – ')).filter(Boolean).slice(0,8);
+  const paragraphs=[];
+  if(safeText)paragraphs.push('<p>'+homestroStripEmoji(safeText).slice(0,1800)+'</p>');
+  paragraphs.push('<p>'+homestroStripEmoji(fallbackTitle)+' ist für den vorgesehenen Einsatzbereich übersichtlich aufbereitet. Die Angaben basieren ausschließlich auf den verfügbaren Produktdaten.</p>');
+  if(variantText.length)paragraphs.push('<p><strong>Varianten:</strong> '+homestroStripEmoji(variantText.join('; '))+'.</p>');
+  paragraphs.push('<p>Bitte wählen Sie vor dem Kauf die gewünschte Variante und prüfen Sie die dazugehörigen Angaben.</p>');
+  const fallbackDescription=paragraphs.join('');
+  const seoTitle=(fallbackTitle+(category?' | '+category:'')).slice(0,70);
+  const seoDescription=homestroPlain(fallbackDescription).slice(0,320);
+  const derivedTags=[category,...fallbackTitle.split(/[^A-Za-zÄÖÜäöüß0-9]+/).filter(w=>w.length>=4).slice(0,6)].map(homestroStripEmoji);
   x=homestroSanitizeProduct({
    title:fallbackTitle,
    description:fallbackDescription,
-   seoTitle:String(p.seo?.title||fallbackTitle).trim(),
-   seoDescription:String(p.seo?.description||homestroPlain(fallbackDescription)).trim(),
+   seoTitle,
+   seoDescription,
    handle:homestroCleanHandle('',fallbackTitle),
-   tags:Array.isArray(p.tags)?p.tags:[],
-   category:homestroInferCategory(fallbackTitle,p.productType)
-  },{title:fallbackTitle,category:homestroInferCategory(fallbackTitle,p.productType)});
+   tags:[...new Set([...((Array.isArray(p.tags)?p.tags:[])),...derivedTags])],
+   category
+  },{title:fallbackTitle,category});
  }
  if(!x.title)throw new Error('Product has no usable title');
  const baseTags=Array.isArray(x.tags)?x.tags:[];
@@ -1066,6 +1090,7 @@ async function processExistingDraftProduct(productId,token){
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
  const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description productType seo{title description} tags}userErrors{field message}}}',{input},token);
  if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
+ const optionsUpdated=await homestroUpdateOptionNames(productId,p.options||[],token);
  const variantsUpdated=await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token);
  let media={count:0,validation:'not-run'};
  if(src&&details.image_urls?.length){
@@ -1080,7 +1105,7 @@ async function processExistingDraftProduct(productId,token){
  const imagePending=media.validation==='image-pending'||media.validation==='image-pending-no-api'||media.validation==='not-run';
  const completeTags=[...new Set([...tags,...(imagePending?['homestro-ai-image-pending']:['homestro-ai-images-verified','homestro-ai-complete'])])];
  await setProductTags(productId,completeTags,token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
@@ -1197,7 +1222,6 @@ async function catalogRun(){
       recommendedSellingPriceEur:0,
       note:'Preis-/EU-Filter bestanden. Versand/DPH/Servicekosten aus DSers müssen vor Verkauf geprüft werden.'
     };
-
     // Only retry detail enrichment when catalogSearch did not obtain a required field.
     // Never replace positive EU evidence with a failed second fetch.
     const missingDetail=!candidate.euWarehouse||!Number.isFinite(candidate.costEur)||candidate.costEur<=0||candidate.sold<1000||!candidate.title;
