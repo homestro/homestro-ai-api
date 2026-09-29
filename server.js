@@ -1037,31 +1037,38 @@ async function processExistingDrafts(limit,token){
  }
  return results;
 }
-const draftAutopilotState={running:false,lastRun:null,lastError:null,processed:0,skipped:0};
+const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0};
 function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
+async function runDraftImageQA(){
+ if(draftAutopilotState.imageRunning)return;
+ draftAutopilotState.imageRunning=true;
+ try{
+  const token=await getClientToken();
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
+  const nodes=d.products.nodes||[];
+  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-checked'))).slice(0,50);
+  console.log('DRAFT IMAGE QA QUEUE','drafts='+nodes.length,'eligible='+imageEligible.length);
+  for(const p of imageEligible){
+   try{
+    const result=await repairExistingDraftImages(p.id,p,token);
+    const tags=[...new Set([...(p.tags||[]).map(String),'homestro-ai-images-checked'])];
+    const u=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags}},token);
+    const errs=u.productUpdate?.userErrors||[];
+    if(errs.length)throw new Error(errs.map(x=>x.message).join('; '));
+    console.log('DRAFT IMAGE REPAIR COMPLETE',p.id,'checked='+result.checked,'kept='+result.kept,'removed='+result.removed,'generated='+result.generated);
+   }catch(e){console.error('DRAFT IMAGE REPAIR FAILED',p.id,e.message);}
+  }
+ }catch(e){console.error('DRAFT IMAGE QA FAILED',e.message);}
+ finally{draftAutopilotState.imageRunning=false;}
+}
+
 async function draftAutopilotRun(){
- console.log('DRAFT AUTOPILOT START');
- if(draftAutopilotState.running){console.log('DRAFT AUTOPILOT SKIP already-running');return;}
+ if(draftAutopilotState.running)return;
  draftAutopilotState.running=true;
  try{
   const token=await getClientToken();
-  console.log('DRAFT AUTOPILOT SHOPIFY TOKEN OK');
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  console.log('DRAFT IMAGE QA QUEUE', 'drafts='+nodes.length);
-  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-checked'))).slice(0,50);
-  console.log('DRAFT IMAGE QA ELIGIBLE','count='+imageEligible.length);
-  for(let i=0;i<imageEligible.length;i+=2){
-   const chunk=imageEligible.slice(i,i+2);
-   await Promise.all(chunk.map(async p=>{
-    try{
-      const result=await repairExistingDraftImages(p.id,p,token);
-      const tags=[...new Set([...(p.tags||[]).map(String),'homestro-ai-images-checked'])];
-      await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags}},token);
-      console.log('DRAFT IMAGE REPAIR COMPLETE',p.id,'checked='+result.checked,'kept='+result.kept,'removed='+result.removed,'generated='+result.generated);
-    }catch(e){console.error('DRAFT IMAGE REPAIR FAILED',p.id,e.message);}
-   }));
-  }
   const eligible=nodes.filter(isDsersImportedCandidate).slice(0,50);
   draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
   let done=0;
@@ -1078,11 +1085,10 @@ async function draftAutopilotRun(){
   draftAutopilotState.processed+=done;
   draftAutopilotState.lastRun=new Date().toISOString();
   draftAutopilotState.lastError=null;
-  console.log('DRAFT AUTOPILOT COMPLETE','eligible='+eligible.length,'processed='+done,'imageEligible='+imageEligible.length,'skipped='+draftAutopilotState.skipped);
+  console.log('DRAFT AUTOPILOT COMPLETE','eligible='+eligible.length,'processed='+done,'skipped='+draftAutopilotState.skipped);
  }catch(e){draftAutopilotState.lastRun=new Date().toISOString();draftAutopilotState.lastError=e.message;console.error('DRAFT AUTOPILOT FAILED',e.message);}
  finally{draftAutopilotState.running=false;}
 }
-
 
 async function catalogRun(){
  if(catalogState.running)return;
@@ -1220,8 +1226,8 @@ if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
 // One-time visual QA safety net: runs independently of the text autopilot flag and is idempotent via homestro-ai-images-checked.
-setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
+setTimeout(()=>runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
 // Immediate image-QA kickoff for existing DRAFTs; the image-check tag makes this idempotent.
-draftAutopilotRun().catch(e=>console.error('DRAFT IMAGE QA STARTUP FAILED',e.message));
+runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA STARTUP FAILED',e.message));
