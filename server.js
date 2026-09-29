@@ -942,8 +942,41 @@ function isDsersImportedCandidate(product){
  return true;
 }
 
+
+async function repairExistingDraftImages(productId,product,token){
+ const mediaNodes=(product?.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
+ const input={title:String(product?.title||''),category:String(product?.productType||''),description:String(product?.description||'')};
+ const keep=[],remove=[];
+ for(const m of mediaNodes){
+   const ok=await imageIsRelevant(m.image.url,input,'');
+   if(ok) keep.push(m);
+   else remove.push(m);
+ }
+ let generated=0;
+ const target=Math.max(3,Math.min(5,mediaNodes.length||3));
+ for(let i=0;keep.length<target&&i<5;i++){
+   const dataUrl=await generateHomestroImage(input,input.title,'');
+   if(!dataUrl) break;
+   const uploaded=await uploadGeneratedImageToShopify(productId,dataUrl,input.title,token,i+1);
+   if(uploaded){
+     keep.push({id:null,image:{url:uploaded}});
+     generated++;
+   }
+ }
+ if(remove.length){
+   const ids=remove.map(m=>m.id).filter(Boolean);
+   if(ids.length){
+     const del=await shopifyGraphQL('mutation($fileIds:[ID!]!){fileDelete(fileIds:$fileIds){deletedFileIds userErrors{field message}}}',{fileIds:ids},token);
+     const errs=del.fileDelete?.userErrors||[];
+     if(errs.length) throw Object.assign(new Error('Shopify could not remove rejected product images.'),{status:400,details:errs});
+   }
+ }
+ if(!keep.length && !generated) throw new Error('No verified product image remains and no replacement could be generated.');
+ return {checked:mediaNodes.length,kept:keep.length-generated,removed:remove.length,generated,validation:'strict-ai-vision'};
+}
+
 async function processExistingDraftProduct(productId,token){
- const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{mediaContentType status alt}}}}',{id:productId},token);
+ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt image{url}}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');if(!isDsersImportedCandidate(p))throw new Error('Safety guard: DRAFT is not recognized as a DSers/AliExpress import; skipped');
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
@@ -1011,10 +1044,22 @@ async function draftAutopilotRun(){
  draftAutopilotState.running=true;
  try{
   const token=await getClientToken();
-  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{},token);
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt image{url}}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
+  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-checked'))).slice(0,50);
+  for(let i=0;i<imageEligible.length;i+=2){
+   const chunk=imageEligible.slice(i,i+2);
+   await Promise.all(chunk.map(async p=>{
+    try{
+      const result=await repairExistingDraftImages(p.id,p,token);
+      const tags=[...new Set([...(p.tags||[]).map(String),'homestro-ai-images-checked'])];
+      await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags}},token);
+      console.log('DRAFT IMAGE REPAIR COMPLETE',p.id,'checked='+result.checked,'kept='+result.kept,'removed='+result.removed,'generated='+result.generated);
+    }catch(e){console.error('DRAFT IMAGE REPAIR FAILED',p.id,e.message);}
+   }));
+  }
   const eligible=nodes.filter(isDsersImportedCandidate).slice(0,50);
+  draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
   let done=0;
   const concurrency=3;
   for(let i=0;i<eligible.length;i+=concurrency){
@@ -1029,7 +1074,7 @@ async function draftAutopilotRun(){
   draftAutopilotState.processed+=done;
   draftAutopilotState.lastRun=new Date().toISOString();
   draftAutopilotState.lastError=null;
-  console.log('DRAFT AUTOPILOT COMPLETE','eligible='+eligible.length,'processed='+done,'skipped='+draftAutopilotState.skipped);
+  console.log('DRAFT AUTOPILOT COMPLETE','eligible='+eligible.length,'processed='+done,'imageEligible='+imageEligible.length,'skipped='+draftAutopilotState.skipped);
  }catch(e){draftAutopilotState.lastRun=new Date().toISOString();draftAutopilotState.lastError=e.message;console.error('DRAFT AUTOPILOT FAILED',e.message);}
  finally{draftAutopilotState.running=false;}
 }
