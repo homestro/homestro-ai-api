@@ -1219,3 +1219,5 @@ if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
 setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
+// Immediate image-QA kickoff for existing DRAFTs; the image-check tag makes this idempotent.
+draftAutopilotRun().catch(e=>console.error('DRAFT IMAGE QA STARTUP FAILED',e.message));
