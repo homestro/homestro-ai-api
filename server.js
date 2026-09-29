@@ -1215,5 +1215,7 @@ app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:proce
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
+// One-time visual QA safety net: runs independently of the text autopilot flag and is idempotent via homestro-ai-images-checked.
+setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
