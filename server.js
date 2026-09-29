@@ -1044,7 +1044,7 @@ async function draftAutopilotRun(){
  draftAutopilotState.running=true;
  try{
   const token=await getClientToken();
-  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt image{url}}}}}}',{},token);
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
   const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-checked'))).slice(0,50);
   for(let i=0;i<imageEligible.length;i+=2){
