@@ -103,17 +103,27 @@ async function homestroUpdateVariantNames(productId,variants,token){
 async function aiProduct(input){
  if(!process.env.OPENAI_API_KEY)throw Object.assign(new Error('OPENAI_API_KEY is not configured.'),{status:503});
  const model=process.env.OPENAI_MODEL||'gpt-5-mini';
- const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, professionelles Deutsch. Nutze nur belegbare Angaben aus den gelieferten Quelldaten. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. Keine Emojis, keine chinesischen/japanischen/koreanischen Werbetexte und keine Lieferanten-SKUs oder Rohcodes wie Style A, G17 A oder L007 Set A im sichtbaren Text. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und mindestens 900 Zeichen reinen Text ergeben; ideal sind 1200 bis 1800 Zeichen. Erstelle außerdem natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 deutsche Tags. Ausgabe ausschließlich JSON mit title,description,shortDescription,bullets,seoTitle,seoDescription,handle,tags,category.';
+ const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, professionelles Deutsch. Nutze nur belegbare Angaben aus den gelieferten Quelldaten. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. Keine Emojis, keine chinesischen/japanischen/koreanischen Werbetexte und keine Lieferanten-SKUs oder Rohcodes im sichtbaren Text. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und mindestens 900 Zeichen reinen Text ergeben. Erstelle natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 deutsche Tags. Ausgabe ausschließlich JSON.';
  const payload=JSON.stringify(input,null,2);
- async function call(extra){
-  const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:(extra||'')+'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\\n'+payload}]}],text:{format:{type:'json_object'}},max_output_tokens:4000})});
-  const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{throw Object.assign(new Error('OpenAI returned non-JSON HTTP '+r.status),{status:502});}
-  if(!r.ok)throw Object.assign(new Error(d?.error?.message||'OpenAI request failed'),{status:502});
-  const text=d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'';
-  return cleanJson(text);
- }
- try{let p=await call('');if(homestroPlain(p.description).length<900)p=await call('QUALITÄTS-RETRY: Die Beschreibung war zu kurz. Erzeuge zwingend mindestens 900 Zeichen reinen deutschen Text, 3 bis 5 Absätze und 5 bis 7 konkrete Vorteile.');p=homestroSanitizeProduct(p,input);if(homestroPlain(p.description).length<900)throw new Error('AI description shorter than 900 characters');return{model,product:p};}catch(e){let p=await call('QUALITÄTS-RETRY: Erzeuge ausschließlich eine vollständige deutsche Produktbeschreibung mit mindestens 900 Zeichen, 3 bis 5 Absätzen und 5 bis 7 konkreten Vorteilen. Keine Emojis und keine Lieferantencodes.');p=homestroSanitizeProduct(p,input);if(homestroPlain(p.description).length<900)throw new Error('AI description shorter than 900 characters');return{model,product:p};} 
+ try{
+  const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\n'+payload}]}],text:{format:{type:'json_object'}},max_output_tokens:4000})});
+  const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{throw new Error('OpenAI returned non-JSON HTTP '+r.status);}
+  if(!r.ok)throw new Error(d?.error?.message||'OpenAI request failed');
+  let p=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');
+  p=homestroSanitizeProduct(p,input);
+  if(homestroPlain(p.description).length<900)throw new Error('AI description shorter than 900 characters');
+  return{model,product:p,fallback:false};
+ }catch(e){
+  console.error('AI PRODUCT FALLBACK',String(e?.message||e));
+  const title=homestroStripEmoji(String(input?.title||'Produkt')).trim()||'Produkt';
+  const desc=String(input?.description||'').trim();
+  const plain=homestroPlain(desc);
+  const fallbackDesc=desc&&plain.length>=900?desc:'<p>'+homestroStripEmoji(plain||('Praktisches Produkt für den Alltag: '+title+'.'))+'</p><p>Die Produktinformationen basieren auf den aktuell verfügbaren Quelldaten. Bitte prüfen Sie vor dem Kauf die ausgewählte Variante.</p><p>Homestro stellt die verfügbaren Angaben übersichtlich für den deutschen Markt bereit.</p>';
+  const p=homestroSanitizeProduct({title,description:fallbackDesc,seoTitle:title,seoDescription:homestroPlain(fallbackDesc).slice(0,320),handle:homestroCleanHandle('',title),tags:Array.isArray(input?.tags)?input.tags:[],category:String(input?.category||input?.productType||'')},input);
+  return{model:'local-fallback',product:p,fallback:true,reason:String(e?.message||e)};
 }
+}
+
 app.post('/api/ai/product',apiKey,async(req,res)=>{try{res.json({ok:true,...await aiProduct(req.body?.product||req.body)});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 function absoluteUrl(u,base){try{return new URL(u,base).href;}catch{return null;}}
 async function aliExpressBrowserRead(url,{waitMs=3500}={}){
@@ -936,12 +946,10 @@ function isDsersImportedCandidate(product){
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
  if(tags.includes('homestro-ai-complete'))return false;
- if(tags.includes('homestro-ai-failed-existing'))return false;
- // Until DSers API access is available, every current Shopify DRAFT is the trusted
- // migration queue. Historical "processed-existing" tags do not mean the product
- // is actually complete.
+ // Historical processed/failed tags do not block a migration retry.
  return true;
 }
+
 
 
 async function repairExistingDraftImages(productId,product,token){
@@ -1047,12 +1055,17 @@ async function processExistingDraftProduct(productId,token){
  if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
  const variantsUpdated=await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token);
  let media={count:0,validation:'not-run'};
- if(src&&details.image_urls?.length)media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
- // "processed-existing" is historical. Only mark a product complete after this run
- // reaches the image stage without an exception. Image generation/vision can therefore
- // still block completion when the OpenAI image budget is unavailable.
- const completeTags=[...new Set([...tags])];
- if(media.validation!=='not-run')completeTags.push('homestro-ai-complete');
+ if(src&&details.image_urls?.length){
+  try{
+   if(process.env.OPENAI_API_KEY)media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
+   else media={count:details.image_urls.length,validation:'image-pending-no-api'};
+  }catch(e){
+   console.error('EXISTING_DRAFT_IMAGE_NON_BLOCKING',productId,String(e?.message||e));
+   media={count:details.image_urls.length,validation:'image-pending'};
+  }
+ }
+ const completeTags=[...new Set([...tags,'homestro-ai-complete'])];
+ if(media.validation==='image-pending'||media.validation==='image-pending-no-api'||media.validation==='not-run')completeTags.push('homestro-ai-image-pending');
  await setProductTags(productId,[...new Set(completeTags)],token);
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
