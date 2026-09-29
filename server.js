@@ -283,17 +283,17 @@ async function uploadGeneratedImageToShopify(productId,dataUrl,title,token,index
  for(const p of (target.parameters||[]))form.append(p.name,p.value);
  form.append('file',new Blob([Buffer.from(b64,'base64')],{type:'image/png'}),filename);
  const up=await fetch(target.url,{method:'POST',body:form}); if(!up.ok)throw new Error('Generated image upload failed (HTTP '+up.status+').');
- const fileCreate=await shopifyGraphQL('mutation($files:[FileCreateInput!]!){fileCreate(files:$files){files{id fileStatus alt} userErrors{field message}}}',{files:[{alt:String(title||'Homestro Produkt'),contentType:'IMAGE',originalSource:target.resourceUrl}]},token);
- const fe=fileCreate.fileCreate.userErrors||[]; if(fe.length)throw Object.assign(new Error('Shopify fileCreate failed.'),{status:400,details:fe});
- const fileId=fileCreate.fileCreate.files?.[0]?.id; if(!fileId)throw new Error('Shopify did not return generated image file ID.');
- for(let i=0;i<8;i++){
-  const q=await shopifyGraphQL('query($id:ID!){node(id:$id){... on MediaImage{id image{url}}}}',{id:fileId},token);
+ const mediaCreate=await shopifyGraphQL('mutation($productId:ID!,$media:[CreateMediaInput!]!){productCreateMedia(productId:$productId,media:$media){media{... on MediaImage{id image{url} alt} mediaContentType status}mediaUserErrors{field message}}}',{productId,media:[{mediaContentType:'IMAGE',originalSource:target.resourceUrl,alt:String(title||'Homestro Produkt')}]},token);
+ const me=mediaCreate.productCreateMedia?.mediaUserErrors||[];
+ if(me.length)throw Object.assign(new Error('Shopify product image creation failed.'),{status:400,details:me});
+ const mediaId=mediaCreate.productCreateMedia?.media?.[0]?.id; if(!mediaId)throw new Error('Shopify did not return generated product image ID.');
+ for(let i=0;i<10;i++){
+  const q=await shopifyGraphQL('query($id:ID!){node(id:$id){... on MediaImage{id image{url}}}}',{id:mediaId},token);
   const url=q.node?.image?.url; if(url)return url;
   await new Promise(r=>setTimeout(r,1000));
  }
  return null;
 }
-
 async function addMedia(productId,input,title,token){
  const found=await discoverImages({...input,title});
  const candidates=found.urls.slice(0,20),accepted=[];
@@ -966,8 +966,8 @@ async function repairExistingDraftImages(productId,product,token){
  if(remove.length){
    const ids=remove.map(m=>m.id).filter(Boolean);
    if(ids.length){
-     const del=await shopifyGraphQL('mutation($fileIds:[ID!]!){fileDelete(fileIds:$fileIds){deletedFileIds userErrors{field message}}}',{fileIds:ids},token);
-     const errs=del.fileDelete?.userErrors||[];
+     const del=await shopifyGraphQL('mutation($productId:ID!,$mediaIds:[ID!]!){productDeleteMedia(productId:$productId,mediaIds:$mediaIds){deletedMediaIds mediaUserErrors{field message}}}',{productId,mediaIds:ids},token);
+     const errs=del.productDeleteMedia?.mediaUserErrors||[];
      if(errs.length) throw Object.assign(new Error('Shopify could not remove rejected product images.'),{status:400,details:errs});
    }
  }
