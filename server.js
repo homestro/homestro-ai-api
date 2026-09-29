@@ -257,7 +257,7 @@ async function imageIsRelevant(url,input,pageContext){
  if(!process.env.OPENAI_API_KEY)return false;
  const model=process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||'gpt-5-mini';
  const prompt='Prüfe dieses konkrete Produktbild für Homestro extrem streng. Freigabe NUR wenn exakt das Produkt aus dem Produktnamen/der Beschreibung gezeigt wird und das Bild für einen deutschen Online-Shop geeignet ist. ABLEHNEN bei anderem Produkt, Zubehör statt Hauptprodukt, Banner, Logo, Wasserzeichen, Verpackung als Hauptmotiv, chinesischen/japanischen/koreanischen Schriftzeichen, fremdsprachigem Werbetext, irreführenden Angaben, starker Unschärfe oder schlechter Qualität. Wenn du unsicher bist, ABLEHNEN. Produkt: '+String(input?.title||'')+'. Kategorie: '+String(input?.category||input?.productType||'')+'. Beschreibung: '+homestroPlain(input?.description||'').slice(0,1500)+'. Quellkontext: '+String(pageContext||'').slice(0,3000)+'. Antworte nur JSON {"relevant":true/false,"confidence":0-1,"hasForeignText":true/false,"lowQuality":true/false}.';
- try{const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});const raw=await r.text();const d=JSON.parse(raw);if(!r.ok)return false;const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;}catch{return false;}
+ try{const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});const raw=await r.text();const d=JSON.parse(raw);if(!r.ok){console.error('IMAGE VISION HTTP',r.status,raw.slice(0,500));return false;}const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;}catch{return false;}
 }
 
 async function generateHomestroImage(input,title,pageContext){
@@ -267,9 +267,9 @@ async function generateHomestroImage(input,title,pageContext){
  try{
   const r=await fetch('https://api.openai.com/v1/images/generations',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,prompt,size:'1024x1024',n:1})});
   const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{return null;}
-  if(!r.ok||!d.data?.[0]?.b64_json)return null;
+  if(!r.ok){console.error('IMAGE GENERATION HTTP',r.status,raw.slice(0,700));return null;} if(!d.data?.[0]?.b64_json){console.error('IMAGE GENERATION NO DATA',raw.slice(0,700));return null;}
   return 'data:image/png;base64,'+d.data[0].b64_json;
- }catch{return null;}
+ }catch(e){console.error('IMAGE GENERATION ERROR',e.message);return null;}
 }
 async function uploadGeneratedImageToShopify(productId,dataUrl,title,token,index){
  const b64=String(dataUrl||'').replace(/^data:image\/png;base64,/i,'');
@@ -965,11 +965,11 @@ async function repairExistingDraftImages(productId,product,token){
  }
  if(remove.length){
    const ids=remove.map(m=>m.id).filter(Boolean);
-   if(ids.length){
+   if(ids.length && keep.length>=3){
      const del=await shopifyGraphQL('mutation($productId:ID!,$mediaIds:[ID!]!){productDeleteMedia(productId:$productId,mediaIds:$mediaIds){deletedMediaIds mediaUserErrors{field message}}}',{productId,mediaIds:ids},token);
      const errs=del.productDeleteMedia?.mediaUserErrors||[];
      if(errs.length) throw Object.assign(new Error('Shopify could not remove rejected product images.'),{status:400,details:errs});
-   }
+   } else if(ids.length) console.log('DRAFT IMAGE KEEP EXISTING SAFETY','rejected='+ids.length,'verified='+keep.length,'generated='+generated);
  }
  if(!keep.length && !generated) throw new Error('No verified product image remains and no replacement could be generated.');
  return {checked:mediaNodes.length,kept:keep.length-generated,removed:remove.length,generated,validation:'strict-ai-vision'};
