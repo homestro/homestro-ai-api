@@ -935,10 +935,11 @@ function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
- if(tags.includes('homestro-ai-processed-existing')||tags.includes('homestro-ai-failed-existing'))return false;
- // DSers API is not connected yet. For the current migration batch, Shopify DRAFT
- // products are the trusted DSers-imported queue; purchase cost comes from
- // variants.inventoryItem.unitCost. Never touch ACTIVE products.
+ if(tags.includes('homestro-ai-complete'))return false;
+ if(tags.includes('homestro-ai-failed-existing'))return false;
+ // Until DSers API access is available, every current Shopify DRAFT is the trusted
+ // migration queue. Historical "processed-existing" tags do not mean the product
+ // is actually complete.
  return true;
 }
 
@@ -986,17 +987,24 @@ async function processExistingDraftProduct(productId,token){
  const id=mf.aliexpress_product_id || (idMatch?.[1]||'');
  let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
  if(src&&id){
-  details=await extractAliExpressDetails(src);
-  if(!details.page_title||!details.page_text)throw new Error('AliExpress source data unavailable');
+  try{
+   details=await extractAliExpressDetails(src);
+   // AliExpress may be temporarily blocked. Existing Shopify data remains the fallback
+   // for already-imported DSers products, so a source fetch failure must not kill the job.
+  }catch(e){
+   console.log('EXISTING_DRAFT_SOURCE_FALLBACK',productId,String(e?.message||e));
+   details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
+  }
  }
  const price=Number(p.variants?.nodes?.[0]?.price||0);
  const cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
  const ratio=cost>0&&price>0?price/cost:NaN;
  const profitability=ebayProfitability({selling_price:price,landed_cost_eur:cost});
  const profitPending=!profitability.valid;
- const ai=await aiProduct({
+ let x=null;
+ const aiInput={
   title:details.page_title||p.title,
-  description:(details.page_text||desc||'Shopify-Draft ohne Lieferantenquelle').slice(0,7000),
+  description:(details.page_text||desc||'').slice(0,7000),
   category:p.productType,
   source_url:src||'',
   source_product_id:id||'',
@@ -1004,20 +1012,48 @@ async function processExistingDraftProduct(productId,token){
   options:details.options||[],
   image_urls:details.image_urls||[],
   cost,selling_price:price
- });
- const x=homestroSanitizeProduct(ai.product||{}, {title:p.title,category:p.productType});
- if(!x.title)throw new Error('AI returned no title');
- if(homestroPlain(x.description).length<900)throw new Error('Existing draft failed 900-character description gate');
+ };
+ try{
+  if(process.env.OPENAI_API_KEY){
+   const ai=await aiProduct(aiInput);
+   x=homestroSanitizeProduct(ai.product||{}, {title:p.title,category:p.productType});
+  }
+ }catch(e){
+  console.error('EXISTING_DRAFT_AI_FALLBACK',productId,String(e?.message||e));
+ }
+ // If OpenAI is temporarily unavailable/out of credits, keep the existing Shopify copy
+ // instead of repeatedly marking an already-imported DSers product as failed.
+ if(!x){
+  const fallbackTitle=homestroStripEmoji(String(p.title||details.page_title||'Produkt')).trim();
+  const fallbackDescription=String(desc||'').trim();
+  x=homestroSanitizeProduct({
+   title:fallbackTitle,
+   description:fallbackDescription,
+   seoTitle:String(p.seo?.title||fallbackTitle).trim(),
+   seoDescription:String(p.seo?.description||homestroPlain(fallbackDescription)).trim(),
+   handle:homestroCleanHandle('',fallbackTitle),
+   tags:Array.isArray(p.tags)?p.tags:[],
+   category:String(p.productType||'').trim()
+  },{title:fallbackTitle,category:p.productType});
+ }
+ if(!x.title)throw new Error('Product has no usable title');
  const baseTags=Array.isArray(x.tags)?x.tags:[];
  const oldTags=Array.isArray(p.tags)?p.tags:[];
  const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing'].includes(String(t))),...baseTags,'homestro-ai-processed-existing',...(profitPending?['homestro-profit-pending']:['homestro-profit-checked'])])];
- const input={id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),tags,seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}};
+ const category=String(x.category||p.productType||'').trim();
+ const input={id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),productType:category,tags,seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}};
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
- const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description seo{title description} tags}userErrors{field message}}}',{input},token);
+ const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description productType seo{title description} tags}userErrors{field message}}}',{input},token);
  if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
  const variantsUpdated=await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token);
  let media={count:0,validation:'not-run'};
  if(src&&details.image_urls?.length)media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
+ // "processed-existing" is historical. Only mark a product complete after this run
+ // reaches the image stage without an exception. Image generation/vision can therefore
+ // still block completion when the OpenAI image budget is unavailable.
+ const completeTags=[...new Set([...tags])];
+ if(media.validation!=='not-run')completeTags.push('homestro-ai-complete');
+ await setProductTags(productId,[...new Set(completeTags)],token);
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
 }
 async function processExistingDrafts(limit,token){
