@@ -1000,12 +1000,11 @@ function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
- // Second safety boundary: ACTIVE products are never eligible for this DRAFT worker.
+ // DSers-imported products arrive in Shopify as DRAFT. Do not require a special DSers tag.
+ // ACTIVE products are excluded by the status check above.
  if(tags.includes('homestro-ai-rejected'))return false;
- const imagePendingActive=process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false'&&tags.includes('homestro-ai-image-pending');
- const pending=tags.includes('homestro-profit-pending')||imagePendingActive;
- if(tags.includes('homestro-ai-complete')&&!pending)return false;
- return !tags.includes('homestro-ai-processed-existing')||pending;
+ if(tags.includes('homestro-ai-complete'))return false;
+ return true;
 }
 
 
