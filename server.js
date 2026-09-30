@@ -1392,7 +1392,7 @@ async function refreshHomestroComplementaryRecommendations(token){
   for(let i=0;i<writes.length;i+=25){
    const batch=writes.slice(i,i+25);
    const metafields=batch.map(x=>({ownerId:x.ownerId,namespace:'shopify--discovery--product_recommendation',key:'complementary_products',type:'list.product_reference',value:JSON.stringify(x.ids)}));
-   const u=await shopifyGraphQL('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){metafields{ownerId namespace key value}userErrors{field message code}}}',{metafields},token);
+   const u=await shopifyGraphQL('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){metafields{namespace key value}userErrors{field message code}}}',{metafields},token);
    const errs=u.metafieldsSet?.userErrors||[]; if(errs.length)throw new Error(errs.map(e=>e.message).join('; ')); updated+=batch.length;
   }
   homestroRecommendationState.processed+=processed; homestroRecommendationState.updated+=updated; homestroRecommendationState.lastRun=new Date().toISOString(); homestroRecommendationState.lastError=null;
@@ -1402,7 +1402,7 @@ async function refreshHomestroComplementaryRecommendations(token){
 }
 app.get('/api/recommendations/status',apiKey,(_q,res)=>res.json({ok:true,...homestroRecommendationState}));
 app.post('/api/recommendations/refresh',apiKey,async(_q,res)=>{try{const token=await getClientToken();res.json({ok:true,...await refreshHomestroComplementaryRecommendations(token)});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
-setTimeout(()=>getClientToken().then(refreshHomestroComplementaryRecommendations).catch(e=>console.error('HOMESTRO RECOMMENDATIONS STARTUP FAILED',e.message)),25000);
+setTimeout(()=>{console.log('HOMESTRO RECOMMENDATIONS START');getClientToken().then(refreshHomestroComplementaryRecommendations).then(r=>console.log('HOMESTRO RECOMMENDATIONS COMPLETE',JSON.stringify(r))).catch(e=>console.error('HOMESTRO RECOMMENDATIONS STARTUP FAILED',e.message))},25000);
 setInterval(()=>getClientToken().then(refreshHomestroComplementaryRecommendations).catch(e=>console.error('HOMESTRO RECOMMENDATIONS AUTO FAILED',e.message)),6*60*60*1000);
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
