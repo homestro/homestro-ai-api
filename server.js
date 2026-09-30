@@ -1323,6 +1323,88 @@ if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
 // One-time visual QA safety net: runs independently of the text autopilot flag and is idempotent via homestro-ai-images-checked.
 setTimeout(()=>runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
 
+
+const homestroRecommendationState={running:false,lastRun:null,lastError:null,processed:0,updated:0};
+const HM_REC_STOPWORDS=new Set(['der','die','das','ein','eine','einer','einem','einen','und','oder','für','mit','von','zu','im','in','auf','an','bei','the','and','for','with','from','of','to','a','an','set','neu','new','home','homestro','produkt','produkte','stück','stuck','pcs','stückzahl']);
+const HM_REC_RULES=[
+ {a:/zahn.?bürste|zahnbürste|finger.?zahnbürste|zahnreinigung|zahnpflege/i,b:/zahnpasta|zahncreme|zahn.?gel|zahnreinigungs.?gel/i},
+ {a:/stift.?halter|stifthalter|stiftständer|schreib.?tisch.?organizer/i,b:/kugelschreiber|gel.?stift|fineliner|marker|textmarker|bleistift|schreibstift/i},
+ {a:/kugelschreiber|gel.?stift|fineliner|marker|textmarker|bleistift|schreibstift/i,b:/stift.?halter|stifthalter|stiftständer|schreib.?tisch.?organizer/i},
+ {a:/küchen.?messer|chef.?messer|koch.?messer|messer/i,b:/messerschärfer|messerschleifer|schärfer|schneidebrett|schneidbrett/i},
+ {a:/messerschärfer|messerschleifer|schärfer/i,b:/küchen.?messer|chef.?messer|koch.?messer/i},
+ {a:/kopfhörer|ohrhörer|earbuds?|headphones?|headset/i,b:/kopfhörer.?tasche|headphone.?case|headset.?case|kopfhörer.?ständer|headphone.?stand|reinigungs.?set|earbud.?case/i},
+ {a:/hunde?|hundezubehör|katzen?|haustier/i,b:/hundezahnpasta|zahnpasta|zahncreme|fell.?pflege|pflege.?bürste|grooming|leckerl/i},
+ {a:/auto|autopflege|fahrzeugpflege|detailing/i,b:/mikrofaser|reinigungs.?tuch|detail.?bürste|innenraum.?reiniger|glasreiniger|reinigungs.?pinsel/i},
+ {a:/garten|pflanzen|pflanz/i,b:/gartenschere|handschuhe|pflanz.?schaufel|gießkanne|bewässerung|pflanzenbinder/i},
+ {a:/wäsche|waschen|kleidung.?pflege/i,b:/wäschesack|waschbeutel|fleckenentferner|wäschetrockner|wäschenetz/i},
+ {a:/backen|back.?form|kuchen|teig/i,b:/backpapier|teigschaber|messbecher|küchenwaage|spritzbeutel/i},
+ {a:/fitness|training|sport|yoga/i,b:/widerstandsband|fitnessband|sporthandtuch|trinkflasche|shaker|griffhilfe/i},
+ {a:/reise|travel|koffer|gepäck/i,b:/gepäckwaage|reise.?organizer|koffer.?anhänger|kulturbeutel|reisetasche/i},
+ {a:/beauty|kosmetik|hautpflege|gesichtspflege/i,b:/reinigung|gesichtsbürste|kosmetik.?tasche|applikator|pflege.?pad/i}
+];
+function hmRecText(p){
+ return [p.title,p.productType,p.vendor,(Array.isArray(p.tags)?p.tags:[]).join(' '),String(p.description||'').replace(/<[^>]*>/g,' ').slice(0,1800),(p.collections?.nodes||[]).map(x=>x.title).join(' ')].join(' ').toLowerCase();
+}
+function hmRecTokens(text){
+ return new Set(String(text||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').split(/[^a-z0-9äöüß]+/i).map(x=>x.trim()).filter(x=>x.length>=4&&!HM_REC_STOPWORDS.has(x)));
+}
+function hmRecRuleScore(a,b){
+ const ta=hmRecText(a),tb=hmRecText(b); let score=0;
+ for(const rule of HM_REC_RULES){
+  if(rule.a.test(ta)&&rule.b.test(tb))score=Math.max(score,100);
+  if(rule.b.test(ta)&&rule.a.test(tb))score=Math.max(score,100);
+ }
+ return score;
+}
+function hmRecScore(a,b){
+ if(!b||String(a.id)===String(b.id)||String(b.status||'').toUpperCase()!=='ACTIVE')return -Infinity;
+ const ta=hmRecText(a),tb=hmRecText(b); let score=hmRecRuleScore(a,b);
+ const A=hmRecTokens(ta),B=hmRecTokens(tb); let overlap=0; for(const t of A)if(B.has(t))overlap++;
+ score+=Math.min(overlap,5)*8;
+ const atags=new Set((a.tags||[]).map(x=>String(x).toLowerCase())),btags=new Set((b.tags||[]).map(x=>String(x).toLowerCase())); let tagOverlap=0;
+ for(const t of atags)if(btags.has(t))tagOverlap++;
+ score+=Math.min(tagOverlap,4)*12;
+ const ac=new Set((a.collections?.nodes||[]).map(x=>x.handle)),bc=new Set((b.collections?.nodes||[]).map(x=>x.handle)); let collectionOverlap=0;
+ for(const x of ac)if(bc.has(x))collectionOverlap++;
+ score+=Math.min(collectionOverlap,3)*6;
+ if(a.productType&&b.productType&&String(a.productType).toLowerCase()===String(b.productType).toLowerCase())score-=18;
+ const titleA=String(a.title||'').toLowerCase(),titleB=String(b.title||'').toLowerCase();
+ if(titleA===titleB)return -Infinity;
+ if(/\b(ersatz|replacement|reserve|refill)\b/i.test(titleB))score-=8;
+ const priceA=Number(a.variants?.nodes?.[0]?.price||0),priceB=Number(b.variants?.nodes?.[0]?.price||0);
+ if(priceA>0&&priceB>0&&priceB<=priceA*0.75)score+=5;
+ if(priceA>0&&priceB>priceA*1.8)score-=5;
+ return score;
+}
+async function refreshHomestroComplementaryRecommendations(token){
+ if(homestroRecommendationState.running)return {skipped:true};
+ homestroRecommendationState.running=true;
+ try{
+  const d=await shopifyGraphQL('query{products(first:250){nodes{id title description productType vendor tags status collections(first:10){nodes{id handle title}} variants(first:10){nodes{price available}}}}}',{},token);
+  const products=(d.products?.nodes||[]).filter(p=>['ACTIVE','DRAFT'].includes(String(p.status).toUpperCase()));
+  const active=products.filter(p=>String(p.status).toUpperCase()==='ACTIVE'&&((p.variants?.nodes||[]).some(v=>v.available!==false&&Number(v.price||0)>0)));
+  const imported=products.filter(p=>isDsersImportedCandidate(p)||((p.tags||[]).map(String).includes('homestro-ai-processed-existing')));
+  const writes=[]; let processed=0,updated=0;
+  for(const source of imported){
+   const candidates=active.map(target=>({target,score:hmRecScore(source,target)})).filter(x=>Number.isFinite(x.score)&&x.score>=38).sort((a,b)=>b.score-a.score||String(a.target.title).localeCompare(String(b.target.title),'de')).slice(0,3).map(x=>x.target.id);
+   writes.push({ownerId:source.id,ids:candidates}); processed++;
+  }
+  for(let i=0;i<writes.length;i+=25){
+   const batch=writes.slice(i,i+25);
+   const metafields=batch.map(x=>({ownerId:x.ownerId,namespace:'shopify--discovery--product_recommendation',key:'complementary_products',type:'list.product_reference',value:JSON.stringify(x.ids)}));
+   const u=await shopifyGraphQL('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){metafields{ownerId namespace key value}userErrors{field message code}}}',{metafields},token);
+   const errs=u.metafieldsSet?.userErrors||[]; if(errs.length)throw new Error(errs.map(e=>e.message).join('; ')); updated+=batch.length;
+  }
+  homestroRecommendationState.processed+=processed; homestroRecommendationState.updated+=updated; homestroRecommendationState.lastRun=new Date().toISOString(); homestroRecommendationState.lastError=null;
+  return {processed,updated,activeCandidates:active.length};
+ }catch(e){homestroRecommendationState.lastRun=new Date().toISOString();homestroRecommendationState.lastError=e.message;throw e;}
+ finally{homestroRecommendationState.running=false;}
+}
+app.get('/api/recommendations/status',apiKey,(_q,res)=>res.json({ok:true,...homestroRecommendationState}));
+app.post('/api/recommendations/refresh',apiKey,async(_q,res)=>{try{const token=await getClientToken();res.json({ok:true,...await refreshHomestroComplementaryRecommendations(token)});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
+setTimeout(()=>refreshHomestroComplementaryRecommendations(getClientToken()).catch(e=>console.error('HOMESTRO RECOMMENDATIONS STARTUP FAILED',e.message)),25000);
+setInterval(()=>getClientToken().then(refreshHomestroComplementaryRecommendations).catch(e=>console.error('HOMESTRO RECOMMENDATIONS AUTO FAILED',e.message)),6*60*60*1000);
+
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
 // Immediate image-QA kickoff for existing DRAFTs; the image-check tag makes this idempotent.
 runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA STARTUP FAILED',e.message));
