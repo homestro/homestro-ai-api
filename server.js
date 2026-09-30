@@ -1002,7 +1002,8 @@ function isDsersImportedCandidate(product){
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
  // Second safety boundary: ACTIVE products are never eligible for this DRAFT worker.
  if(tags.includes('homestro-ai-rejected'))return false;
- const pending=tags.includes('homestro-profit-pending')||tags.includes('homestro-ai-image-pending');
+ const imagePendingActive=process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false'&&tags.includes('homestro-ai-image-pending');
+ const pending=tags.includes('homestro-profit-pending')||imagePendingActive;
  if(tags.includes('homestro-ai-complete')&&!pending)return false;
  return !tags.includes('homestro-ai-processed-existing')||pending;
 }
