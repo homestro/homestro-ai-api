@@ -1380,9 +1380,9 @@ async function refreshHomestroComplementaryRecommendations(token){
  if(homestroRecommendationState.running)return {skipped:true};
  homestroRecommendationState.running=true;
  try{
-  const d=await shopifyGraphQL('query{products(first:250){nodes{id title description productType vendor tags status collections(first:10){nodes{id handle title}} variants(first:10){nodes{price available}}}}}',{},token);
+  const d=await shopifyGraphQL('query{products(first:250){nodes{id title description productType vendor tags status collections(first:10){nodes{id handle title}} variants(first:10){nodes{price}}}}}',{},token);
   const products=(d.products?.nodes||[]).filter(p=>['ACTIVE','DRAFT'].includes(String(p.status).toUpperCase()));
-  const active=products.filter(p=>String(p.status).toUpperCase()==='ACTIVE'&&((p.variants?.nodes||[]).some(v=>v.available!==false&&Number(v.price||0)>0)));
+  const active=products.filter(p=>String(p.status).toUpperCase()==='ACTIVE'&&((p.variants?.nodes||[]).some(v=>Number(v.price||0)>0)));
   const imported=products.filter(p=>isDsersImportedCandidate(p)||((p.tags||[]).map(String).includes('homestro-ai-processed-existing')));
   const writes=[]; let processed=0,updated=0;
   for(const source of imported){
@@ -1402,7 +1402,7 @@ async function refreshHomestroComplementaryRecommendations(token){
 }
 app.get('/api/recommendations/status',apiKey,(_q,res)=>res.json({ok:true,...homestroRecommendationState}));
 app.post('/api/recommendations/refresh',apiKey,async(_q,res)=>{try{const token=await getClientToken();res.json({ok:true,...await refreshHomestroComplementaryRecommendations(token)});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
-setTimeout(()=>refreshHomestroComplementaryRecommendations(getClientToken()).catch(e=>console.error('HOMESTRO RECOMMENDATIONS STARTUP FAILED',e.message)),25000);
+setTimeout(()=>getClientToken().then(refreshHomestroComplementaryRecommendations).catch(e=>console.error('HOMESTRO RECOMMENDATIONS STARTUP FAILED',e.message)),25000);
 setInterval(()=>getClientToken().then(refreshHomestroComplementaryRecommendations).catch(e=>console.error('HOMESTRO RECOMMENDATIONS AUTO FAILED',e.message)),6*60*60*1000);
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
