@@ -970,7 +970,11 @@ function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
- if(tags.includes('homestro-ai-complete')&&tags.includes('homestro-ai-images-verified'))return false;
+ // "homestro-ai-complete" can be written by the separate image-QA worker.
+ // It must NOT make an otherwise untouched DSers draft ineligible for the main
+ // content autopilot. Only the explicit processed-existing marker means that
+ // the main draft product workflow has already completed.
+ if(tags.includes('homestro-ai-processed-existing'))return false;
  return true;
 }
 
