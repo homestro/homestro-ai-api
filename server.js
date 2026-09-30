@@ -1,3 +1,4 @@
+// Railway sync: DSers-imported Shopify DRAFTs are eligible for Homestro autopilot.
 const express=require('express');
 const cors=require('cors');
 const crypto=require('crypto');
