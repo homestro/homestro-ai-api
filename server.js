@@ -1113,7 +1113,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
- const eligible=d.products.nodes.filter(isDsersImportedCandidate).slice(0,Math.min(Math.max(Number(limit)||50,1),50));
+ const eligible=d.products.nodes.filter(p=>String(p.status||'').toUpperCase()==='DRAFT').slice(0,Math.min(Math.max(Number(limit)||50,1),50));
  const results=[];
  for(const p of eligible){
   try{results.push(await processExistingDraftProduct(p.id,token));}
@@ -1169,8 +1169,8 @@ async function draftAutopilotRun(){
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const eligible=nodes.filter(isDsersImportedCandidate).slice(0,50);
-  draftAutopilotState.skipped=nodes.filter(p=>!isDsersImportedCandidate(p)).length;
+  const eligible=nodes.filter(p=>String(p.status||'').toUpperCase()==='DRAFT').slice(0,50);
+  draftAutopilotState.skipped=nodes.length-eligible.length;
   let done=0;
   const concurrency=3;
   for(let i=0;i<eligible.length;i+=concurrency){
