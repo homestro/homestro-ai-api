@@ -1096,14 +1096,15 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
  const optionsUpdated=await homestroUpdateOptionNames(productId,p.options||[],token);
  const variantsUpdated=await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token);
- let media={count:0,validation:'not-run'};
- if(src&&details.image_urls?.length){
+ const existingImageCount=(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url).length;
+ let media={count:existingImageCount,validation:existingImageCount?'preserved-existing':'not-run'};
+ if(existingImageCount===0&&src&&details.image_urls?.length){
   try{
    if(process.env.OPENAI_API_KEY)media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
    else media={count:details.image_urls.length,validation:'image-pending-no-api'};
   }catch(e){
    console.error('EXISTING_DRAFT_IMAGE_NON_BLOCKING',productId,String(e?.message||e));
-   media={count:details.image_urls.length,validation:'image-pending'};
+   media={count:0,validation:'image-pending'};
   }
  }
  const imagePending=media.validation==='image-pending'||media.validation==='image-pending-no-api'||media.validation==='not-run';
@@ -1131,6 +1132,7 @@ async function processExistingDrafts(limit,token){
 const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0};
 function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
 async function runDraftImageQA(){
+ if(process.env.HOMESTRO_IMAGE_QA_ENABLED==='false'){console.log('DRAFT IMAGE QA DISABLED');return {disabled:true};}
  if(draftAutopilotState.imageRunning)return;
  draftAutopilotState.imageRunning=true;
  try{
@@ -1169,7 +1171,7 @@ async function draftAutopilotRun(){
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const eligible=nodes.slice(0,50);
+  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)).slice(0,50);
   draftAutopilotState.skipped=0;
   console.log('DRAFT AUTOPILOT QUEUE','shopifyDraftQuery='+nodes.length,'eligible='+eligible.length);
   let done=0;
@@ -1326,7 +1328,7 @@ if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
 // One-time visual QA safety net: runs independently of the text autopilot flag and is idempotent via homestro-ai-images-checked.
-setTimeout(()=>runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
+if(process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false')setTimeout(()=>runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
 
 
 const homestroRecommendationState={running:false,lastRun:null,lastError:null,processed:0,updated:0};
@@ -1412,4 +1414,4 @@ setInterval(()=>getClientToken().then(refreshHomestroComplementaryRecommendation
 
 app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
 // Immediate image-QA kickoff for existing DRAFTs; the image-check tag makes this idempotent.
-runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA STARTUP FAILED',e.message));
+if(process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false')runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA STARTUP FAILED',e.message));
