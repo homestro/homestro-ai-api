@@ -354,6 +354,36 @@ async function addMedia(productId,input,title,token){
 }
 async function setSeo(productId,seo,token){if(!seo?.title&&!seo?.description)return null;const input={id:productId,seo:{title:String(seo.title||'').slice(0,70),description:String(seo.description||'').slice(0,320)}};const d=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id seo{title description}}userErrors{field message}}}',{input},token);if(d.productUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected SEO data.'),{status:400,details:d.productUpdate.userErrors});return d.productUpdate.product;}async function setProductTags(productId,tags,token){const arr=Array.isArray(tags)?tags.map(String).filter(Boolean):[];if(!arr.length)return null;const d=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:productId,tags:arr}},token);if(d.productUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected product tags.'),{status:400,details:d.productUpdate.userErrors});return d.productUpdate.product;}
 async function setVariantPricing(productId,price,cost,token){if(!Number.isFinite(price)&&!Number.isFinite(cost))return null;const q='{product(id:"'+productId.replace(/"/g,'\\"')+'"){variants(first:1){nodes{id}}}}';const d0=await shopifyGraphQL(q,{},token),id=d0.product?.variants?.nodes?.[0]?.id;if(!id)return null;const variant={id};if(Number.isFinite(price))variant.price=String(price);if(Number.isFinite(cost))variant.inventoryItem={cost:Number(cost)};const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants,allowPartialUpdates:false){product{id variants(first:1){nodes{id price inventoryItem{unitCost{amount currencyCode}}}}}userErrors{field message}}}',{productId,variants:[variant]},token);if(d.productVariantsBulkUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected price/cost.'),{status:400,details:d.productVariantsBulkUpdate.userErrors});return d.productVariantsBulkUpdate.product;}
+function homestroTargetSellingPrice(cost,currentPrice,title){
+ const current=Number(currentPrice)||0, landed=Number(cost);
+ if(!Number.isFinite(landed)||landed<=0||!Number.isFinite(current)||current<=0)return current;
+ const t=String(title||'').toLowerCase();
+ const isHeadphone=/(earphone|earbuds?|headphone|headset|kopfhörer|ohrhörer|bluetooth)/i.test(t);
+ const r=rules();
+ const base=isHeadphone?69.90:34.90;
+ const minRatio=isHeadphone?Math.max(r.minRatio,2.9):Math.max(r.minRatio,3);
+ const ratioFloor=landed*minRatio;
+ const profitFloor=ebayProfitability({selling_price:Math.max(base,ratioFloor),landed_cost_eur:landed}).minRequiredSellingPriceEur;
+ const target=Math.max(current,base,ratioFloor,Number.isFinite(profitFloor)?profitFloor:0);
+ return Math.ceil((target-1e-9)*10)/10;
+}
+async function homestroAutoPriceVariants(productId,variants,title,token){
+ const source=Array.isArray(variants)?variants:[];
+ const updates=[],planned=[];
+ for(const v of source){
+  const price=Number(v.price||0),cost=Number(v.inventoryItem?.unitCost?.amount||NaN);
+  if(!v.id||!Number.isFinite(price)||price<=0||!Number.isFinite(cost)||cost<=0)continue;
+  const target=homestroTargetSellingPrice(cost,price,title);
+  planned.push({id:v.id,currentPrice:price,cost,target});
+  if(target>price+0.001)updates.push({id:v.id,price:target.toFixed(2)});
+ }
+ if(updates.length){
+  const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants,allowPartialUpdates:false){product{id variants(first:100){nodes{id price}}}userErrors{field message}}}',{productId,variants:updates},token);
+  const errs=d.productVariantsBulkUpdate?.userErrors||[];
+  if(errs.length)throw Object.assign(new Error('Shopify rejected automatic DRAFT pricing.'),{status:400,details:errs});
+ }
+ return {changed:updates.length,planned};
+}
 async function createDraft(input,token){
  if(!input?.title)throw Object.assign(new Error('Product title is required.'),{status:400});
  const cost=Number(input.cost),price=Number(input.selling_price??input.sellingPrice),landedCostEur=Number(input.landed_cost_eur??input.landedCostEur),ratio=cost>0&&Number.isFinite(price)?price/cost:NaN;
@@ -1034,11 +1064,25 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
    details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
   }
  }
- const price=Number(p.variants?.nodes?.[0]?.price||0);
- const cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
+ let price=Number(p.variants?.nodes?.[0]?.price||0);
+ let cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
+ let pricing={changed:0,planned:[]};
+ if((p.variants?.nodes||[]).length){
+  pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token);
+  if(pricing.changed){
+   const refreshed=await shopifyGraphQL('query($id:ID!){product(id:$id){variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}}}}',{id:productId},token);
+   p.variants.nodes=refreshed.product?.variants?.nodes||p.variants.nodes;
+   price=Number(p.variants?.nodes?.[0]?.price||0);
+   cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
+  }
+ }
  const ratio=cost>0&&price>0?price/cost:NaN;
+ const variantEconomics=(p.variants?.nodes||[]).map(v=>{
+  const vp=Number(v.price||0),vc=Number(v.inventoryItem?.unitCost?.amount||NaN);
+  return {id:v.id,price:vp,cost:vc,economics:ebayProfitability({selling_price:vp,landed_cost_eur:vc})};
+ });
  const profitability=ebayProfitability({selling_price:price,landed_cost_eur:cost});
- const profitPending=!profitability.valid;
+ const profitPending=variantEconomics.length===0||variantEconomics.some(v=>!Number.isFinite(v.cost)||v.cost<=0||!v.economics.valid);
  let x=null;
  const aiInput={
   title:details.page_title||p.title,
@@ -1154,7 +1198,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  ])];
  if(!profitPending&&!imagePending)finalTags.push('homestro-ai-complete');
  await setProductTags(productId,finalTags,token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,complete:!profitPending&&!imagePending};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,complete:!profitPending&&!imagePending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
