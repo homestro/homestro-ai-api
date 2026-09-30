@@ -1013,7 +1013,7 @@ async function repairExistingDraftImages(productId,product,token){
 }
 
 async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
- const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');if(!isDsersImportedCandidate(p))throw new Error('Safety guard: DRAFT is not recognized as a DSers/AliExpress import; skipped');
+ const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
  const srcMatch=desc.match(new RegExp("https?://(?:www\\\\.)?aliexpress\\\\.com/item/\\\\d+\\\\.html[^\\\\s<]*","i"));
