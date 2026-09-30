@@ -970,12 +970,11 @@ function isDsersImportedCandidate(product){
  const status=String(product?.status||'').toUpperCase();
  if(status!=='DRAFT')return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
- // "homestro-ai-complete" can be written by the separate image-QA worker.
- // It must NOT make an otherwise untouched DSers draft ineligible for the main
- // content autopilot. Only the explicit processed-existing marker means that
- // the main draft product workflow has already completed.
- if(tags.includes('homestro-ai-processed-existing'))return false;
- return true;
+ // Second safety boundary: ACTIVE products are never eligible for this DRAFT worker.
+ if(tags.includes('homestro-ai-rejected'))return false;
+ const pending=tags.includes('homestro-profit-pending')||tags.includes('homestro-ai-image-pending');
+ if(tags.includes('homestro-ai-complete')&&!pending)return false;
+ return !tags.includes('homestro-ai-processed-existing')||pending;
 }
 
 
@@ -1014,6 +1013,10 @@ async function repairExistingDraftImages(productId,product,token){
 
 async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
+ const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
+ if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
+ const alreadyProcessed=existingTags.includes('homestro-ai-processed-existing');
+ const contentNeedsWork=!alreadyProcessed;
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
  const srcMatch=desc.match(new RegExp("https?://(?:www\\\\.)?aliexpress\\\\.com/item/\\\\d+\\\\.html[^\\\\s<]*","i"));
@@ -1021,11 +1024,11 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const idMatch=src.match(new RegExp("/item/(\\\\d+)\\\\.html","i"));
  const id=mf.aliexpress_product_id || (idMatch?.[1]||'');
  let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
- if(src&&id){
+ const hasImages=(p.media?.nodes||[]).some(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
+ const imageNeedsSource=existingTags.includes('homestro-ai-image-pending')||!hasImages;
+ if(src&&id&&(contentNeedsWork||imageNeedsSource)){
   try{
    details=await extractAliExpressDetails(src);
-   // AliExpress may be temporarily blocked. Existing Shopify data remains the fallback
-   // for already-imported DSers products, so a source fetch failure must not kill the job.
   }catch(e){
    console.log('EXISTING_DRAFT_SOURCE_FALLBACK',productId,String(e?.message||e));
    details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
@@ -1048,17 +1051,29 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   image_urls:details.image_urls||[],
   cost,selling_price:price
  };
- try{
-  if(process.env.OPENAI_API_KEY){
-   const ai=await aiProduct(aiInput);
-   x=homestroSanitizeProduct(ai.product||{}, {title:p.title,category:p.productType});
+ if(contentNeedsWork){
+  try{
+   if(process.env.OPENAI_API_KEY){
+    const ai=await aiProduct(aiInput);
+    x=homestroSanitizeProduct(ai.product||{}, {title:p.title,category:p.productType});
+   }
+  }catch(e){
+   console.error('EXISTING_DRAFT_AI_FALLBACK',productId,String(e?.message||e));
   }
- }catch(e){
-  console.error('EXISTING_DRAFT_AI_FALLBACK',productId,String(e?.message||e));
  }
- // If OpenAI is temporarily unavailable/out of credits, keep the existing Shopify copy
  // instead of repeatedly marking an already-imported DSers product as failed.
  if(!x){
+  if(alreadyProcessed){
+   x=homestroSanitizeProduct({
+    title:p.title,
+    description:desc,
+    seoTitle:p.seo?.title||p.title,
+    seoDescription:p.seo?.description||homestroPlain(desc).slice(0,320),
+    handle:homestroCleanHandle('',p.title),
+    tags:existingTags,
+    category:p.productType
+   },{title:p.title,category:p.productType});
+  }else{
   const fallbackTitle=homestroStripEmoji(String(p.title||details.page_title||'Produkt')).trim();
   const category=homestroInferCategory(fallbackTitle,p.productType);
   const sourcePlain=homestroPlain(details.page_text||desc||'');
@@ -1084,6 +1099,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
    tags:[...new Set([...((Array.isArray(p.tags)?p.tags:[])),...derivedTags])],
    category
   },{title:fallbackTitle,category});
+  }
  }
  if(!x.title)throw new Error('Product has no usable title');
  const baseTags=Array.isArray(x.tags)?x.tags:[];
@@ -1092,25 +1108,53 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const category=homestroInferCategory(x.title||p.title,x.category||p.productType);
  const input={id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),productType:category,tags,seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}};
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
- const upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description productType seo{title description} tags}userErrors{field message}}}',{input},token);
- if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
- const optionsUpdated=await homestroUpdateOptionNames(productId,p.options||[],token);
- const variantsUpdated=await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token);
- const existingImageCount=(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url).length;
- let media={count:existingImageCount,validation:existingImageCount?'preserved-existing':'not-run'};
- if(existingImageCount===0&&src&&details.image_urls?.length){
-  try{
-   if(process.env.OPENAI_API_KEY)media=await addMedia(productId,{source_url:src,image_urls:details.image_urls},x.title,token);
-   else media={count:details.image_urls.length,validation:'image-pending-no-api'};
-  }catch(e){
-   console.error('EXISTING_DRAFT_IMAGE_NON_BLOCKING',productId,String(e?.message||e));
-   media={count:0,validation:'image-pending'};
-  }
+ let upd={productUpdate:{userErrors:[]}};
+ if(contentNeedsWork){
+  upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description productType seo{title description} tags}userErrors{field message}}}',{input},token);
+  if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
  }
- const imagePending=media.validation==='image-pending'||media.validation==='image-pending-no-api'||media.validation==='not-run';
- const completeTags=[...new Set([...tags,...(imagePending?['homestro-ai-image-pending']:['homestro-ai-images-verified','homestro-ai-complete'])])];
- await setProductTags(productId,completeTags,token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:details.variants.length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,mediaValidation:media.validation};
+ const optionsUpdated=contentNeedsWork?await homestroUpdateOptionNames(productId,p.options||[],token):0;
+ const variantsUpdated=contentNeedsWork?await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token):0;
+ const existingImages=(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
+ let media={count:existingImages.length,validation:existingImages.length?'preserved-existing':'not-run'};
+ let imagesVerified=existingImages.length>0&&existingTags.includes('homestro-ai-images-verified');
+ if(existingTags.includes('homestro-ai-image-pending')||existingImages.length===0){
+   try{
+    if(process.env.OPENAI_API_KEY){
+      let relevant=0;
+      for(const m of existingImages.slice(0,5)){
+       if(await imageIsRelevant(m.image.url,{...aiInput,title:x.title,category:x.category||p.productType},(details.page_title+' '+details.page_text).slice(0,4000)))relevant++;
+      }
+      if(relevant>0){
+       imagesVerified=true;
+       media={count:existingImages.length,validation:'strict-ai-vision-existing-preserved',relevant};
+      }else{
+       let added=0;
+       for(let i=0;i<3&&existingImages.length+added<5;i++){
+        const dataUrl=await generateHomestroImage({...aiInput,title:x.title,category:x.category||p.productType},x.title,(details.page_title+' '+details.page_text).slice(0,4000));
+        if(!dataUrl)break;
+        const uploaded=await uploadGeneratedImageToShopify(productId,dataUrl,x.title,token,i+1);
+        if(uploaded)added++;
+       }
+       if(added>0){imagesVerified=true;media={count:existingImages.length+added,validation:'strict-ai-vision-replacement-added',generated:added};}
+       else media={count:existingImages.length,validation:'image-pending'};
+      }
+    }else media={count:existingImages.length,validation:'image-pending-no-api'};
+   }catch(e){
+    console.error('EXISTING_DRAFT_IMAGE_NON_BLOCKING',productId,String(e?.message||e));
+    media={count:existingImages.length,validation:'image-pending'};
+   }
+ }
+ const imagePending=!imagesVerified;
+ const finalTags=[...new Set([
+  ...tags.filter(t=>!['homestro-ai-image-pending','homestro-ai-images-checked','homestro-ai-images-verified','homestro-ai-complete','homestro-profit-pending','homestro-profit-checked'].includes(String(t))),
+  'homestro-ai-processed-existing',
+  ...(profitPending?['homestro-profit-pending']:['homestro-profit-checked']),
+  ...(imagePending?['homestro-ai-image-pending']:['homestro-ai-images-verified'])
+ ])];
+ if(!profitPending&&!imagePending)finalTags.push('homestro-ai-complete');
+ await setProductTags(productId,finalTags,token);
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,complete:!profitPending&&!imagePending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
