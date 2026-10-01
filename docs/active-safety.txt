@@ -1,0 +1,1 @@
+The existing processExistingDraftProduct status guard remains mandatory: status must equal DRAFT before any product mutation. The new repair endpoint calls this same guarded function.
