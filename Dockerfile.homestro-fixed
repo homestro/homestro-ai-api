@@ -15,5 +15,5 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV CHROMIUM_PATH=/usr/bin/chromium
 RUN npm install --omit=dev
 COPY . .
-RUN node ./test-quality-repair.js && node ./patch-autopilot-quality.js && node --check ./server.js
+RUN node ./test-quality-repair.js && node --check ./server.js
 CMD ["node", "./server.js"]

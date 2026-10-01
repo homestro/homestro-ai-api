@@ -1,6 +1,7 @@
 // Railway sync: DSers-imported Shopify DRAFTs are eligible for Homestro autopilot.
 const express=require('express');
 const cors=require('cors');
+const {qualityCheck,optionNameForValues,repairVariantOptions}=require('./homestro-quality-repair');
 const crypto=require('crypto');
 const app=express();
 const PORT=Number(process.env.PORT||8080);
@@ -133,7 +134,7 @@ async function homestroUpdateVariantNames(productId,variants,token){
 async function aiProduct(input){
  if(!process.env.OPENAI_API_KEY)throw Object.assign(new Error('OPENAI_API_KEY is not configured.'),{status:503});
  const model=process.env.OPENAI_MODEL||'gpt-5-mini';
- const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, professionelles Deutsch. Nutze nur belegbare Angaben aus den gelieferten Quelldaten. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. Keine Emojis, keine chinesischen/japanischen/koreanischen Werbetexte und keine Lieferanten-SKUs oder Rohcodes im sichtbaren Text. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und mindestens 900 Zeichen reinen Text ergeben. Erstelle natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 deutsche Tags. Ausgabe ausschließlich JSON.';
+ const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, verkaufsorientiertes, professionelles Deutsch für Endkunden. Nutze nur belegbare Produktmerkmale. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. NIEMALS Rohdatenfelder, Lieferantenfelder oder Audit-Hinweise im Kundentext nennen; insbesondere nicht Quelldaten, Herstellerangaben, Electronic:, Power Supply, Is Batteries Included, Mainland China oder Formulierungen wie laut Herstellerangaben. Keine Emojis, keine asiatischen Werbetexte, Lieferanten-SKUs oder Rohcodes. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und mindestens 900 Zeichen reinen Text ergeben. Erstelle natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 kundenfreundliche deutsche Tags. Ausgabe ausschließlich JSON.';
  const payload=JSON.stringify(input,null,2);
  try{
   const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\n'+payload}]}],text:{format:{type:'json_object'}},max_output_tokens:4000})});
@@ -148,7 +149,8 @@ async function aiProduct(input){
   const title=homestroStripEmoji(String(input?.title||'Produkt')).trim()||'Produkt';
   const desc=String(input?.description||'').trim();
   const plain=homestroPlain(desc);
-  const fallbackDesc=desc&&plain.length>=900?desc:'<p>'+homestroStripEmoji(plain||('Praktisches Produkt für den Alltag: '+title+'.'))+'</p><p>Die Produktinformationen basieren auf den aktuell verfügbaren Quelldaten. Bitte prüfen Sie vor dem Kauf die ausgewählte Variante.</p><p>Homestro stellt die verfügbaren Angaben übersichtlich für den deutschen Markt bereit.</p>';
+  const cleanPlain=homestroStripEmoji(plain).replace(/\b(?:Quelldaten|Herstellerangaben|Electronic\s*:|Power\s*Supply|Is\s*Batteries\s*Included|Mainland\s*China)\b/gi,' ').replace(/\s+/g,' ').trim();
+  const fallbackDesc=desc&&plain.length>=900&&!/Quelldaten|Herstellerangaben|Electronic\s*:|Power\s*Supply|Is\s*Batteries\s*Included|Mainland\s*China/i.test(desc)?desc:'<p><strong>'+title+'</strong> ist eine praktische Lösung für den vorgesehenen Einsatz im Alltag.</p><p>'+String(cleanPlain||('Das Produkt '+title+' ist übersichtlich und unkompliziert in der Anwendung.')).slice(0,1800)+'</p><p>Wählen Sie vor dem Kauf die passende Ausführung für Ihren gewünschten Einsatz.</p>';
   const p=homestroSanitizeProduct({title,description:fallbackDesc,seoTitle:title,seoDescription:homestroPlain(fallbackDesc).slice(0,320),handle:homestroCleanHandle('',title),tags:Array.isArray(input?.tags)?input.tags:[],category:String(input?.category||input?.productType||'')},input);
   return{model:'local-fallback',product:p,fallback:true,reason:String(e?.message||e)};
 }
@@ -1042,12 +1044,18 @@ async function repairExistingDraftImages(productId,product,token){
  return {checked:mediaNodes.length,kept:keep.length-generated,removed:remove.length,generated,validation:'strict-ai-vision'};
 }
 
-async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
+async function assertShopifyProductIsDraft(productId,token){
+ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id status}}',{id:productId},token);
+ if(!d.product||String(d.product.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
+}
+
+async function processExistingDraftProduct(productId,token,opts={}){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
- if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
+ const forceRepair=Boolean(opts.forceRepair);
+ if(existingTags.includes('homestro-ai-rejected')&&!forceRepair)return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
  const alreadyProcessed=existingTags.includes('homestro-ai-processed-existing');
- const contentNeedsWork=!alreadyProcessed;
+ const contentNeedsWork=forceRepair||!alreadyProcessed;
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
  const srcMatch=desc.match(new RegExp("https?://(?:www\\\\.)?aliexpress\\\\.com/item/\\\\d+\\\\.html[^\\\\s<]*","i"));
@@ -1069,6 +1077,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  let cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
  let pricing={changed:0,planned:[]};
  if((p.variants?.nodes||[]).length){
+  await assertShopifyProductIsDraft(productId,token);
   pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token);
   if(pricing.changed){
    const refreshed=await shopifyGraphQL('query($id:ID!){product(id:$id){variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}}}}',{id:productId},token);
@@ -1128,7 +1137,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   const variantText=(p.variants?.nodes||[]).map(v=>(v.selectedOptions||[]).map(o=>homestroGermanOptionName(o.name)+': '+homestroVariantLabel(o.value)).join(' – ')).filter(Boolean).slice(0,8);
   const paragraphs=[];
   if(safeText)paragraphs.push('<p>'+homestroStripEmoji(safeText).slice(0,1800)+'</p>');
-  paragraphs.push('<p>'+homestroStripEmoji(fallbackTitle)+' ist für den vorgesehenen Einsatzbereich übersichtlich aufbereitet. Die Angaben basieren ausschließlich auf den verfügbaren Produktdaten.</p>');
+  paragraphs.push('<p>'+homestroStripEmoji(fallbackTitle)+' ist für den vorgesehenen Einsatzbereich praktisch und übersichtlich aufbereitet.</p>');
   if(variantText.length)paragraphs.push('<p><strong>Varianten:</strong> '+homestroStripEmoji(variantText.join('; '))+'.</p>');
   paragraphs.push('<p>Bitte wählen Sie vor dem Kauf die gewünschte Variante und prüfen Sie die dazugehörigen Angaben.</p>');
   const fallbackDescription=paragraphs.join('');
@@ -1155,17 +1164,22 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
  let upd={productUpdate:{userErrors:[]}};
  if(contentNeedsWork){
+  await assertShopifyProductIsDraft(productId,token);
   upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description productType seo{title description} tags}userErrors{field message}}}',{input},token);
   if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
  }
- const optionsUpdated=contentNeedsWork?await homestroUpdateOptionNames(productId,p.options||[],token):0;
- const variantsUpdated=contentNeedsWork?await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token):0;
+ const repairedOptions=(p.options||[]).map(o=>({...o,name:optionNameForValues(o.name,(p.variants?.nodes||[]).flatMap(v=>(v.selectedOptions||[]).filter(selected=>selected.name===o.name).map(selected=>selected.value)))}));
+ const repairedVariants=repairVariantOptions(p.variants?.nodes||[]);
+ if(contentNeedsWork)await assertShopifyProductIsDraft(productId,token);
+ const optionsUpdated=contentNeedsWork?await homestroUpdateOptionNames(productId,repairedOptions,token):0;
+ const variantsUpdated=contentNeedsWork?await homestroUpdateVariantNames(productId,repairedVariants,token):0;
  const existingImages=(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  let media={count:existingImages.length,validation:existingImages.length?'preserved-existing':'not-run'};
  let imagesVerified=existingImages.length>0&&existingTags.includes('homestro-ai-images-verified');
  if(existingTags.includes('homestro-ai-image-pending')||existingImages.length===0){
    try{
     if(process.env.OPENAI_API_KEY){
+      await assertShopifyProductIsDraft(productId,token);
       let relevant=0;
       for(const m of existingImages.slice(0,5)){
        if(await imageIsRelevant(m.image.url,{...aiInput,title:x.title,category:x.category||p.productType},(details.page_title+' '+details.page_text).slice(0,4000)))relevant++;
@@ -1191,16 +1205,25 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
    }
  }
  const imagePending=!imagesVerified;
+ // Completion is based on a fresh Shopify read, never merely on the intended payload.
+ const verified=await shopifyGraphQL('query($id:ID!){product(id:$id){status title description productType seo{title description} variants(first:100){nodes{id selectedOptions{name value}}} media(first:30){nodes{mediaContentType status ... on MediaImage{image{url}}}}}}',{id:productId},token);
+ const checked=verified.product;
+ if(!checked||String(checked.status)!=='DRAFT')throw new Error('Safety guard: product is no longer DRAFT');
+ const quality=qualityCheck({title:checked.title,description:checked.description,seo:checked.seo,variants:checked.variants?.nodes||[]});
+ const qualityPending=!quality.ok;
  const finalTags=[...new Set([
-  ...tags.filter(t=>!['homestro-ai-image-pending','homestro-ai-images-checked','homestro-ai-images-verified','homestro-ai-complete','homestro-profit-pending','homestro-profit-checked'].includes(String(t))),
+  ...tags.filter(t=>!['homestro-ai-image-pending','homestro-ai-images-checked','homestro-ai-images-verified','homestro-ai-quality-pending','homestro-ai-complete','homestro-profit-pending','homestro-profit-checked'].includes(String(t))),
   'homestro-ai-processed-existing',
   ...(profitPending?['homestro-profit-pending']:['homestro-profit-checked']),
   ...(imagePending?['homestro-ai-image-pending']:['homestro-ai-images-verified'])
  ])];
- if(!profitPending&&!imagePending)finalTags.push('homestro-ai-complete');
+ if(qualityPending)finalTags.push('homestro-ai-quality-pending');
+ if(!profitPending&&!imagePending&&!qualityPending)finalTags.push('homestro-ai-complete');
+ await assertShopifyProductIsDraft(productId,token);
  await setProductTags(productId,finalTags,token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,complete:!profitPending&&!imagePending};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qualityPending,qualityReasons:quality.reasons,complete:!profitPending&&!imagePending&&!qualityPending};
 }
+app.post('/api/autopilot/repair-product',apiKey,async(req,res)=>{try{let id=String(req.body?.productId||'').trim();if(!id)return res.status(400).json({ok:false,error:'productId is required'});if(/^\d+$/.test(id))id='gid://shopify/Product/'+id;const numericId=id.split('/').pop();if(process.env.HOMESTRO_BULK_AUTOPILOT_ENABLED!=='true'&&numericId!=='16104465301886')return res.status(409).json({ok:false,error:'Acceptance gate: verify DRAFT product 16104465301886 before processing another product'});const token=await getClientToken();const result=await processExistingDraftProduct(id,token,{forceRepair:true});res.json({ok:true,result});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,details:e.details});}});
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
  const eligible=d.products.nodes.slice(0,Math.min(Math.max(Number(limit)||50,1),50));
@@ -1220,6 +1243,12 @@ async function processExistingDrafts(limit,token){
 }
 const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0};
 function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
+const HOMESTRO_ACCEPTANCE_PRODUCT_ID='16104465301886';
+function draftIsAllowedDuringAcceptance(product){
+ if(process.env.HOMESTRO_BULK_AUTOPILOT_ENABLED==='true')return true;
+ const expected=String(process.env.HOMESTRO_DRAFT_ACCEPTANCE_PRODUCT_ID||HOMESTRO_ACCEPTANCE_PRODUCT_ID);
+ return String(product?.id||'').split('/').pop()===expected;
+}
 async function runDraftImageQA(){
  if(process.env.HOMESTRO_IMAGE_QA_ENABLED==='false'){console.log('DRAFT IMAGE QA DISABLED');return {disabled:true};}
  if(draftAutopilotState.imageRunning)return;
@@ -1228,13 +1257,17 @@ async function runDraftImageQA(){
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'))).slice(0,50);
+  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&draftIsAllowedDuringAcceptance(p)&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'))).slice(0,process.env.HOMESTRO_BULK_AUTOPILOT_ENABLED==='true'?50:1);
   console.log('DRAFT IMAGE QA QUEUE','drafts='+nodes.length,'eligible='+imageEligible.length);
   for(const p of imageEligible){
    try{
+    await assertShopifyProductIsDraft(p.id,token);
     const result=await repairExistingDraftImages(p.id,p,token);
     const tags=[...(p.tags||[]).map(String)].filter(t=>!['homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-complete','homestro-ai-images-verified'].includes(t));
-    tags.push('homestro-ai-images-verified','homestro-ai-complete');
+    // Image QA proves only the image gate. Content and profit are verified separately by
+    // processExistingDraftProduct before that function may add homestro-ai-complete.
+    tags.push('homestro-ai-images-verified');
+    await assertShopifyProductIsDraft(p.id,token);
     const u=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags:[...new Set(tags)]}},token);
     const errs=u.productUpdate?.userErrors||[];
     if(errs.length)throw new Error(errs.map(x=>x.message).join('; '));
@@ -1260,7 +1293,8 @@ async function draftAutopilotRun(){
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)).slice(0,50);
+  // Bulk processing is opt-in only after the acceptance DRAFT has been manually verified.
+  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)&&draftIsAllowedDuringAcceptance(p)).slice(0,process.env.HOMESTRO_BULK_AUTOPILOT_ENABLED==='true'?50:1);
   draftAutopilotState.skipped=0;
   console.log('DRAFT AUTOPILOT QUEUE','shopifyDraftQuery='+nodes.length,'eligible='+eligible.length);
   let done=0;
