@@ -1,0 +1,2 @@
+Shopify DRAFT acceptance product numeric ID: 16104465301886
+Expected: German customer-facing content, functional option name Ausführung, no raw source-field language, quality failures cannot receive homestro-ai-complete.
