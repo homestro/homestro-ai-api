@@ -1,0 +1,1 @@
+DRAFT-only autopilot quality repair. Build patches server.js and validates JavaScript syntax before startup.

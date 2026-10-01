@@ -1,0 +1,1 @@
+This repair keeps the existing hard DRAFT status guard. It adds customer-text quality checks, German functional variant normalization, a forced single-product repair endpoint, and blocks the complete tag when quality remains pending. ACTIVE products are not eligible for mutation by the repair function.

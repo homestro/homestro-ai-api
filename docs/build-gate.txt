@@ -1,0 +1,1 @@
+Railway build runs deterministic helper tests, applies the server patch, and then runs node --check server.js. Any missing patch target or syntax error fails the build before production startup.
