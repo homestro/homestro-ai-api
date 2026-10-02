@@ -34,6 +34,14 @@ function countryFromValue(value) {
   return labelled ? (EU_WAREHOUSES.get(labelled[1].trim()) || '') : '';
 }
 
+function explicitHunterWarehouseQuery(value) {
+  const q = normalize(value).replace(/\s+/g, ' ');
+  const country = q.match(/^(GERMANY|DEUTSCHLAND|POLAND|POLEN|FRANCE|FRANKREICH|SPAIN|SPANIEN|CZECHIA|CZECH REPUBLIC|TSCHECHIEN|BELGIUM|BELGIEN|NETHERLANDS|NIEDERLANDE|AUSTRIA|OSTERREICH|ITALY|ITALIEN) WAREHOUSE\b/);
+  if (country) return EU_WAREHOUSES.get(country[1]) || '';
+  if (/^EU (?:STOCK|WAREHOUSE)\b/.test(q)) return 'EU';
+  return '';
+}
+
 function detectEuWarehouse(item) {
   const evidence = [];
   function visit(value, path, trustedContainer) {
@@ -50,8 +58,15 @@ function detectEuWarehouse(item) {
     }
   }
   visit(item, [], false);
+  if (!evidence.length) {
+    // This scraper returns the exact Hunter query in searchKeyword but often omits
+    // ship-from as a separate field. Only our explicit warehouse query grammar is
+    // accepted here; ordinary product titles/keywords are never treated as proof.
+    const queryCountry = explicitHunterWarehouseQuery(item?.searchKeyword);
+    if (queryCountry) evidence.push({country:queryCountry,path:'searchKeyword',value:String(item.searchKeyword),kind:'hunter-query'});
+  }
   const first = evidence[0];
   return { confirmed: Boolean(first), country: first?.country || '', evidence };
 }
 
-module.exports = { detectEuWarehouse, countryFromValue };
+module.exports = { detectEuWarehouse, countryFromValue, explicitHunterWarehouseQuery };
