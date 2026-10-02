@@ -1,0 +1,104 @@
+{% liquid
+  assign recommendation_intent = section.settings.intent | default: 'related'
+  assign section_heading = section.settings.heading
+  if recommendation_intent == 'complementary' and section_heading == blank
+    assign section_heading = 'Passt perfekt dazu'
+  elsif section_heading == blank
+    assign section_heading = 'Das könnte Ihnen auch gefallen'
+  endif
+  assign generic_collections = '|all|alle-produkte|bestseller|best-seller|neuheiten|new|new-arrivals|featured|frontpage|haushalt-wohnen|haustiere-tierpflege|garten-heimwerken|'
+  assign generic_types = '|haushalt|haushalt & wohnen|haustiere|haustiere & tierpflege|garten|garten & heimwerken|accessories|accessoires|general|other|sonstiges|'
+%}
+
+{% capture recommendation_cards %}
+  {% for recommendation in recommendations.products %}
+    {% liquid
+      assign is_relevant = false
+      if recommendation_intent == 'complementary'
+        assign is_relevant = true
+      else
+        for category in product.collections
+          assign category_key = category.handle | prepend: '|' | append: '|'
+          unless generic_collections contains category_key
+            for recommended_category in recommendation.collections
+              if category.id == recommended_category.id
+                assign is_relevant = true
+                break
+              endif
+            endfor
+          endunless
+          if is_relevant
+            break
+          endif
+        endfor
+        assign source_type = product.type | strip | downcase
+        assign recommended_type = recommendation.type | strip | downcase
+        assign type_key = source_type | prepend: '|' | append: '|'
+        if source_type != blank and source_type == recommended_type
+          unless generic_types contains type_key
+            assign is_relevant = true
+          endunless
+        endif
+      endif
+    %}
+    {% if is_relevant %}{% render 'product-card', product: recommendation %}{% endif %}
+  {% endfor %}
+{% endcapture %}
+{% assign recommendation_cards = recommendation_cards | strip %}
+
+<section
+  class="section product-recommendations"
+  data-product-recommendations
+  data-recommendation-intent="{{ recommendation_intent }}"
+  data-url="{{ routes.product_recommendations_url }}?section_id={{ section.id }}&product_id={{ product.id }}&limit={{ section.settings.products_to_show }}&intent={{ recommendation_intent }}"
+>
+  {% if recommendations.performed? %}
+    {% if recommendation_cards != blank %}
+      <div class="page-width">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Für Ihr Zuhause</div>
+            <h2 class="section-title">{{ section_heading }}</h2>
+          </div>
+        </div>
+        <div class="grid grid--4">
+          {{ recommendation_cards }}
+        </div>
+      </div>
+    {% endif %}
+  {% else %}
+    <div class="page-width recommendations-loading" aria-hidden="true"></div>
+  {% endif %}
+</section>
+
+{% schema %}
+{
+  "name": "Produktempfehlungen",
+  "settings": [
+    {
+      "type": "select",
+      "id": "intent",
+      "label": "Empfehlungstyp",
+      "options": [
+        { "value": "related", "label": "Ähnliche Produkte" },
+        { "value": "complementary", "label": "Ergänzende Produkte" }
+      ],
+      "default": "related"
+    },
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Überschrift"
+    },
+    {
+      "type": "range",
+      "id": "products_to_show",
+      "label": "Anzahl Produkte",
+      "min": 2,
+      "max": 8,
+      "step": 1,
+      "default": 4
+    }
+  ]
+}
+{% endschema %}
