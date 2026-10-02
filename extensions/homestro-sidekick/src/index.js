@@ -1,3 +1,5 @@
+import { assertDraftStatus } from './safety.mjs';
+
 export default () => {
   const asId = value => String(value || '').trim();
   const cleanTags = value => Array.isArray(value)
@@ -6,7 +8,7 @@ export default () => {
 
   // Railway is external to the Shopify app domain. Shopify's Sidekick sandbox
   // requires the documented auth.idToken() API for cross-origin requests.
-  const RAILWAY_BASE = 'https://homestro-ai-api-production.up.railway.app';
+  const RAILWAY_BASE = 'https://homestro-ai-api-fixed-current-production.up.railway.app';
   const railway = async (path, options = {}) => {
     const idToken = await auth.idToken();
     const response = await fetch(`${RAILWAY_BASE}${path}`, {
@@ -33,9 +35,7 @@ export default () => {
   });
 
   shopify.tools.register('homestro_price_check', async ({ cost, selling_price }) => {
-    const c = Number(cost); const p = Number(selling_price); const ratio = c > 0 ? p / c : 0;
-    const valid = Number.isFinite(c) && Number.isFinite(p) && c <= 12 && p >= c * 3;
-    return { valid, cost_eur: c, selling_price_eur: p, ratio: Number(ratio.toFixed(2)), rules: { max_cost_eur: 12, min_selling_price_formula: 'supplier cost × 3', min_ratio: 3 } };
+    return railway('/api/sidekick/products/validate', { method: 'POST', body: JSON.stringify({ cost, sellingPrice: selling_price }) });
   });
 
   shopify.tools.register('homestro_create_draft', async ({ title, description_html = '', vendor = '', product_type = '', category_id = '', handle = '', seo_title = '', seo_description = '', tags = [], price = '', compare_at_price = '' }) => {
@@ -56,6 +56,8 @@ export default () => {
     const id = asId(product_id);
     if (!id) throw new Error('product_id is required.');
     if (status !== 'DRAFT') throw new Error('Homestro AI Control only allows DRAFT status.');
+    const current = await shopify.query(`query HomestroSafetyStatus($id: ID!) { product(id: $id) { id status } }`, { variables: { id } });
+    assertDraftStatus(current?.product);
     const update = { id, status: 'DRAFT', ...(title ? { title: String(title).trim() } : {}), ...(description_html ? { descriptionHtml: String(description_html).trim() } : {}), ...(vendor ? { vendor: String(vendor).trim() } : {}), ...(product_type ? { productType: String(product_type).trim() } : {}), ...(category_id ? { category: asId(category_id) } : {}), ...(handle ? { handle: String(handle).trim() } : {}), ...(seo_title || seo_description ? { seo: { ...(seo_title ? { title: String(seo_title).trim() } : {}), ...(seo_description ? { description: String(seo_description).trim() } : {}) } } : {}), ...(cleanTags(tags).length ? { tags: cleanTags(tags) } : {}) };
     const result = await shopify.query(`mutation HomestroOptimizeProduct($product: ProductUpdateInput!) { productUpdate(product: $product) { product { id title handle status vendor productType tags category { id name fullName } seo { title description } } userErrors { field message } } }`, { variables: { product: update } });
     const payload = result?.productUpdate;

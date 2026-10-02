@@ -6,6 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node ./railway-bootstrap.js",
+    "test": "node --test test/*.test.js && node ./test-quality-repair.js",
     "postinstall": "npx playwright install chromium"
   },
   "engines": {
