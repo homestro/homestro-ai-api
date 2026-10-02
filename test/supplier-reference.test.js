@@ -18,3 +18,11 @@ test('validation accepts profitable ratios below 3 but keeps shipping pending', 
  assert.equal(result.valid,true); assert.equal(result.sellReady,false);
  assert.equal(validateProductEconomics({cost:15,sellingPrice:35},{}).valid,false);
 });
+
+test('Sidekick preserves legitimate source and rejects ACTIVE and spoofed URLs', async () => {
+ const { sourceMetafieldsBeforeRewrite }=await import('../extensions/homestro-sidekick/src/safety.mjs');
+ const product={id:'gid://shopify/Product/1',status:'DRAFT',descriptionHtml:'<a href="https://www.aliexpress.com/item/123456789.html">Source</a>'};
+ assert.equal(sourceMetafieldsBeforeRewrite(product).length,2);
+ assert.throws(()=>sourceMetafieldsBeforeRewrite({...product,status:'ACTIVE'}),/only DRAFT/);
+ assert.deepEqual(sourceMetafieldsBeforeRewrite({...product,descriptionHtml:'https://evil.test/item/123.html'}),[]);
+});

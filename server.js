@@ -1,3 +1,4 @@
+const {fulfillmentCostEvidence}=require('./fulfillment-cost-evidence');
 const {supplierReferenceMetafields}=require('./supplier-reference');
 const {normalizeSelectedDraftId}=require('./selected-draft');
 // Railway sync: DSers-imported Shopify DRAFTs are eligible for Homestro autopilot.
@@ -379,11 +380,11 @@ function homestroTargetSellingPrice(cost,currentPrice,title){
  const target=priceForCost(landed,current,{minSellingPrice:base,minNetProfit:r.minNetProfit,commissionRate:Number(process.env.EBAY_COMMISSION_RATE||0.14),feeVatRate:Number(process.env.EBAY_FEE_VAT_RATE||0.19),adRate:Number(process.env.EBAY_MAX_AD_RATE||0.15),orderFee:Number(process.env.EBAY_ORDER_FEE_EUR||0.45)});
  return target??current;
 }
-async function homestroAutoPriceVariants(productId,variants,title,token){
+async function homestroAutoPriceVariants(productId,variants,title,token,costEvidence={}){
  const source=Array.isArray(variants)?variants:[];
  const updates=[],planned=[];
  for(const v of source){
-  const price=Number(v.price||0),cost=Number(v.inventoryItem?.unitCost?.amount||NaN);
+  const price=Number(v.price||0),cost=Number(costEvidence[v.id]??v.inventoryItem?.unitCost?.amount??NaN);
   if(!v.id||!Number.isFinite(price)||price<=0||!Number.isFinite(cost)||cost<=0)continue;
   const target=homestroTargetSellingPrice(cost,price,title);
   planned.push({id:v.id,currentPrice:price,cost,target});
@@ -853,6 +854,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   if(saved.metafieldsSet?.userErrors?.length)throw new Error(saved.metafieldsSet.userErrors.map(e=>e.message).join('; '));
  }
 
+ const landedEvidence=fulfillmentCostEvidence(mf.fulfillment_cost_evidence,p.variants?.nodes||[],src);
  let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
  const hasImages=(p.media?.nodes||[]).some(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  const imageNeedsSource=existingTags.includes('homestro-ai-image-pending')||!hasImages;
@@ -868,7 +870,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  let cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
  let pricing={changed:0,planned:[]};
  if((p.variants?.nodes||[]).length){
-  pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token);
+  pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token,landedEvidence.landedByVariant);
   if(pricing.changed){
    const refreshed=await shopifyGraphQL('query($id:ID!){product(id:$id){variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}}}}',{id:productId},token);
    p.variants.nodes=refreshed.product?.variants?.nodes||p.variants.nodes;
@@ -876,14 +878,16 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
    cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
   }
  }
+ const supplierCost=cost;
+ if(landedEvidence.verified)cost=landedEvidence.landedByVariant[p.variants?.nodes?.[0]?.id]??cost;
  const ratio=cost>0&&price>0?price/cost:NaN;
  const variantEconomics=(p.variants?.nodes||[]).map(v=>{
-  const vp=Number(v.price||0),vc=Number(v.inventoryItem?.unitCost?.amount||NaN);
+  const vp=Number(v.price||0),vc=Number(landedEvidence.landedByVariant[v.id]??v.inventoryItem?.unitCost?.amount??NaN);
   return {id:v.id,price:vp,cost:vc,economics:ebayProfitability({selling_price:vp,landed_cost_eur:vc})};
  });
  const profitability=ebayProfitability({selling_price:price,landed_cost_eur:cost});
- const profitPending=true; // Supplier unit costs exclude destination shipping/tax; keep actual profit pending.
  const supplierContributionPending=variantEconomics.length===0||variantEconomics.some(v=>!Number.isFinite(v.cost)||v.cost<=0||!v.economics.valid);
+ const profitPending=!landedEvidence.verified||supplierContributionPending;
  let x=null;
  const aiInput={
   title:details.page_title||p.title,
@@ -1003,11 +1007,12 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  // tags never claim readiness based on optimistic local state.
  const verified=(await shopifyGraphQL('query($id:ID!){product(id:$id){id status title description productType seo{title description} collections(first:20){nodes{id title handle}} variants(first:100){nodes{id price selectedOptions{name value} image{id url} inventoryItem{unitCost{amount}}}} media(first:30){nodes{id ... on MediaImage{image{url width height}}}}}}',{id:productId},token)).product;
  assertDraftProduct(verified);
- const qa=qaProduct({...verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
+ for(const v of verified.variants?.nodes||[])if(landedEvidence.verified)v.cost=landedEvidence.landedByVariant[v.id];
+ const qa=qaProduct({...verified,landedCostVerified:landedEvidence.verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
  finalTags.push(qa.ok?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>qa.ok?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
  await setProductTags(productId,[...new Set(cleanFinal)],token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok,landedCostVerified:false,profitStatus:'PROVISIONAL_BEFORE_SHIPPING_AND_TAX',supplierContributionPending};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,supplierCost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PROVISIONAL_BEFORE_SHIPPING_AND_TAX',supplierContributionPending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);

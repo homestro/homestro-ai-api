@@ -1,4 +1,4 @@
-import { assertDraftStatus } from './safety.mjs';
+import { assertDraftStatus, sourceMetafieldsBeforeRewrite } from './safety.mjs';
 
 export default () => {
   const asId = value => String(value || '').trim();
@@ -56,8 +56,13 @@ export default () => {
     const id = asId(product_id);
     if (!id) throw new Error('product_id is required.');
     if (status !== 'DRAFT') throw new Error('Homestro AI Control only allows DRAFT status.');
-    const current = await shopify.query(`query HomestroSafetyStatus($id: ID!) { product(id: $id) { id status } }`, { variables: { id } });
+    const current = await shopify.query(`query HomestroSafetyStatus($id: ID!) { product(id: $id) { id status descriptionHtml metafields(first: 20, namespace: "homestro") { nodes { key value } } } }`, { variables: { id } });
     assertDraftStatus(current?.product);
+    const sourceFields = sourceMetafieldsBeforeRewrite(current?.product);
+    if (sourceFields.length) {
+      const saved = await shopify.query(`mutation HomestroRetainSupplier($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { field message } } }`, { variables: { metafields: sourceFields } });
+      if (saved?.metafieldsSet?.userErrors?.length) return { ok: false, stage: "retain_supplier", userErrors: saved.metafieldsSet.userErrors };
+    }
     const update = { id, status: 'DRAFT', ...(title ? { title: String(title).trim() } : {}), ...(description_html ? { descriptionHtml: String(description_html).trim() } : {}), ...(vendor ? { vendor: String(vendor).trim() } : {}), ...(product_type ? { productType: String(product_type).trim() } : {}), ...(category_id ? { category: asId(category_id) } : {}), ...(handle ? { handle: String(handle).trim() } : {}), ...(seo_title || seo_description ? { seo: { ...(seo_title ? { title: String(seo_title).trim() } : {}), ...(seo_description ? { description: String(seo_description).trim() } : {}) } } : {}), ...(cleanTags(tags).length ? { tags: cleanTags(tags) } : {}) };
     const result = await shopify.query(`mutation HomestroOptimizeProduct($product: ProductUpdateInput!) { productUpdate(product: $product) { product { id title handle status vendor productType tags category { id name fullName } seo { title description } } userErrors { field message } } }`, { variables: { product: update } });
     const payload = result?.productUpdate;
