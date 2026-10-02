@@ -189,10 +189,12 @@ document.addEventListener('submit', (event) => {
 
 document.querySelectorAll('[data-sort-select]').forEach((select) => {
   select.addEventListener('change', () => {
-    const form = select.closest('[data-facets-form]');
-    form.querySelectorAll('[data-sort-select]').forEach((otherSelect) => {
+    const form = select.form;
+    if (!form) return;
+    select.closest('[data-facets-root]').querySelectorAll('[data-sort-select]').forEach((otherSelect) => {
       otherSelect.value = select.value;
     });
+    form.querySelector('input[name="sort_by"]').value = select.value;
     form.requestSubmit();
   });
 });
