@@ -73,7 +73,7 @@
       </div>
 
       {% if product.description != blank %}
-        <div class="rte product__intro">{{ product.description | strip_html | truncatewords: 42 }}</div>
+        <div class="rte product__intro">{{ product.description | replace: '</p>', ' </p>' | replace: '</li>', ' </li>' | replace: '</h2>', ' </h2>' | replace: '</h3>', ' </h3>' | strip_html | truncatewords: 42 }}</div>
       {% endif %}
 
       {% form 'product', product, class: 'product-form', data-ajax-cart: '', novalidate: 'novalidate' %}
@@ -116,15 +116,9 @@
         <div>▣ Sichere, verschlüsselte Zahlung</div>
       </div>
     </div>
-    <aside class="product__complementary" data-complementary-slot hidden aria-label="Ergänzende Produkte"></aside>
   </div>
 
-  {% if product.description != blank %}
-    <div class="section product-details">
-      <h2 class="section-title">Produktdetails</h2>
-      <div class="rte">{{ product.description }}</div>
-    </div>
-  {% endif %}
+  {% if product.description != blank %}<details class="product-details" open><summary>Produktdetails</summary><div class="rte">{{ product.description }}</div></details>{% endif %}
 
   <script type="application/json" data-product-variants>
     [
@@ -146,13 +140,7 @@
 {% schema %}
 {
   "name": "Produkt",
-  "settings": [
-    {
-      "type": "checkbox",
-      "id": "show_rating",
-      "label": "Qualitätsbewertung anzeigen",
-      "default": true
-    }
-  ]
+  "settings": []
 }
 {% endschema %}
+
