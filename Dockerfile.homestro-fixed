@@ -15,7 +15,7 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV CHROMIUM_PATH=/usr/bin/chromium
 RUN npm install --omit=dev
 COPY . .
-# Autopilot quality logic is now integrated directly in server.js/autopilot-core.js.
-# Do not run the legacy source-text patcher here because its targets may no longer exist.
-RUN node ./test-quality-repair.js && node --check ./server.js && node --check ./autopilot-core.js
+# Autopilot quality logic is integrated directly in server.js/autopilot-core.js.
+# Apply a deterministic Apify budget/cache guard before syntax validation so Hunter cannot create runaway paid Actor runs.
+RUN node ./patch-apify-cost-guard.js && node ./test-quality-repair.js && node --check ./server.js && node --check ./autopilot-core.js
 CMD ["node", "./server.js"]
