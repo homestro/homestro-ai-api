@@ -8,7 +8,8 @@ const DEFAULT_PRODUCT_RULES = Object.freeze({
   minNetProfit: 12,
   headphoneMinCost: 10,
   headphoneMaxCost: 27,
-  headphoneMinRatio: 2.9
+  headphoneMinRatio: 2.9,
+  amazonMinMatchConfidence: 0.85
 });
 
 function finiteNumber(value, fallback) {
@@ -25,7 +26,8 @@ function getProductRules(env = process.env) {
     minNetProfit: finiteNumber(env.MIN_NET_PROFIT_EUR, DEFAULT_PRODUCT_RULES.minNetProfit),
     headphoneMinCost: finiteNumber(env.HOMESTRO_HEADPHONE_MIN_COST, DEFAULT_PRODUCT_RULES.headphoneMinCost),
     headphoneMaxCost: finiteNumber(env.HOMESTRO_HEADPHONE_MAX_COST, DEFAULT_PRODUCT_RULES.headphoneMaxCost),
-    headphoneMinRatio: finiteNumber(env.HOMESTRO_HEADPHONE_MIN_RATIO, DEFAULT_PRODUCT_RULES.headphoneMinRatio)
+    headphoneMinRatio: finiteNumber(env.HOMESTRO_HEADPHONE_MIN_RATIO, DEFAULT_PRODUCT_RULES.headphoneMinRatio),
+    amazonMinMatchConfidence: finiteNumber(env.HOMESTRO_AMAZON_MIN_MATCH_CONFIDENCE, DEFAULT_PRODUCT_RULES.amazonMinMatchConfidence)
   };
 }
 
