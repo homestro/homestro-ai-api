@@ -1,0 +1,1 @@
+Apify AliExpress warehouse detection now requires concrete warehouse/shipping evidence for a supported European country (DE, PL, CZ, ES, FR, IT, NL, BE, AT and country-name variants). Search keywords such as "EU Stock" alone are not accepted as warehouse proof. China/CN remains rejected.
