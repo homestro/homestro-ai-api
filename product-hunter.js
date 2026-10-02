@@ -5,9 +5,34 @@ function targetSellingPrice(cost, isHeadphone, rules) {
   return Math.max(rules.minSellingPrice, Math.ceil(Number(cost) * minRatio * 100) / 100);
 }
 
+function euWarehouseSearchSignal(candidate) {
+  // Apify's AliExpress actor often exposes the warehouse intent only in the
+  // originating search term (for example "Germany Warehouse kitchen tool")
+  // while omitting shipFromCountry/warehouseCountry from the result row.
+  // Treat this only as a sourcing CANDIDATE signal, never as final proof.
+  let context = candidate?.context;
+  if (typeof context === 'string') {
+    try { context = JSON.parse(context); } catch { context = {}; }
+  }
+  const values = [
+    candidate?.searchKeyword, candidate?.search_keyword, candidate?.keyword,
+    context?.searchKeyword, context?.search_keyword, context?.keyword,
+    context?.searchTerm, context?.search_term, context?.foundBySearchTerm
+  ].filter(Boolean).map(String);
+  const joined = values.join(' ');
+  return /\b(?:EU\s*(?:Stock|Warehouse)|Germany\s*Warehouse|France\s*Warehouse|Poland\s*Warehouse|German\s*Warehouse|French\s*Warehouse|Polish\s*Warehouse)\b/i.test(joined);
+}
+
 function externalCandidateRejection(candidate, rules) {
   if (String(candidate.source_role || 'supplier') === 'market_reference') return '';
-  if (candidate.euWarehouse !== true) return 'eu-warehouse-not-confirmed';
+  // Explicit structured warehouse evidence remains preferred. Search-term
+  // evidence only allows the already-paid row into evaluation; downstream
+  // sourcing verification must still confirm the actual variant/warehouse.
+  if (candidate.euWarehouse !== true && !euWarehouseSearchSignal(candidate)) return 'eu-warehouse-not-confirmed';
+  if (candidate.euWarehouse !== true) {
+    candidate.euWarehouseCandidate = true;
+    candidate.euWarehouseVerificationRequired = true;
+  }
   const cost = Number(candidate.costEur ?? candidate.cost);
   if (!Number.isFinite(cost) || cost <= 0) return 'invalid-cost';
   if (Number(candidate.sold || 0) < rules.minSold) return 'external-sales-under-threshold';
@@ -64,4 +89,4 @@ function catalogCandidateRejection(candidate, rules, profitability) {
   return '';
 }
 
-module.exports = { catalogCandidateRejection, externalCandidateRejection, targetSellingPrice, amazonComparison, chooseBestSource };
+module.exports = { catalogCandidateRejection, externalCandidateRejection, targetSellingPrice, amazonComparison, chooseBestSource, euWarehouseSearchSignal };
