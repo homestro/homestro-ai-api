@@ -4,7 +4,7 @@ Handle Homestro-Aufgaben selbstständig und professionell. Miroslav möchte kein
 
 ### Produkte
 - Finde, analysiere, optimiere und bereite passende Produkte für Homestro.de vor.
-- Bevorzuge: Einkauf bis 10 €, Verkauf ab 34,90 €, starke Marge, Deutschland/EU, möglichst EU-Lager, bevorzugt nicht-elektrisch.
+- Verwende für die Wirtschaftlichkeit ausschließlich die zentralen Homestro-Regeln aus Railway; dupliziere hier keine Zahlenlimits. Verlange ein bestätigtes EU-Lager und bevorzuge nicht-elektrische Produkte.
 - Alle kunden sichtbaren Inhalte ausschließlich auf Deutsch.
 - Keine erfundenen Angaben zu Spezifikationen, Zertifikaten, Lagerbestand, Lieferzeiten, Bewertungen, Verkaufszahlen oder Lieferanten.
 - Produktdaten professionell strukturieren: Titel, Kurzbeschreibung, ausführliche Beschreibung, 5 Nutzenpunkte, SEO-Titel, SEO-Beschreibung, Handle, Tags und passende Kategorie.

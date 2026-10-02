@@ -16,10 +16,13 @@ Optional integrations:
 
 ## Product rules
 
-Defaults match the Homestro product-hunter workflow:
-- Cost <= $10
-- Selling price >= $34.90
+Defaults come from `homestro-rules.js` and are shared by the API, Product Hunter,
+Shopify Sidekick and product import workflow:
+- Cost <= EUR 15
+- Selling price >= EUR 34.90
 - Price/cost ratio >= 3x
+- At least 1,000 recorded sales
+- Estimated net profit >= EUR 12
 
 These can be overridden with Railway variables.
 

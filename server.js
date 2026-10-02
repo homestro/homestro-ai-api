@@ -2,6 +2,10 @@
 const express=require('express');
 const cors=require('cors');
 const crypto=require('crypto');
+const {getProductRules,validateProductEconomics}=require('./homestro-rules');
+const {catalogCandidateRejection,externalCandidateRejection,targetSellingPrice}=require('./product-hunter');
+const {assertDraftProduct,isDraftProduct}=require('./shopify-safety');
+const {registerSidekickApi}=require('./sidekick-api');
 const app=express();
 const PORT=Number(process.env.PORT||8080);
 app.use(cors({origin:true}));
@@ -52,8 +56,8 @@ app.get('/health',(_q,res)=>res.json({ok:true,service:'homestro-ai-api',timestam
 app.get('/api/status',apiKey,(_q,res)=>res.json({ok:true,service:'homestro-ai-api',shopifyConfigured:Boolean(cfg().domain),openaiConfigured:Boolean(process.env.OPENAI_API_KEY),imageValidation:'strict-vision'}));
 app.get('/api/shopify/connection',apiKey,async(_q,res)=>{try{const d=await shopifyGraphQL('{shop{name myshopifyDomain}}');res.json({ok:true,connected:true,shop:d.shop});}catch(e){res.status(e.status||502).json({ok:false,connected:false,error:e.message});}});
 app.get('/api/shopify/products',apiKey,async(req,res)=>{try{const first=Math.min(Math.max(Number(req.query.limit)||20,1),50),q=String(req.query.query||'').trim();const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query){nodes{id title handle status vendor productType tags totalInventory priceRangeV2{minVariantPrice{amount currencyCode}maxVariantPrice{amount currencyCode}}variants(first:100){nodes{id title price sku inventoryQuantity selectedOptions{name value}image{id url altText}}}media(first:50){nodes{mediaContentType alt}}seo{title description}}pageInfo{hasNextPage endCursor}}}',{first,query:q||null});res.json({ok:true,...d.products});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
-function rules(){return{maxCost:Number(process.env.MAX_PRODUCT_COST||15),minSellingPrice:Number(process.env.MIN_SELLING_PRICE||34.9),minRatio:Number(process.env.MIN_PRICE_COST_RATIO||3)};}
-function validateProduct(cost,sellingPrice,ratio){const r=rules();return{valid:Number.isFinite(cost)&&Number.isFinite(sellingPrice)&&Number.isFinite(ratio)&&cost<=r.maxCost&&sellingPrice>=r.minSellingPrice&&ratio>=r.minRatio,product:{cost,sellingPrice,ratio},rules:r};}
+function rules(){return getProductRules(process.env);}
+function validateProduct(cost,sellingPrice,ratio){return validateProductEconomics({cost,sellingPrice,ratio},process.env);}
 app.post('/api/products/validate',apiKey,(req,res)=>{const cost=Number(req.body?.cost),sellingPrice=Number(req.body?.sellingPrice),ratio=Number(req.body?.ratio);if(![cost,sellingPrice,ratio].every(Number.isFinite))return res.status(400).json({ok:false,error:'cost, sellingPrice and ratio must be numbers.'});res.json({ok:true,...validateProduct(cost,sellingPrice,ratio)});});
 // HOMESTRO_EBAY_PROFIT_GATE
 function ebayProfitability(input){
@@ -361,8 +365,8 @@ function homestroTargetSellingPrice(cost,currentPrice,title){
  const t=String(title||'').toLowerCase();
  const isHeadphone=/(earphone|earbuds?|headphone|headset|kopfhörer|ohrhörer|bluetooth)/i.test(t);
  const r=rules();
- const base=isHeadphone?69.90:34.90;
- const minRatio=isHeadphone?Math.max(r.minRatio,2.9):Math.max(r.minRatio,3);
+ const base=r.minSellingPrice;
+ const minRatio=isHeadphone?r.headphoneMinRatio:r.minRatio;
  const ratioFloor=landed*minRatio;
  const profitFloor=ebayProfitability({selling_price:Math.max(base,ratioFloor),landed_cost_eur:landed}).minRequiredSellingPriceEur;
  const target=Math.max(current,base,ratioFloor,Number.isFinite(profitFloor)?profitFloor:0);
@@ -426,7 +430,7 @@ async function createDraft(input,token){
 }
 
 app.post('/api/shopify/products/draft',apiKey,async(req,res)=>{try{res.status(201).json({ok:true,product:await createDraft(req.body?.product||req.body),status:'DRAFT'});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,userErrors:e.details});}});
-async function updateVariants(productId,variants,token){const normalized=(Array.isArray(variants)?variants:[]).map(v=>({id:String(v.id||''),optionValues:(v.optionValues||[]).map(o=>({optionName:String(o.optionName||''),name:String(o.name||'')}))})).filter(v=>v.id&&v.optionValues.length&&v.optionValues.every(o=>o.optionName&&o.name));if(!productId||!normalized.length)throw Object.assign(new Error('productId and valid variants are required.'),{status:400});const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants,allowPartialUpdates:false){product{id title options{id name optionValues{id name}}variants(first:100){nodes{id title selectedOptions{name value}image{id url altText}}}}userErrors{field message}}}',{productId,variants:normalized},token);if(d.productVariantsBulkUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected the variant update.'),{status:400,details:d.productVariantsBulkUpdate.userErrors});return d.productVariantsBulkUpdate.product;}
+async function updateVariants(productId,variants,token){const safety=await shopifyGraphQL('query($id:ID!){product(id:$id){id status}}',{id:productId},token);assertDraftProduct(safety.product);const normalized=(Array.isArray(variants)?variants:[]).map(v=>({id:String(v.id||''),optionValues:(v.optionValues||[]).map(o=>({optionName:String(o.optionName||''),name:String(o.name||'')}))})).filter(v=>v.id&&v.optionValues.length&&v.optionValues.every(o=>o.optionName&&o.name));if(!productId||!normalized.length)throw Object.assign(new Error('productId and valid variants are required.'),{status:400});const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants,allowPartialUpdates:false){product{id title options{id name optionValues{id name}}variants(first:100){nodes{id title selectedOptions{name value}image{id url altText}}}}userErrors{field message}}}',{productId,variants:normalized},token);if(d.productVariantsBulkUpdate.userErrors?.length)throw Object.assign(new Error('Shopify rejected the variant update.'),{status:400,details:d.productVariantsBulkUpdate.userErrors});return d.productVariantsBulkUpdate.product;}
 app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({ok:true,product:await updateVariants(String(req.body.productId||''),req.body.variants,await getClientToken())});}catch(e){res.status(e.status||502).json({ok:false,error:e.message,userErrors:e.details});}});
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
@@ -720,11 +724,7 @@ async function homestroCompetitivePrice(candidate){
 }
 
 function homestroExternalCandidatePass(x){
- if(String(x.source_role||'supplier')==='market_reference')return '';
- if(!x.euWarehouse)return 'eu-warehouse-not-confirmed';
- if(!Number.isFinite(Number(x.costEur))||Number(x.costEur)<=0)return 'invalid-cost';
- if(Number(x.sold||0)<Number(process.env.HOMESTRO_EXTERNAL_MIN_SOLD||100))return 'external-sales-under-threshold';
- return '';
+ return externalCandidateRejection(x,rules());
 }
 
 async function catalogSearch(keyword){
@@ -746,260 +746,12 @@ async function catalogSearch(keyword){
   console.log('CATALOG PRIMARY SOURCES EMPTY',keyword,'no-browser-fallback=true');
   return [];
 
-  if(out.filter(x=>x.euWarehouse===true).length>=Number(process.env.HOMESTRO_API_MIN_EU_CANDIDATES||8)){
-    console.log('CATALOG API/FEED SUFFICIENT',keyword,'items='+out.length,'euConfirmed='+out.filter(x=>x.euWarehouse===true).length);
-    return out.slice(0,200);
-  }
-  const cleanText=(html)=>String(html||'')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi,' ')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi,' ')
-    .replace(/<[^>]+>/g,' ')
-    .replace(/&nbsp;/gi,' ')
-    .replace(/&amp;/gi,'&')
-    .replace(/&quot;/gi,'"')
-    .replace(/&#39;|&apos;/gi,"'")
-    .replace(/\s+/g,' ')
-    .trim();
-
-  const plausibleTitle=(t)=>{
-    const s=cleanText(t);
-    if(!s)return '';
-    if(/^(?:ali ?express|search|page not found|access denied|just a moment|something went wrong)$/i.test(s))return '';
-    if(/(?:search results|404|not found|access denied)/i.test(s)&&s.length<220)return '';
-    if(s.length<8||s.length>500)return '';
-    return s;
-  };
-
-  const addId=(id,context='',extra={})=>{
-    id=String(id||'').replace(/[^0-9]/g,'');
-    if(id.length<8||ids.has(id))return;
-    ids.add(id);
-    const ctx=String(context||'');
-    const euEvidence=/(EU\s*stock|EU\s*warehouse|ships?\s*from\s*(?:Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)|\b(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)\s*(?:warehouse|stock))/i.test(ctx);
-    const soldMatch=ctx.match(/(?:orders?|sold|sales|units?|verkauft)\s*[:：]?\s*([0-9][0-9.,]*\s*[kmb]?\+?)/i)
-      ||ctx.match(/([0-9][0-9.,]*\s*[kmb]?\+?)\s*(?:orders?|sold|sales|units?)/i);
-    const costMatch=ctx.match(/(?:EUR|€|\$)\s*([0-9]+(?:[.,][0-9]{1,2})?)/i)
-      ||ctx.match(/([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|€)/i);
-
-    out.push({
-      id,
-      title:plausibleTitle(extra.title)||keyword,
-      cost:Number.isFinite(extra.cost)?extra.cost:(costMatch?catalogNum(costMatch[1]):NaN),
-      sold:Number(extra.sold||0)||(soldMatch?catalogNum(soldMatch[1]):0),
-      image_urls:Array.isArray(extra.image_urls)?extra.image_urls:[],
-      source_url:'https://www.aliexpress.com/item/'+id+'.html',
-      context:ctx,
-      evidence:ctx.slice(0,3000),
-      euWarehouse:extra.euWarehouse===true||euEvidence,
-      source_type:extra.source_type||'unknown'
-    });
-  };
-
-  if(/headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai/i.test(keyword)){
-    addId('1005008550894374','PandaFind EU Stock seed',{
-      title:'Soundcore P20I Wireless Bluetooth 5.3 Earbuds EU Stock',
-      cost:15.48,sold:2457,euWarehouse:true,source_type:'seed'
-    });
-  }
-
-  const fetchText=async(url,headers={})=>{
-    try{
-      const r=await fetch(url,{headers:{
-        'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
-        'Accept-Language':'de-DE,de;q=0.9,en;q=0.8',
-        'Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
-        ...headers
-      },redirect:'follow'});
-      const html=await r.text();
-      return r.ok?html:'';
-    }catch{return '';}
-  };
-
-  const addSearchBlock=(block,source_type)=>{
-    const text=cleanText(block);
-    if(!text)return;
-    const idsFound=new Set();
-    const linkRe=/(?:https?:\/\/(?:www\.)?aliexpress\.com)?(?:\/item\/|\/i\/)(\d{8,})(?:\.html)?/gi;
-    let m;
-    while((m=linkRe.exec(block)))idsFound.add(m[1]);
-    if(!idsFound.size){
-      const p=block.match(/(?:productId|product_id|itemId|item_id)["']?\s*[:=]\s*["']?(\d{8,})/i);
-      if(p)idsFound.add(p[1]);
-    }
-    if(!idsFound.size)return;
-
-    const tm=block.match(/<h[1-6][^>]*>([\s\S]{0,1000}?)<\/h[1-6]>/i)
-      ||block.match(/<a[^>]*>([\s\S]{0,1000}?)<\/a>/i);
-    const title=tm?plausibleTitle(tm[1]):'';
-    const eu=/(EU\s*stock|EU\s*warehouse|ships?\s*from\s*(?:Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)|\b(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)\s*(?:warehouse|stock))/i.test(text);
-    if(!eu)return;
-    for(const id of idsFound)addId(id,text,{title,euWarehouse:true,source_type});
-  };
-
-  const parseAliSearch=(html)=>{ 
-    const normalized=String(html||'')
-      .replace(/&amp;/g,'&').replace(/&#x2F;/gi,'/')
-      .replace(/\\u002F/g,'/').replace(/\\\\\//g,'/');
-
-    const seenLocal=new Set();    const urlRe=new RegExp('(?:https?:\\/\\/(?:www\\.)?aliexpress\\.com)?(?:\\/item\\/|\\/i\\/)(\\d{8,})(?:\\.html)?','gi');
-    let m;
-    while((m=urlRe.exec(normalized))&&ids.size<1000){
-      const id=m[1];
-      const key=id+'@'+Math.floor(m.index/2500);
-      if(seenLocal.has(key))continue;
-      seenLocal.add(key);
-      const local=cleanText(normalized.slice(Math.max(0,m.index-1800),Math.min(normalized.length,m.index+2200)));
-      const eu=/(EU\\s*stock|EU\\s*warehouse|ships?\\s*from\\s*(?:Germany|Deutschland|Poland|Polen|Czech(?:ia| Republic)|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)|\\b(?:Germany|Deutschland|Poland|Polen|Czechia|Czech Republic|Tschechien|Spain|Spanien|France|Frankreich|Italy|Italien|Netherlands|Niederlande|Belgium|Belgien|Austria|Österreich)\\s*(?:warehouse|stock))/i.test(local);
-      const titleMatch=local.match(/(?:product|title|name)[^\\n:]{0,30}[:：]\\s*([^\\n]{10,240})/i);
-      const priceMatch=local.match(/(?:EUR|€)\\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+(?:[.,][0-9]{1,2})?)\\s*(?:EUR|€)/i);
-      const soldMatch=local.match(/(?:orders?|sold|sales|units?|verkauft)\\s*[:：]?\\s*([0-9][0-9.,]*\\s*[kmb]?\\+?)|([0-9][0-9.,]*\\s*[kmb]?\\+?)\\s*(?:orders?|sold|sales|units?)/i);
-      const title=titleMatch?plausibleTitle(titleMatch[1]):'';
-      const cost=priceMatch?catalogNum(priceMatch[1]||priceMatch[2]):NaN;
-      const sold=soldMatch?catalogNum(soldMatch[1]||soldMatch[2]):0;
-      addId(id,local,{title,cost,sold,euWarehouse:eu,source_type:'search-engine-local'});
-    }
-
-    const blocks=[];
-    function collectHtmlBlocks(tag,className,maxBlockLength){
-      let pos=0;
-      const open='<'+tag;
-      const close='</'+tag+'>';
-      while(pos<normalized.length&&blocks.length<400){
-        const a=normalized.indexOf(open,pos);
-        if(a<0)break;
-        const openEnd=normalized.indexOf('>',a);
-        if(openEnd<0)break;
-        const header=normalized.slice(a,openEnd+1);
-        if(header.includes(className)){
-          const b=normalized.indexOf(close,openEnd+1);
-          if(b<0)break;
-          const endPos=b+close.length;
-          if(endPos-a<=maxBlockLength)blocks.push(normalized.slice(a,endPos));
-          pos=endPos;
-        }else{
-          pos=openEnd+1;
-        }
-      }
-    }
-    collectHtmlBlocks('li','b_algo',30000);
-    collectHtmlBlocks('div','MjjYud',18000);
-    collectHtmlBlocks('div','result',12000);
-    for(const block of blocks)addSearchBlock(block,'search-engine');
-
-    let pm;
-    const re=/(?:productId|product_id|itemId|item_id)\s*["']?\s*[:=]\s*["']?(\d{8,})/gi;
-    while((pm=re.exec(normalized))&&ids.size<1000){
-      const ctx=cleanText(normalized.slice(Math.max(0,pm.index-900),Math.min(normalized.length,pm.index+1500)));
-      addId(pm[1],ctx,{source_type:'aliexpress-search'});
-    }
-  };
-
-  // First direct AliExpress discovery.
-  const slug=encodeURIComponent(keyword).replace(/%20/g,'-');
-  const aliUrls=[
-    'https://www.aliexpress.com/w/wholesale-'+slug+'.html?g=y&page=1',
-    'https://www.aliexpress.com/w/wholesale-'+slug+'.html?page=2',
-    'https://www.aliexpress.com/w/wholesale-'+slug+'.html?SearchText='+encodeURIComponent(keyword),
-    'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=1',
-    'https://www.aliexpress.com/wholesale?SearchText='+encodeURIComponent(keyword)+'&page=2'
-  ];  for(const url of aliUrls){
-    const html=await fetchText(url);
-    if(html.length>5000)parseAliSearch(html);
-    if(out.length>=120)break;
-  }
-
-  // Browser discovery: render AliExpress search results like a real browser when plain HTML
-  // does not expose reliable EU-stock evidence.
-  const confirmedEU=()=>out.filter(x=>x.euWarehouse===true).length;
-  if(confirmedEU()<8 && process.env.ALIEXPRESS_BROWSER_ENABLED!=='false'){
-    for(const u of aliUrls.slice(0,3)){
-      try{
-        const b=await aliExpressBrowserRead(u,{waitMs:5000});
-        if(b.html)parseAliSearch(b.html);
-        if(confirmedEU()>=8)break;
-      }catch{}
-    }
-  }
-
-  // The fallback threshold is confirmed EU candidates, NOT total IDs.
-  if(confirmedEU()<8){
-    const countries=['Germany','Poland','Czech Republic','Spain','France','Italy','Netherlands','Belgium','Austria'];
-    const queries=[
-      'site:aliexpress.com/item/ '+keyword+' "Ships From" ('+countries.join(' OR ')+')',
-      'site:aliexpress.com/item/ '+keyword+' "Ships From Poland"',
-      'site:aliexpress.com/item/ '+keyword+' "Ships From Germany"',
-      'site:aliexpress.com/item/ '+keyword+' "Ships From Czech Republic"',
-      'site:aliexpress.com/item/ '+keyword+' "Ships From France"',
-      'site:aliexpress.com/item/ '+keyword+' "Ships From Spain"',
-      'site:aliexpress.com/item/ '+keyword+' "Ships From Italy"',
-      'site:aliexpress.com/item/ '+keyword+' "Ships From Netherlands"',
-      'site:aliexpress.com/item/ '+keyword+' "EU warehouse"',
-      'site:aliexpress.com/item/ '+keyword+' "EU stock"',
-      'site:aliexpress.com/item '+keyword+' orders'
-    ];
-    const sources=[];
-    for(const query of queries){
-      const q=encodeURIComponent(query);
-      sources.push('https://www.bing.com/search?q='+q+'&count=50');
-      sources.push('https://www.google.com/search?q='+q+'&num=50');
-      sources.push('https://html.duckduckgo.com/html/?q='+q);
-    }
-    for(const u of sources){
-      const html=await fetchText(u,{'Accept-Language':'en-US,en;q=0.9'});
-      if(html)parseAliSearch(html);
-      if(confirmedEU()>=80)break;
-    }
-  }
-
-  // Verify a bounded sample of discovered products on their actual detail pages.
-  // Search-result snippets often hide the selected warehouse, so browser detail verification
-  // must also run for candidates without prior EU evidence. This keeps EU strict while
-  // preventing the search parser from discarding valid EU-stock products too early.
-  for(const x of out.slice(0,40)){
-    try{
-      const d=await extractAliExpressDetails(x.source_url);
-      const dt=plausibleTitle(d.page_title);
-      const generic=String(x.title||'').trim().toLowerCase()===String(keyword||'').trim().toLowerCase();
-      if(dt&&!generic)x.title=dt;
-      if(Number.isFinite(d.costEur)&&d.costEur>0)x.cost=d.costEur;
-      if(Number.isFinite(d.sold)&&d.sold>0)x.sold=d.sold;
-      if(Array.isArray(d.image_urls))x.image_urls=d.image_urls.slice(0,3);
-      if(d.euWarehouse===true)x.euWarehouse=true;
-      x.detail_fetch='attempted';
-      x.detail_title=dt||'';
-    }catch{ x.detail_fetch='failed'; }
-  }
-
-  console.log('CATALOG SOURCE',keyword,'items='+out.length,'euConfirmed='+confirmedEU());
-  return out;
 }
-function catalogPassReason(x){
- const r=rules(),cost=Number(x.cost),title=String(x.title||'').toLowerCase();
- if(!String(x.source_url||'').trim()||!String(x.id||'').trim())return 'missing-id-or-url';
- const isHeadphone=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(title);
- const bad=/(smartwatch|watch phone|charger|cable|usb|led strip|camera|drone|gaming|projector|power bank|electronic|elektronik|speaker|lautsprecher)/i.test(title);
- if(bad&&!isHeadphone)return 'blocked-electronics';
- const junk=/(hook|hooks|hanging hook|adhesive hook|haken|box|boxes|storage box|organizer|organiser|aufbewahrung|rack|shelf|shelves|regal|holder|halter|stand|case|cover|bag|pouch|tasche|etui|hülle|keychain|key ring|schlüsselanhänger|sticker|decal|ornament|decoration|decor|deko|wall art|phone case|cable holder|clip|clamp|bracket)/i.test(title);
- if(junk)return 'junk-generic-accessory';
- const isKnife=/(kitchen knives?|chef knives?|cooking knives?|kitchen knife|messer küche|küchenmesser)/i.test(title); const practical=/(clean|cleaning|reinig|kitchen|küche|cook|kochen|knife|messer|laundry|wäsche|car|auto|garden|garten|tool|werkzeug|repair|repar|pet|hund|dog|cat|katze|fitness|sport|baby|beauty|pflege|travel|reise|camping|office|büro|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
- if(!practical)return 'not-practical';
- const maxCost=isHeadphone?27:Number(r.maxCost||15),minCost=isHeadphone?10:3;
- if(!Number.isFinite(cost)||cost<minCost||cost>maxCost)return 'cost-outside-range:'+String(cost);
- if(Number(x.sold||0)<1000)return 'sold-under-1000:'+String(x.sold||0);
- if(/(clothing|shoe|shoes|dress|jacket|shirt|pants|bra|underwear|swimwear|battery|laser|weapon|hunting knife|tactical knife|survival knife|pocket knife|butterfly knife|switchblade|medical|supplement|toy|plush|jewelry|necklace|ring|bracelet|wallet|mug|cup|bottle|towel|sock|slipper|curtain|pillow|flower|vase|generic|replacement|spare part)/i.test(title)&&!isKnife)return 'blocked-category';
- const problem=/(clean|cleaning|reinig|stain|scrub|remove|repair|repar|fix|measure|cut|knife|messer|sharpen|organize|wash|laundry|pet hair|groom|training|pain relief|posture|exercise|grip|safety|protect|travel|camping|outdoor|car care|detailing|garden|prun|weed|drill|screw|paint|baking|cook|slice|peel|seal|vacuum|dust|steam|headphone|earphone|earbud|kopfhörer|ohrhörer|bluetooth|wireless|ai)/i.test(title);
- if(!problem)return 'no-problem-signal';
- const targetPrice=isHeadphone?Math.max(69.90,Math.ceil(cost*2.9*100)/100):Math.max(34.90,Math.ceil(cost*3*100)/100);
- const ebay=ebayProfitability({selling_price:targetPrice,landed_cost_eur:cost});
- if(Number(ebay.estimatedProfitEur||0)<12)return 'profit-under-12:'+String(Math.round(ebay.estimatedProfitEur||0));
- if(targetPrice/cost<Math.max(r.minRatio,isHeadphone?2.9:3))return 'ratio-too-low';
- return '';
-}
+function catalogPassReason(x){return catalogCandidateRejection(x,rules(),ebayProfitability);}
 function catalogPass(x){return !catalogPassReason(x);}
 
 function isDsersImportedCandidate(product){
- const status=String(product?.status||'').toUpperCase();
- if(status!=='DRAFT')return false;
+ if(!isDraftProduct(product))return false;
  const tags=(Array.isArray(product?.tags)?product.tags:[]).map(String);
  // DSers-imported products arrive in Shopify as DRAFT. Do not require a special DSers tag.
  // ACTIVE products are excluded by the status check above.
@@ -1043,7 +795,7 @@ async function repairExistingDraftImages(productId,product,token){
 }
 
 async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
- const p=d.product;if(!p)throw new Error('Product not found');if(String(p.status)!=='DRAFT')throw new Error('Safety guard: only DRAFT products may be modified');
+ const p=d.product;if(!p)throw new Error('Product not found');assertDraftProduct(p);
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
  if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
  const alreadyProcessed=existingTags.includes('homestro-ai-processed-existing');
@@ -1320,7 +1072,7 @@ async function catalogRun(){
     };
     // Only retry detail enrichment when catalogSearch did not obtain a required field.
     // Never replace positive EU evidence with a failed second fetch.
-    const missingDetail=!candidate.euWarehouse||!Number.isFinite(candidate.costEur)||candidate.costEur<=0||candidate.sold<1000||!candidate.title;
+    const missingDetail=!candidate.euWarehouse||!Number.isFinite(candidate.costEur)||candidate.costEur<=0||candidate.sold<rules().minSold||!candidate.title;
     if(missingDetail){
       try{
         const details=await extractAliExpressDetails(x.source_url);
@@ -1348,7 +1100,7 @@ async function catalogRun(){
     }
 
     const hp=/(earphone|earbuds?|headphone|headset|bluetooth headphones?|wireless headphones?|ai headphones?|kopfhörer|ohrhörer)/i.test(candidate.title);
-    candidate.sellingPriceEur=hp?Math.max(69.90,Math.ceil(candidate.costEur*2.9*100)/100):Math.max(34.90,Math.ceil(candidate.costEur*3*100)/100);
+    candidate.sellingPriceEur=targetSellingPrice(candidate.costEur,hp,rules());
     candidate.recommendedSellingPriceEur=candidate.sellingPriceEur;
     if(process.env.HOMESTRO_MARKET_CHECK_ENABLED!=='false'){
       const market=await homestroCompetitivePrice(candidate);
@@ -1368,8 +1120,8 @@ async function catalogRun(){
     }
     candidate.ratio=Number((candidate.sellingPriceEur/candidate.costEur).toFixed(2));
     candidate.estimatedProfitBeforeShippingVat=Number(ebayProfitability({selling_price:candidate.sellingPriceEur,landed_cost_eur:candidate.costEur}).estimatedProfitEur||0);
-    if(candidate.estimatedProfitBeforeShippingVat<12){
-      reject('profit-under-12-after-market-price');
+    if(candidate.estimatedProfitBeforeShippingVat<rules().minNetProfit){
+      reject('profit-under-'+rules().minNetProfit+'-after-market-price');
       continue;
     }
 
@@ -1391,6 +1143,8 @@ async function catalogRun(){
   console.error('CATALOG RUN FAILED',e.message);
  }finally{catalogState.running=false;}
 }
+
+registerSidekickApi(app,{sidekick,apiKey,catalogState,catalogInterval,catalogRun,validateProduct:body=>validateProduct(Number(body.cost),Number(body.sellingPrice),body.ratio===undefined?undefined:Number(body.ratio))});
 
 app.get('/api/catalog/sources',apiKey,(_q,res)=>res.json({ok:true,apifyConfigured:Boolean(process.env.APIFY_API_TOKEN),actors:{aliexpress:Boolean(process.env.APIFY_ALIEXPRESS_ACTOR_ID),cj:Boolean(process.env.APIFY_CJ_ACTOR_ID),bigbuy:Boolean(process.env.APIFY_BIGBUY_ACTOR_ID),amazon:Boolean(process.env.APIFY_AMAZON_ACTOR_ID),googleShopping:Boolean(process.env.APIFY_GOOGLE_SHOPPING_ACTOR_ID)},marketCheckEnabled:process.env.HOMESTRO_MARKET_CHECK_ENABLED!=='false',marketCountry:process.env.HOMESTRO_MARKET_COUNTRY||'DE'}));
 app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
@@ -1479,7 +1233,7 @@ async function refreshHomestroComplementaryRecommendations(token){
   const d=await shopifyGraphQL('query{products(first:250){nodes{id title description productType vendor tags status collections(first:10){nodes{id handle title}} variants(first:10){nodes{price}}}}}',{},token);
   const products=(d.products?.nodes||[]).filter(p=>['ACTIVE','DRAFT'].includes(String(p.status).toUpperCase()));
   const active=products.filter(p=>String(p.status).toUpperCase()==='ACTIVE'&&((p.variants?.nodes||[]).some(v=>Number(v.price||0)>0)));
-  const imported=products.filter(p=>isDsersImportedCandidate(p)||((p.tags||[]).map(String).includes('homestro-ai-processed-existing')));
+  const imported=products.filter(p=>isDraftProduct(p)&&(isDsersImportedCandidate(p)||((p.tags||[]).map(String).includes('homestro-ai-processed-existing'))));
   const writes=[]; let processed=0,updated=0;
   for(const source of imported){
    const candidates=active.map(target=>({target,score:hmRecScore(source,target)})).filter(x=>Number.isFinite(x.score)&&x.score>=38).sort((a,b)=>b.score-a.score||String(a.target.title).localeCompare(String(b.target.title),'de')).slice(0,3).map(x=>x.target.id);

@@ -7,7 +7,7 @@
   },
   {
     "name":"validate_product",
-    "description":"Check Homestro rules before import: cost <= 10 EUR, selling price >= 34.90 EUR and price/cost ratio >= 3.",
+    "description":"Check the current centralized Homestro Product Hunter rules before import.",
     "inputSchema":{"type":"object","properties":{"cost":{"type":"number"},"sellingPrice":{"type":"number"},"ratio":{"type":"number"}},"required":["cost","sellingPrice","ratio"]}
   },
   {
