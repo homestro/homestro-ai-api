@@ -1,9 +1,10 @@
+const {normalizeSelectedDraftId}=require('./selected-draft');
 // Railway sync: DSers-imported Shopify DRAFTs are eligible for Homestro autopilot.
 const express=require('express');
 const cors=require('cors');
 const crypto=require('crypto');
 const {getProductRules,validateProductEconomics}=require('./homestro-rules');
-const {catalogCandidateRejection,externalCandidateRejection,targetSellingPrice}=require('./product-hunter');
+const {catalogCandidateRejection,externalCandidateRejection,targetSellingPrice,candidateProfitEvidence}=require('./product-hunter');
 const {detectEuWarehouse}=require('./sourcing-evidence');
 const {selectAmazonMatch}=require('./amazon-market');
 const {aliExpressReference}=require('./aliexpress-reference');
@@ -844,6 +845,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const desc=String(p.description||'');
  const reference=aliExpressReference({url:mf.aliexpress_url,productId:mf.aliexpress_product_id,description:desc});
  const src=reference.url;
+ if(!src||!reference.productId)return {id:productId,title:p.title,processed:false,skipped:true,reason:'verified-supplier-reference-missing'};
  const id=reference.productId;
  let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
  const hasImages=(p.media?.nodes||[]).some(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
@@ -1189,6 +1191,7 @@ async function catalogRun(){
       }
       candidate.sellingPriceEur=candidate.recommendedSellingPriceEur||candidate.sellingPriceEur;
     }
+    Object.assign(candidate,candidateProfitEvidence(candidate));
     candidate.ratio=Number((candidate.sellingPriceEur/candidate.costEur).toFixed(2));
     candidate.estimatedProfitBeforeShippingVat=Number(ebayProfitability({selling_price:candidate.sellingPriceEur,landed_cost_eur:candidate.costEur}).estimatedProfitEur||0);
     if(candidate.estimatedProfitBeforeShippingVat<rules().minNetProfit){
@@ -1220,14 +1223,14 @@ registerSidekickApi(app,{sidekick,apiKey,catalogState,catalogInterval,catalogRun
 app.get('/api/catalog/sources',apiKey,(_q,res)=>res.json({ok:true,apifyConfigured:Boolean(process.env.APIFY_API_TOKEN),actors:{aliexpress:Boolean(process.env.APIFY_ALIEXPRESS_ACTOR_ID),cj:Boolean(process.env.APIFY_CJ_ACTOR_ID),bigbuy:Boolean(process.env.APIFY_BIGBUY_ACTOR_ID),amazon:Boolean(process.env.APIFY_AMAZON_ACTOR_ID),googleShopping:Boolean(process.env.APIFY_GOOGLE_SHOPPING_ACTOR_ID)},marketCheckEnabled:process.env.HOMESTRO_MARKET_CHECK_ENABLED!=='false',marketCountry:process.env.HOMESTRO_MARKET_COUNTRY||'DE'}));
 app.get('/api/catalog/candidates',apiKey,(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,note:x.note}))}));
 function csvCell(v){const s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
-function catalogFeedRows(){return catalogState.candidates.map(x=>({id:x.id,title:x.title,url:x.url,cost_eur:x.costEur,selling_price_eur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,eu_warehouse:x.euWarehouse?'TRUE':'FALSE',warehouse:x.warehouse||'',amazon_checked:x.amazonChecked?'TRUE':'FALSE',amazon_matched:x.amazonMatched?'TRUE':'FALSE',amazon_price_eur:Number.isFinite(x.amazonPriceEur)?x.amazonPriceEur:'',amazon_url:x.amazonUrl||'',market_checked:x.marketChecked?'TRUE':'FALSE',market_lowest_price_eur:Number.isFinite(x.marketLowestPriceEur)?x.marketLowestPriceEur:'',market_status:x.marketStatus||'NOT_CHECKED',recommended_selling_price_eur:x.recommendedSellingPriceEur||x.sellingPriceEur,estimated_profit_eur:x.estimatedProfitBeforeShippingVat,source:x.source_type||'AliExpress',status:'CANDIDATE'}));}
-function sendCatalogCsv(res){const rows=catalogFeedRows(),headers=['id','title','url','cost_eur','selling_price_eur','sold','ratio','eu_warehouse','warehouse','amazon_checked','amazon_matched','amazon_price_eur','amazon_url','market_checked','market_lowest_price_eur','market_status','recommended_selling_price_eur','estimated_profit_eur','source','status'];res.set('Content-Type','text/csv; charset=utf-8');res.send('\uFEFF'+headers.join(',')+'\n'+rows.map(r=>headers.map(h=>csvCell(r[h])).join(',')).join('\n'));}
+function catalogFeedRows(){return catalogState.candidates.map(x=>({id:x.id,title:x.title,url:x.url,cost_eur:x.costEur,selling_price_eur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,eu_warehouse:x.euWarehouse?'TRUE':'FALSE',warehouse:x.warehouse||'',amazon_checked:x.amazonChecked?'TRUE':'FALSE',amazon_matched:x.amazonMatched?'TRUE':'FALSE',amazon_price_eur:Number.isFinite(x.amazonPriceEur)?x.amazonPriceEur:'',amazon_url:x.amazonUrl||'',market_checked:x.marketChecked?'TRUE':'FALSE',market_lowest_price_eur:Number.isFinite(x.marketLowestPriceEur)?x.marketLowestPriceEur:'',market_status:x.marketStatus||'NOT_CHECKED',recommended_selling_price_eur:x.recommendedSellingPriceEur||x.sellingPriceEur,estimated_profit_eur:x.estimatedProfitBeforeShippingVat,source:x.source_type||'AliExpress',status:'CANDIDATE',profit_status:'PROVISIONAL_BEFORE_SHIPPING_AND_TAX',landed_cost_verified:'FALSE',sell_ready:'FALSE'}));}
+function sendCatalogCsv(res){const rows=catalogFeedRows(),headers=['id','title','url','cost_eur','selling_price_eur','sold','ratio','eu_warehouse','warehouse','amazon_checked','amazon_matched','amazon_price_eur','amazon_url','market_checked','market_lowest_price_eur','market_status','recommended_selling_price_eur','estimated_profit_eur','source','status','profit_status','landed_cost_verified','sell_ready'];res.set('Content-Type','text/csv; charset=utf-8');res.send('\uFEFF'+headers.join(',')+'\n'+rows.map(r=>headers.map(h=>csvCell(r[h])).join(',')).join('\n'));}
 app.get('/feeds/products.csv',(_q,res)=>sendCatalogCsv(res));
 app.get('/feeds/google-sheet.csv',(_q,res)=>sendCatalogCsv(res));
 app.get('/feeds/youtube.json',(_q,res)=>res.json({ok:true,source:'Homestro candidate feed',generatedAt:new Date().toISOString(),items:catalogState.candidates.map(x=>({title:x.title,productUrl:x.url,hook:'Praktisches Produkt für den Alltag – jetzt bei Homestro entdecken.',description:'Entdecke '+x.title+' bei Homestro.de. Produktdaten und Verfügbarkeit vor dem Verkauf nochmals prüfen.',sellingPriceEur:x.sellingPriceEur}))}));
-app.get('/catalog/candidates-public',(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat}))}));
+app.get('/catalog/candidates-public',(_q,res)=>res.json({ok:true,source:'AliExpress',count:catalogState.candidates.length,candidates:catalogState.candidates.map(x=>({url:x.url,title:x.title,costEur:x.costEur,sellingPriceEur:x.sellingPriceEur,sold:x.sold,ratio:x.ratio,euWarehouse:x.euWarehouse,estimatedProfitBeforeShippingVat:x.estimatedProfitBeforeShippingVat,...candidateProfitEvidence(x)}))}));
 
-app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
+app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const selected=normalizeSelectedDraftId(req.body?.productId);const token=await getClientToken();const results=selected?[await processExistingDraftProduct(selected,token)]:await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 app.get('/api/catalog/process-existing-test',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||5),5),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));

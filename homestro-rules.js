@@ -5,7 +5,7 @@ const DEFAULT_PRODUCT_RULES = Object.freeze({
   minSellingPrice: 34.9,
   minRatio: 3,
   minSold: 1000,
-  minNetProfit: 12,
+  minNetProfit: 10,
   headphoneMinCost: 10,
   headphoneMaxCost: 27,
   headphoneMinRatio: 2.9,

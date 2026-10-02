@@ -1,8 +1,26 @@
 'use strict';
 
-function targetSellingPrice(cost, isHeadphone, rules) {
-  const minRatio = isHeadphone ? rules.headphoneMinRatio : rules.minRatio;
-  return Math.max(rules.minSellingPrice, Math.ceil(Number(cost) * minRatio * 100) / 100);
+// Conservative eBay fee + advertising model. Supplier cost alone is not landed cost.
+function targetSellingPrice(cost, isHeadphone, rules, env = process.env) {
+  const commission = Number(env.EBAY_COMMISSION_RATE || 0.14);
+  const feeVat = Number(env.EBAY_FEE_VAT_RATE || 0.19);
+  const adRate = Number(env.EBAY_MAX_AD_RATE || 0.15);
+  const orderFee = Number(env.EBAY_ORDER_FEE_EUR || 0.45);
+  const denominator = 1 - commission * (1 + feeVat) - adRate;
+  if (!Number.isFinite(denominator) || denominator <= 0) return Infinity;
+  const floor = (Number(cost) + orderFee * (1 + feeVat) + rules.minNetProfit) / denominator;
+  return Math.max(rules.minSellingPrice, Math.ceil(floor * 100) / 100);
+}
+
+function candidateProfitEvidence(candidate) {
+  // Discovery currently has a supplier price, not verified destination shipping/tax costs.
+  return {
+    profitStatus: 'PROVISIONAL_BEFORE_SHIPPING_AND_TAX',
+    profitModel: 'EBAY_FEES_PLUS_ADVERTISING',
+    landedCostVerified: false,
+    sellReady: false,
+    pendingChecks: ['variant-supplier-cost', 'destination-shipping', 'applicable-tax', 'matched-market-price']
+  };
 }
 
 function euWarehouseSearchSignal(candidate) {
@@ -81,12 +99,10 @@ function catalogCandidateRejection(candidate, rules, profitability) {
   if (!problem) return 'no-problem-signal';
   const market=amazonComparison(candidate,rules);
   if(market.reject)return market.reject;
-  const minRatio = isHeadphone ? rules.headphoneMinRatio : rules.minRatio;
   const targetPrice = targetSellingPrice(cost, isHeadphone, rules);
   const economics = profitability({ selling_price: targetPrice, landed_cost_eur: cost });
   if (Number(economics.estimatedProfitEur || 0) < rules.minNetProfit) return 'profit-under-' + rules.minNetProfit + ':' + String(Math.round(economics.estimatedProfitEur || 0));
-  if (targetPrice / cost < minRatio) return 'ratio-too-low';
   return '';
 }
 
-module.exports = { catalogCandidateRejection, externalCandidateRejection, targetSellingPrice, amazonComparison, chooseBestSource, euWarehouseSearchSignal };
+module.exports = { catalogCandidateRejection, externalCandidateRejection, targetSellingPrice, amazonComparison, chooseBestSource, euWarehouseSearchSignal, candidateProfitEvidence };
