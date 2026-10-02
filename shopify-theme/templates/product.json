@@ -1,1 +1,25 @@
-{"sections":{"main":{"type":"main-product","settings":{}}},"order":["main"]}
+{
+  "sections": {
+    "main": {
+      "type": "main-product",
+      "settings": {}
+    },
+    "complementary": {
+      "type": "product-recommendations",
+      "settings": {
+        "intent": "complementary",
+        "heading": "Passt perfekt dazu",
+        "products_to_show": 4
+      }
+    },
+    "related": {
+      "type": "product-recommendations",
+      "settings": {
+        "intent": "related",
+        "heading": "Das könnte Ihnen auch gefallen",
+        "products_to_show": 4
+      }
+    }
+  },
+  "order": ["main", "complementary", "related"]
+}

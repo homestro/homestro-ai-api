@@ -1,2 +1,159 @@
-<section class="page-width"><nav class="breadcrumb"><a href="{{ routes.root_url }}">Startseite</a> / <a href="{{ product.collections.first.url | default: routes.all_products_collection_url }}">Produkte</a> / {{ product.title }}</nav><div class="product"><div class="product__gallery">{% for media in product.media %}{{ media.preview_image | image_url: width: 1000 | image_tag: loading: 'lazy', widths: '450,700,1000', alt: media.alt }}{% else %}{{ 'product-1' | placeholder_svg_tag: 'placeholder' }}{% endfor %}</div><div class="product__info"><div class="eyebrow">HOMESTRO Auswahl</div><h1 class="product__title">{{ product.title }}</h1>{% if section.settings.show_rating %}<div class="rating">★★★★★ <span style="color:var(--muted)">Bewährte Qualität</span></div>{% endif %}<div class="product__price price" data-product-price>{{ product.selected_or_first_available_variant.price | money }}{% if product.compare_at_price > product.price %}<s>{{ product.compare_at_price | money }}</s>{% endif %}</div><div class="rte">{{ product.description | truncatewords: 42 }}</div>{% form 'product', product, data-ajax-cart: '' %}{% unless product.has_only_default_variant %}<label for="variant-{{ section.id }}">Ausführung</label><select id="variant-{{ section.id }}" name="id" data-variant-select>{% for variant in product.variants %}<option value="{{ variant.id }}" data-price="{{ variant.price | money }}" data-available="{{ variant.available }}" {% if variant == product.selected_or_first_available_variant %}selected{% endif %}>{{ variant.title }}{% unless variant.available %} – Ausverkauft{% endunless %}</option>{% endfor %}</select>{% else %}<input type="hidden" name="id" value="{{ product.selected_or_first_available_variant.id }}">{% endunless %}<label for="quantity-{{ section.id }}">Menge</label><input class="quantity" id="quantity-{{ section.id }}" type="number" name="quantity" min="1" value="1"><button class="button" type="submit" {% unless product.selected_or_first_available_variant.available %}disabled{% endunless %}>{% if product.selected_or_first_available_variant.available %}In den Warenkorb{% else %}Ausverkauft{% endif %}</button>{% endform %}<div class="benefits"><div>✓ Kostenloser Versand ab 50 €</div><div>↺ 30 Tage Rückgaberecht</div><div>▣ Sichere, verschlüsselte Zahlung</div></div></div></div>{% if product.description != blank %}<div class="section"><h2 class="section-title">Details</h2><div class="rte">{{ product.description }}</div></div>{% endif %}</section>
-{% schema %}{"name":"Produkt","settings":[{"type":"checkbox","id":"show_rating","label":"Bewertung anzeigen","default":true}]}{% endschema %}
+{% liquid
+  assign current_variant = product.selected_or_first_available_variant
+  assign featured_media = current_variant.featured_media | default: product.featured_media
+%}
+
+<section class="page-width product-section" data-product-root data-product-url="{{ product.url }}">
+  <nav class="breadcrumb" aria-label="Brotkrümelnavigation">
+    <a href="{{ routes.root_url }}">Startseite</a>
+    <span aria-hidden="true">/</span>
+    {% if product.collections.first %}
+      <a href="{{ product.collections.first.url }}">{{ product.collections.first.title }}</a>
+      <span aria-hidden="true">/</span>
+    {% endif %}
+    <span>{{ product.title }}</span>
+  </nav>
+
+  <div class="product">
+    <div class="product__gallery" data-product-gallery>
+      <div class="product__primary-media">
+        {% if featured_media %}
+          {{ featured_media.preview_image
+            | image_url: width: 1400
+            | image_tag:
+              loading: 'eager',
+              widths: '480, 720, 960, 1200, 1400',
+              sizes: '(max-width: 800px) 100vw, 55vw',
+              class: 'product__main-image',
+              data-product-main-image: '',
+              data-media-id: featured_media.id,
+              alt: featured_media.alt | default: product.title
+          }}
+        {% else %}
+          {{ 'product-1' | placeholder_svg_tag: 'placeholder product__main-image' }}
+        {% endif %}
+      </div>
+
+      {% if product.media.size > 1 %}
+        <div class="product__thumbnails" role="list" aria-label="Produktbilder">
+          {% for media in product.media %}
+            <button
+              class="product__thumbnail{% if media.id == featured_media.id %} is-active{% endif %}"
+              type="button"
+              data-media-thumbnail
+              data-media-id="{{ media.id }}"
+              data-image-src="{{ media.preview_image | image_url: width: 1400 }}"
+              aria-label="Bild {{ forloop.index }} von {{ product.media.size }} anzeigen"
+              aria-pressed="{% if media.id == featured_media.id %}true{% else %}false{% endif %}"
+            >
+              {{ media.preview_image
+                | image_url: width: 180
+                | image_tag: loading: 'lazy', widths: '90, 140, 180', alt: media.alt | default: product.title
+              }}
+            </button>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="product__info">
+      <div class="eyebrow">HOMESTRO Auswahl</div>
+      <h1 class="product__title">{{ product.title }}</h1>
+      {% if section.settings.show_rating %}
+        <div class="rating" aria-label="Qualitätsversprechen">★★★★★ <span>Bewährte Qualität</span></div>
+      {% endif %}
+
+      <div class="product__price" aria-live="polite">
+        <span class="price" data-product-price>{{ current_variant.price | money }}</span>
+        <s data-product-compare-price{% unless current_variant.compare_at_price > current_variant.price %} hidden{% endunless %}>
+          {{ current_variant.compare_at_price | money }}
+        </s>
+      </div>
+
+      <div class="product__availability" data-product-availability aria-live="polite">
+        {% if current_variant.available %}<span class="status-dot"></span> Auf Lager{% else %}Derzeit nicht verfügbar{% endif %}
+      </div>
+
+      {% if product.description != blank %}
+        <div class="rte product__intro">{{ product.description | strip_html | truncatewords: 42 }}</div>
+      {% endif %}
+
+      {% form 'product', product, class: 'product-form', data-ajax-cart: '', novalidate: 'novalidate' %}
+        <input type="hidden" name="id" value="{{ current_variant.id }}" data-variant-id>
+
+        {% unless product.has_only_default_variant %}
+          <fieldset class="variant-picker" data-variant-picker>
+            <legend class="visually-hidden">Produktvariante auswählen</legend>
+            {% for option in product.options_with_values %}
+              <div class="product-option" data-option-index="{{ forloop.index0 }}">
+                <label for="Option-{{ section.id }}-{{ forloop.index0 }}">{{ option.name }}</label>
+                <select id="Option-{{ section.id }}-{{ forloop.index0 }}" data-option-select>
+                  {% for value in option.values %}
+                    <option value="{{ value | escape }}"{% if option.selected_value == value %} selected{% endif %}>{{ value }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            {% endfor %}
+          </fieldset>
+        {% endunless %}
+
+        <label for="Quantity-{{ section.id }}">Menge</label>
+        <div class="quantity-selector" data-quantity-selector>
+          <button type="button" data-quantity-minus aria-label="Menge verringern">−</button>
+          <input id="Quantity-{{ section.id }}" type="number" name="quantity" min="1" value="1" inputmode="numeric">
+          <button type="button" data-quantity-plus aria-label="Menge erhöhen">+</button>
+        </div>
+
+        <button class="button product-form__submit" type="submit" data-add-to-cart data-available="{{ current_variant.available }}"{% unless current_variant.available %} disabled{% endunless %}>
+          <span data-add-to-cart-text>{% if current_variant.available %}In den Warenkorb{% else %}Ausverkauft{% endif %}</span>
+          <span class="button__spinner" hidden aria-hidden="true"></span>
+        </button>
+        <p class="form-message" data-product-form-message role="alert" hidden></p>
+        {{ form | payment_terms }}
+      {% endform %}
+
+      <div class="benefits">
+        <div>✓ Kostenloser Versand ab 50 €</div>
+        <div>↺ 30 Tage Rückgaberecht</div>
+        <div>▣ Sichere, verschlüsselte Zahlung</div>
+      </div>
+    </div>
+  </div>
+
+  {% if product.description != blank %}
+    <div class="section product-details">
+      <h2 class="section-title">Produktdetails</h2>
+      <div class="rte">{{ product.description }}</div>
+    </div>
+  {% endif %}
+
+  <script type="application/json" data-product-variants>
+    [
+      {% for variant in product.variants %}
+        {
+          "id": {{ variant.id | json }},
+          "available": {{ variant.available | json }},
+          "options": {{ variant.options | json }},
+          "price": {{ variant.price | money | json }},
+          "compareAtPrice": {% if variant.compare_at_price %}{{ variant.compare_at_price | money | json }}{% else %}null{% endif %},
+          "featuredMediaId": {% if variant.featured_media %}{{ variant.featured_media.id | json }}{% else %}null{% endif %},
+          "featuredImage": {% if variant.featured_media %}{{ variant.featured_media.preview_image | image_url: width: 1400 | json }}{% else %}null{% endif %}
+        }{% unless forloop.last %},{% endunless %}
+      {% endfor %}
+    ]
+  </script>
+</section>
+
+{% schema %}
+{
+  "name": "Produkt",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "show_rating",
+      "label": "Qualitätsbewertung anzeigen",
+      "default": true
+    }
+  ]
+}
+{% endschema %}

@@ -5,8 +5,8 @@ Eigenständiges Shopify-Online-Store-2.0-Theme für den deutschen HOMESTRO Store
 ## Funktionen
 
 - Responsive Startseite mit Hero, Vertrauensleiste, Kollektionen, Bestsellern, Markenwerten und Newsletter
-- Dynamische Produkt- und Kollektionsseiten mit Varianten, Preisen, Verfügbarkeit, Filterung und Sortierung
-- AJAX-Warenkorb auf Produktseiten sowie vollständige Warenkorbseite
+- Dynamische Produkt- und Kollektionsseiten mit vollständiger Variantenauswahl, Preisen, Verfügbarkeit, Variantenbildern, Facettenfiltern und Sortierung
+- AJAX-Warenkorb auf Produktseiten, vollständige Warenkorbseite sowie ergänzende und ähnliche Produktempfehlungen
 - Suche, Inhaltsseiten und deutschsprachige 404-Seite
 - Anpassbare Sections, Navigationen, Bilder, Kollektionen und Inhalte im Theme Editor
 - Semantisches, tastaturbedienbares Markup und responsive Bilder

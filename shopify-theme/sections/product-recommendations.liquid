@@ -1,0 +1,67 @@
+{% liquid
+  assign recommendation_intent = section.settings.intent | default: 'related'
+  assign section_heading = section.settings.heading
+  if recommendation_intent == 'complementary' and section_heading == blank
+    assign section_heading = 'Passt perfekt dazu'
+  elsif section_heading == blank
+    assign section_heading = 'Das könnte Ihnen auch gefallen'
+  endif
+%}
+
+<section
+  class="section product-recommendations"
+  data-product-recommendations
+  data-url="{{ routes.product_recommendations_url }}?section_id={{ section.id }}&product_id={{ product.id }}&limit={{ section.settings.products_to_show }}&intent={{ recommendation_intent }}"
+>
+  {% if recommendations.performed? %}
+    {% if recommendations.products_count > 0 %}
+      <div class="page-width">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Für Ihr Zuhause</div>
+            <h2 class="section-title">{{ section_heading }}</h2>
+          </div>
+        </div>
+        <div class="grid grid--4">
+          {% for recommendation in recommendations.products %}
+            {% render 'product-card', product: recommendation %}
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+  {% else %}
+    <div class="page-width recommendations-loading" aria-hidden="true"></div>
+  {% endif %}
+</section>
+
+{% schema %}
+{
+  "name": "Produktempfehlungen",
+  "settings": [
+    {
+      "type": "select",
+      "id": "intent",
+      "label": "Empfehlungstyp",
+      "options": [
+        { "value": "related", "label": "Ähnliche Produkte" },
+        { "value": "complementary", "label": "Ergänzende Produkte" }
+      ],
+      "default": "related"
+    },
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Überschrift"
+    },
+    {
+      "type": "range",
+      "id": "products_to_show",
+      "label": "Anzahl Produkte",
+      "min": 2,
+      "max": 8,
+      "step": 1,
+      "default": 4
+    }
+  ]
+}
+{% endschema %}
