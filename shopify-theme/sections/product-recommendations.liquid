@@ -11,6 +11,7 @@
 <section
   class="section product-recommendations"
   data-product-recommendations
+  data-recommendation-intent="{{ recommendation_intent }}"
   data-url="{{ routes.product_recommendations_url }}?section_id={{ section.id }}&product_id={{ product.id }}&limit={{ section.settings.products_to_show }}&intent={{ recommendation_intent }}"
 >
   {% if recommendations.performed? %}

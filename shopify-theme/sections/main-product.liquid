@@ -112,10 +112,11 @@
 
       <div class="benefits">
         <div><a href="{{ shop.shipping_policy.url }}">Versandinformationen</a></div>
-        <div>↺ Informationen zur Rückgaberecht</div>
+        <div><a href="{{ shop.refund_policy.url }}">Informationen zum Rückgaberecht</a></div>
         <div>▣ Sichere, verschlüsselte Zahlung</div>
       </div>
     </div>
+    <aside class="product__complementary" data-complementary-slot hidden aria-label="Ergänzende Produkte"></aside>
   </div>
 
   {% if product.description != blank %}

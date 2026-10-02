@@ -1,2 +1,11 @@
-<footer class="footer"><div class="page-width"><div class="footer__grid"><div><a class="logo" style="color:white" href="{{ routes.root_url }}">HOMESTRO</a><p>{{ section.settings.about }}</p></div>{% for block in section.blocks %}<div {{ block.shopify_attributes }}><h3>{{ block.settings.title }}</h3><ul>{% for link in block.settings.menu.links %}<li><a href="{{ link.url }}">{{ link.title }}</a></li>{% endfor %}</ul></div>{% endfor %}</div><div class="footer__bottom"><span>© {{ 'now' | date: '%Y' }} HOMESTRO. Alle Rechte vorbehalten.</span><span>Sicher bezahlen · SSL-verschlüsselt</span></div></div></footer>
+<footer class="footer"><div class="page-width"><div class="footer__grid"><div><a class="logo" style="color:white" href="{{ routes.root_url }}">HOMESTRO</a><p>{{ section.settings.about }}</p></div><div><h3>Entdecken</h3><ul><li><a href="{{ routes.all_products_collection_url }}">Alle Produkte</a></li>{% for category_handle in (1..3) %}{% liquid
+case category_handle
+when 1
+assign category = collections["haushalt-wohnen"]
+when 2
+assign category = collections["haustiere-tierpflege"]
+when 3
+assign category = collections["garten-heimwerken"]
+endcase
+%}{% if category != blank %}<li><a href="{{ category.url }}">{{ category.title }}</a></li>{% endif %}{% endfor %}</ul></div>{% for block in section.blocks %}<div {{ block.shopify_attributes }}><h3>{{ block.settings.title }}</h3><ul>{% for link in block.settings.menu.links %}<li><a href="{{ link.url }}">{{ link.title }}</a></li>{% endfor %}</ul></div>{% endfor %}</div><div class="footer__bottom"><span>© {{ 'now' | date: '%Y' }} HOMESTRO. Alle Rechte vorbehalten.</span><span>Sicher bezahlen · SSL-verschlüsselt</span></div></div></footer>
 {% schema %}{"name":"Footer","max_blocks":3,"settings":[{"type":"textarea","id":"about","label":"Über uns","default":"Durchdachte Produkte für ein Zuhause, das sich jeden Tag gut anfühlt."}],"blocks":[{"type":"menu","name":"Menü","settings":[{"type":"text","id":"title","label":"Titel","default":"Service"},{"type":"link_list","id":"menu","label":"Menü"}]}],"presets":[{"name":"Footer","blocks":[{"type":"menu"},{"type":"menu"},{"type":"menu"}]}]}{% endschema %}
