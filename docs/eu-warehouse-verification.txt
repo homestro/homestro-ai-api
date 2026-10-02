@@ -1,0 +1,1 @@
+After deploy, verify HOMESTRO_APIFY_SOURCES logs report euConfirmed > 0 for products whose shipping/variants explicitly identify supported European warehouse countries.
