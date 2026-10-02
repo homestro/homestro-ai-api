@@ -1,3 +1,6 @@
+const {summarizeAutopilotResults}=require('./autopilot-results');
+const {fulfillmentCostEvidence}=require('./fulfillment-cost-evidence');
+const {supplierReferenceMetafields}=require('./supplier-reference');
 const {normalizeSelectedDraftId}=require('./selected-draft');
 // Railway sync: DSers-imported Shopify DRAFTs are eligible for Homestro autopilot.
 const express=require('express');
@@ -374,17 +377,15 @@ function homestroTargetSellingPrice(cost,currentPrice,title){
  const isHeadphone=/(earphone|earbuds?|headphone|headset|kopfhörer|ohrhörer|bluetooth)/i.test(t);
  const r=rules();
  const base=r.minSellingPrice;
- const minRatio=isHeadphone?r.headphoneMinRatio:r.minRatio;
- const ratioFloor=landed*minRatio;
- const profitFloor=ebayProfitability({selling_price:Math.max(base,ratioFloor),landed_cost_eur:landed}).minRequiredSellingPriceEur;
- const target=priceForCost(landed,current,{minSellingPrice:base,minRatio,minNetProfit:r.minNetProfit,commissionRate:Number(process.env.EBAY_COMMISSION_RATE||0.14),feeVatRate:Number(process.env.EBAY_FEE_VAT_RATE||0.19),adRate:Number(process.env.EBAY_MAX_AD_RATE||0.15),orderFee:Number(process.env.EBAY_ORDER_FEE_EUR||0.45)});
- return target??Math.ceil((Math.max(current,base,ratioFloor,Number.isFinite(profitFloor)?profitFloor:0)-1e-9)*10)/10;
+
+ const target=priceForCost(landed,current,{minSellingPrice:base,minNetProfit:r.minNetProfit,commissionRate:Number(process.env.EBAY_COMMISSION_RATE||0.14),feeVatRate:Number(process.env.EBAY_FEE_VAT_RATE||0.19),adRate:Number(process.env.EBAY_MAX_AD_RATE||0.15),orderFee:Number(process.env.EBAY_ORDER_FEE_EUR||0.45)});
+ return target??current;
 }
-async function homestroAutoPriceVariants(productId,variants,title,token){
+async function homestroAutoPriceVariants(productId,variants,title,token,costEvidence={}){
  const source=Array.isArray(variants)?variants:[];
  const updates=[],planned=[];
  for(const v of source){
-  const price=Number(v.price||0),cost=Number(v.inventoryItem?.unitCost?.amount||NaN);
+  const price=Number(v.price||0),cost=Number(costEvidence[v.id]??v.inventoryItem?.unitCost?.amount??NaN);
   if(!v.id||!Number.isFinite(price)||price<=0||!Number.isFinite(cost)||cost<=0)continue;
   const target=homestroTargetSellingPrice(cost,price,title);
   planned.push({id:v.id,currentPrice:price,cost,target});
@@ -845,8 +846,16 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const desc=String(p.description||'');
  const reference=aliExpressReference({url:mf.aliexpress_url,productId:mf.aliexpress_product_id,description:desc});
  const src=reference.url;
- if(!src||!reference.productId)return {id:productId,title:p.title,processed:false,skipped:true,reason:'verified-supplier-reference-missing'};
+ if(!src||!reference.productId)return {id:productId,title:p.title,processed:false,skipped:true,reason:'verified-supplier-reference-missing',pendingChecks:['actual-dsers-supplier-link','variant-landed-cost','destination-shipping','matched-market-price']};
  const id=reference.productId;
+ // Persist source BEFORE pricing/content/image operations can replace the imported description.
+ const sourceFields=supplierReferenceMetafields(p,mf);
+ if(sourceFields.length){
+  const saved=await shopifyGraphQL('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){userErrors{field message}}}',{metafields:sourceFields},token);
+  if(saved.metafieldsSet?.userErrors?.length)throw new Error(saved.metafieldsSet.userErrors.map(e=>e.message).join('; '));
+ }
+
+ const landedEvidence=fulfillmentCostEvidence(mf.fulfillment_cost_evidence,p.variants?.nodes||[],src);
  let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
  const hasImages=(p.media?.nodes||[]).some(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  const imageNeedsSource=existingTags.includes('homestro-ai-image-pending')||!hasImages;
@@ -862,7 +871,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  let cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
  let pricing={changed:0,planned:[]};
  if((p.variants?.nodes||[]).length){
-  pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token);
+  pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token,landedEvidence.landedByVariant);
   if(pricing.changed){
    const refreshed=await shopifyGraphQL('query($id:ID!){product(id:$id){variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}}}}',{id:productId},token);
    p.variants.nodes=refreshed.product?.variants?.nodes||p.variants.nodes;
@@ -870,13 +879,16 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
    cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
   }
  }
+ const supplierCost=cost;
+ if(landedEvidence.verified)cost=landedEvidence.landedByVariant[p.variants?.nodes?.[0]?.id]??cost;
  const ratio=cost>0&&price>0?price/cost:NaN;
  const variantEconomics=(p.variants?.nodes||[]).map(v=>{
-  const vp=Number(v.price||0),vc=Number(v.inventoryItem?.unitCost?.amount||NaN);
+  const vp=Number(v.price||0),vc=Number(landedEvidence.landedByVariant[v.id]??v.inventoryItem?.unitCost?.amount??NaN);
   return {id:v.id,price:vp,cost:vc,economics:ebayProfitability({selling_price:vp,landed_cost_eur:vc})};
  });
  const profitability=ebayProfitability({selling_price:price,landed_cost_eur:cost});
- const profitPending=variantEconomics.length===0||variantEconomics.some(v=>!Number.isFinite(v.cost)||v.cost<=0||!v.economics.valid);
+ const supplierContributionPending=variantEconomics.length===0||variantEconomics.some(v=>!Number.isFinite(v.cost)||v.cost<=0||!v.economics.valid);
+ const profitPending=!landedEvidence.verified||supplierContributionPending;
  let x=null;
  const aiInput={
   title:details.page_title||p.title,
@@ -996,11 +1008,12 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  // tags never claim readiness based on optimistic local state.
  const verified=(await shopifyGraphQL('query($id:ID!){product(id:$id){id status title description productType seo{title description} collections(first:20){nodes{id title handle}} variants(first:100){nodes{id price selectedOptions{name value} image{id url} inventoryItem{unitCost{amount}}}} media(first:30){nodes{id ... on MediaImage{image{url width height}}}}}}',{id:productId},token)).product;
  assertDraftProduct(verified);
- const qa=qaProduct({...verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
+ for(const v of verified.variants?.nodes||[])if(landedEvidence.verified)v.cost=landedEvidence.landedByVariant[v.id];
+ const qa=qaProduct({...verified,landedCostVerified:landedEvidence.verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
  finalTags.push(qa.ok?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>qa.ok?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
  await setProductTags(productId,[...new Set(cleanFinal)],token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,supplierCost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PROVISIONAL_BEFORE_SHIPPING_AND_TAX',supplierContributionPending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
@@ -1020,7 +1033,7 @@ async function processExistingDrafts(limit,token){
  }
  return results;
 }
-const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0};
+const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0,pending:0,lastResult:null};
 function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
 async function runDraftImageQA(){
  if(process.env.HOMESTRO_IMAGE_QA_ENABLED==='false'){console.log('DRAFT IMAGE QA DISABLED');return {disabled:true};}
@@ -1028,9 +1041,9 @@ async function runDraftImageQA(){
  draftAutopilotState.imageRunning=true;
  try{
   const token=await getClientToken();
-  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'))).slice(0,50);
+  const imageEligible=nodes.filter(p=>{const mf=Object.fromEntries((p.metafields?.nodes||[]).map(m=>[m.key,m.value]));return !p.tags?.includes('homestro-ai-rejected')&&Boolean(aliExpressReference({url:mf.aliexpress_url,description:p.description}).url)&&String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'));}).slice(0,50);
   console.log('DRAFT IMAGE QA QUEUE','drafts='+nodes.length,'eligible='+imageEligible.length);
   for(const p of imageEligible){
    try{
@@ -1071,16 +1084,21 @@ async function draftAutopilotRun(){
   draftAutopilotState.skipped=0;
   console.log('DRAFT AUTOPILOT QUEUE','shopifyDraftQuery='+nodes.length,'eligible='+eligible.length);
   let done=0;
+  const allResults=[];
   const concurrency=3;
   for(let i=0;i<eligible.length;i+=concurrency){
    const chunk=eligible.slice(i,i+concurrency);
    const results=await Promise.all(chunk.map(async p=>{
-    try{await processExistingDraftProduct(p.id,token);return {ok:true,id:p.id};}
-    catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);return {ok:false,id:p.id};}
+    try{return await processExistingDraftProduct(p.id,token);}
+    catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);return {processed:false,id:p.id,error:String(e.message)};}
    }));
-   done+=results.filter(x=>x.ok).length;
+   allResults.push(...results);
+   done+=results.filter(x=>x.processed===true).length;
    console.log('DRAFT AUTOPILOT PROGRESS','batch='+Math.floor(i/concurrency+1),'done='+done,'target='+eligible.length);
   }
+  draftAutopilotState.lastResult=summarizeAutopilotResults(allResults);
+  draftAutopilotState.skipped=draftAutopilotState.lastResult.skipped;
+  draftAutopilotState.pending=draftAutopilotState.lastResult.pending;
   draftAutopilotState.processed+=done;
   draftAutopilotState.lastRun=new Date().toISOString();
   draftAutopilotState.lastError=null;
@@ -1240,7 +1258,7 @@ if(process.env.HOMESTRO_CATALOG_ENABLED!=='false'){setTimeout(()=>catalogRun().c
 app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'homestro-catalog-autopilot',enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',intervalMs:catalogInterval(),running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 
 
-app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skippedNonDsers:draftAutopilotState.skipped}));
+app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skipped:draftAutopilotState.skipped,pending:draftAutopilotState.pending,lastResult:draftAutopilotState.lastResult}));
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }

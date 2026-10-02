@@ -36,10 +36,17 @@ function validateProductEconomics({ cost, sellingPrice, ratio }, env = process.e
   const numericCost = Number(cost);
   const numericSellingPrice = Number(sellingPrice);
   const numericRatio = ratio === undefined ? numericSellingPrice / numericCost : Number(ratio);
+  const commission = finiteNumber(env.EBAY_COMMISSION_RATE, .14) * (1 + finiteNumber(env.EBAY_FEE_VAT_RATE, .19));
+  const ad = finiteNumber(env.EBAY_MAX_AD_RATE, .15);
+  const fixed = finiteNumber(env.EBAY_ORDER_FEE_EUR, .45) * (1 + finiteNumber(env.EBAY_FEE_VAT_RATE, .19));
+  const estimatedContributionBeforeShippingTax = numericSellingPrice * (1 - commission - ad) - numericCost - fixed;
   return {
+    profitStatus: 'PROVISIONAL_BEFORE_SHIPPING_AND_TAX', sellReady: false,
+    estimatedContributionBeforeShippingTax,
     valid: Number.isFinite(numericCost) && numericCost > 0 &&
       Number.isFinite(numericSellingPrice) && numericSellingPrice >= rules.minSellingPrice &&
-      Number.isFinite(numericRatio) && numericRatio >= rules.minRatio &&
+      Number.isFinite(numericRatio) && numericRatio > 0 &&
+      Number.isFinite(estimatedContributionBeforeShippingTax) && estimatedContributionBeforeShippingTax >= rules.minNetProfit &&
       numericCost <= rules.maxCost,
     product: { cost: numericCost, sellingPrice: numericSellingPrice, ratio: numericRatio },
     rules
