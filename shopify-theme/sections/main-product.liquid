@@ -61,6 +61,12 @@
       <h1 class="product__title">{{ product.title }}</h1>
 
 
+      {% if product.description != blank %}
+        <div class="rte product__intro">{{ product.description | replace: '</p>', ' </p>' | replace: '</li>', ' </li>' | replace: '</h2>', ' </h2>' | replace: '</h3>', ' </h3>' | strip_html | truncatewords: 42 }}</div>
+      {% endif %}
+
+    </div>
+    <aside class="product__purchase" aria-label="Kaufoptionen">
       <div class="product__price" aria-live="polite">
         <span class="price" data-product-price>{{ current_variant.price | money }}</span>
         <s data-product-compare-price{% unless current_variant.compare_at_price > current_variant.price %} hidden{% endunless %}>
@@ -71,10 +77,6 @@
       <div class="product__availability" data-product-availability aria-live="polite">
         {% if current_variant.available %}<span class="status-dot"></span> Auf Lager{% else %}Derzeit nicht verfügbar{% endif %}
       </div>
-
-      {% if product.description != blank %}
-        <div class="rte product__intro">{{ product.description | replace: '</p>', ' </p>' | replace: '</li>', ' </li>' | replace: '</h2>', ' </h2>' | replace: '</h3>', ' </h3>' | strip_html | truncatewords: 42 }}</div>
-      {% endif %}
 
       {% form 'product', product, class: 'product-form', data-ajax-cart: '', novalidate: 'novalidate' %}
         <input type="hidden" name="id" value="{{ current_variant.id }}" data-variant-id>
@@ -115,7 +117,7 @@
         <div><a href="{{ shop.refund_policy.url }}">Informationen zum Rückgaberecht</a></div>
         <div>▣ Sichere, verschlüsselte Zahlung</div>
       </div>
-    </div>
+    </aside>
   </div>
 
   {% if product.description != blank %}<details class="product-details" open><summary>Produktdetails</summary><div class="rte">{{ product.description }}</div></details>{% endif %}
@@ -128,7 +130,7 @@
           "available": {{ variant.available | json }},
           "options": {{ variant.options | json }},
           "price": {{ variant.price | money | json }},
-          "compareAtPrice": {% if variant.compare_at_price %}{{ variant.compare_at_price | money | json }}{% else %}null{% endif %},
+          "compareAtPrice": {% if variant.compare_at_price > variant.price %}{{ variant.compare_at_price | money | json }}{% else %}null{% endif %},
           "featuredMediaId": {% if variant.featured_media %}{{ variant.featured_media.id | json }}{% else %}null{% endif %},
           "featuredImage": {% if variant.featured_media %}{{ variant.featured_media.preview_image | image_url: width: 1400 | json }}{% else %}null{% endif %}
         }{% unless forloop.last %},{% endunless %}

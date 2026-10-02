@@ -30,3 +30,22 @@ body{color:var(--ink);overflow-x:hidden}.announcement{background:var(--black);bo
 
 @media(min-width:801px){.nav__inner{gap:16px;scrollbar-width:none}.nav__inner::-webkit-scrollbar{display:none}.nav__inner a{font-size:13px;flex-shrink:0}}
 
+
+/* Compact product layout based on the supplied Amazon reference */
+.product__purchase{border:1px solid #d5d9d9;border-radius:10px;padding:22px;background:#fff;align-self:start}
+.product__purchase .product__price{margin-top:0}.product__purchase .product-form__submit{width:100%}
+.product__purchase .benefits{font-size:13px;line-height:1.5}
+.product__info{position:static!important}.product__intro{font-size:16px;line-height:1.6}
+.recommendations-row{display:flex;gap:24px;overflow-x:auto;padding:12px 4px 20px;scroll-snap-type:x mandatory}
+.recommendations-row .product-card{flex:0 0 190px;scroll-snap-align:start;box-shadow:none;border:0;border-radius:0;background:#fff}
+.recommendations-row .product-card img{height:180px;width:100%;object-fit:contain}
+.recommendations-row .product-card h3{font-size:14px;line-height:1.4}
+.recommendations-row .product-card .button{font-size:13px;padding:10px 8px}
+.product-recommendations{border-top:1px solid #ddd}.product-recommendations .section-title{font-size:24px}
+@media(min-width:1100px){.product{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 280px;gap:28px}.product__title{font-size:28px;line-height:1.25}.product__main-image{height:440px;max-height:440px}.product__thumbnails{grid-template-columns:repeat(6,minmax(0,1fr))}}
+@media(max-width:1099px){.product{display:grid;grid-template-columns:minmax(0,1fr)}.product__purchase{width:100%}}
+@media(max-width:600px){.product__purchase{padding:18px}.recommendations-row{gap:14px}.recommendations-row .product-card{flex-basis:160px}.recommendations-row .product-card img{height:150px}}
+
+@media(min-width:1100px){.product__thumbnails{max-height:168px;overflow-y:auto}.product__primary-media{padding:0!important}.product__main-image{height:440px!important}}
+
+a.button.button--secondary,a.button.button--secondary:visited{color:#326000!important;background:#fff!important}.recommendations-row .product-card{display:flex;flex-direction:column}.recommendations-row .product-card>.button,.recommendations-row .product-card>form{margin-top:auto}.recommendations-row .product-card>a:first-child{flex:1}.product-recommendations .section-head{margin-bottom:10px}
