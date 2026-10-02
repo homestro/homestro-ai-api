@@ -24,6 +24,17 @@ function optionNameForValues(name, values = []) {
     : current;
 }
 
+function planOptionRenames(options = [], variants = []) {
+  return (Array.isArray(options) ? options : []).map(option => {
+    const originalName = String(option?.name || '').trim();
+    const values = (Array.isArray(variants) ? variants : [])
+      .flatMap(variant => variant?.selectedOptions || [])
+      .filter(selected => String(selected?.name || '') === originalName)
+      .map(selected => selected?.value);
+    return {...option, originalName, name: optionNameForValues(originalName, values)};
+  });
+}
+
 // Shopify requires values inside one option to remain unique. Normalize functional values,
 // then give genuine source collisions a stable, customer-readable discriminator.
 function repairVariantOptions(variants = []) {
@@ -83,4 +94,4 @@ function qualityCheck(product = {}) {
   return {ok: reasons.length === 0, reasons: [...new Set(reasons)]};
 }
 
-module.exports = {FORBIDDEN_CUSTOMER_TEXT, FUNCTIONAL_VARIANT, germanVariantLabel, optionNameForValues, repairVariantOptions, qualityCheck};
+module.exports = {FORBIDDEN_CUSTOMER_TEXT, FUNCTIONAL_VARIANT, germanVariantLabel, optionNameForValues, planOptionRenames, repairVariantOptions, qualityCheck};
