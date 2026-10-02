@@ -8,6 +8,7 @@ const {detectEuWarehouse}=require('./sourcing-evidence');
 const {selectAmazonMatch}=require('./amazon-market');
 const {assertDraftProduct,isDraftProduct}=require('./shopify-safety');
 const {registerSidekickApi}=require('./sidekick-api');
+const {normalizeOptionName,normalizeVariantValue,priceForCost,categoryKey,variantMediaAssociations,qaProduct}=require('./autopilot-core');
 const app=express();
 const PORT=Number(process.env.PORT||8080);
 app.use(cors({origin:true}));
@@ -104,6 +105,9 @@ function homestroInferCategory(title,existing=''){
 function homestroSanitizeProduct(p,input){const x={...(p||{})};x.title=homestroStripEmoji(x.title||input?.title||'Produkt');x.description=String(x.description||'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').trim();x.seoTitle=homestroStripEmoji(x.seoTitle||x.title).slice(0,70);x.seoDescription=homestroStripEmoji(x.seoDescription||homestroPlain(x.description)).slice(0,320);x.handle=homestroCleanHandle(x.handle,x.title);x.category=homestroStripEmoji(x.category||input?.category||input?.productType||'');x.tags=[...new Set((Array.isArray(x.tags)?x.tags:[]).map(homestroStripEmoji).filter(Boolean))];return x;}
 function homestroVariantLabel(name){
  let v=homestroStripEmoji(name);
+ // Keep the legacy translations below for descriptive labels, but handle the
+ // supplier placeholders centrally and deterministically first.
+ if(/^(?:[A-Z]|as\s*(?:picture|shown)|default(?:\s+title)?|elbow[- ]*\d+\s*pairs?)$/i.test(v))return normalizeVariantValue(v);
  const exact={white:'Weiß',red:'Rot',green:'Grün',grey:'Grau',gray:'Grau',black:'Schwarz',blue:'Blau',navy:'Marineblau',pink:'Rosa',rose:'Rosa',beige:'Beige',brown:'Braun',orange:'Orange',yellow:'Gelb',purple:'Lila',violet:'Violett',silver:'Silber',gold:'Gold',germany:'Deutschland',poland:'Polen',france:'Frankreich','united states':'Vereinigte Staaten','mainland china':'China (Festland)',pump:'Pumpe'};
  if(exact[v.toLowerCase()])return exact[v.toLowerCase()];
  v=v.replace(/\\bChristmas Tree\\b/gi,'Weihnachtsbaum').replace(/\\bMainland China\\b/gi,'China (Festland)').replace(/\\bSky Blue\\b/gi,'Himmelblau').replace(/\\bGrey Camo\\b/gi,'Tarnmuster Grau').replace(/\\bDefault Title\\b/gi,'Standardausführung').replace(/\\bType\\s+(\\d+)\\b/gi,'Ausführung $1').replace(/\\bStyle\\s*([A-Z])\\b/gi,'Ausführung $1').replace(/\\bWiRot\\b/gi,'Weiß/Rot').replace(/\\bFiber Rubber Base\\b/gi,'Faser-Gummibasis').replace(/\\bRubber Base\\b/gi,'Gummibasis').replace(/\\bBase\\b/gi,'Basis').replace(/\\bTop\\b/gi,'Überlack').replace(/\\bVest for Men\\b/gi,'Weste für Herren').replace(/\\bVest for Women\\b/gi,'Weste für Damen').replace(/\\bAdapter PC\\b/gi,'PC-Adapter').replace(/\\bwith lights\\b/gi,'mit Beleuchtung');
@@ -116,7 +120,7 @@ function homestroVariantLabel(name){
 function homestroGermanOptionName(name){
  const v=String(name||'').trim();
  const map={color:'Farbe',colors:'Farbe',colour:'Farbe',colours:'Farbe',size:'Größe',style:'Ausführung','ships from':'Versand aus','ship from':'Versand aus','emitting color':'Lichtfarbe','outer diameter':'Außendurchmesser',series:'Serie','grit':'Körnung'};
- return map[v.toLowerCase()]||v;
+ return map[v.toLowerCase()]||normalizeOptionName(v);
 }
 async function homestroUpdateOptionNames(productId,options,token){
  const updates=(options||[]).map(o=>({id:o.id,name:homestroGermanOptionName(o.name)})).filter(o=>o.id&&o.name&&o.name!==String((options||[]).find(x=>x.id===o.id)?.name||''));
@@ -371,8 +375,8 @@ function homestroTargetSellingPrice(cost,currentPrice,title){
  const minRatio=isHeadphone?r.headphoneMinRatio:r.minRatio;
  const ratioFloor=landed*minRatio;
  const profitFloor=ebayProfitability({selling_price:Math.max(base,ratioFloor),landed_cost_eur:landed}).minRequiredSellingPriceEur;
- const target=Math.max(current,base,ratioFloor,Number.isFinite(profitFloor)?profitFloor:0);
- return Math.ceil((target-1e-9)*10)/10;
+ const target=priceForCost(landed,current,{minSellingPrice:base,minRatio,minNetProfit:r.minNetProfit,commissionRate:Number(process.env.EBAY_COMMISSION_RATE||0.14),feeVatRate:Number(process.env.EBAY_FEE_VAT_RATE||0.19),adRate:Number(process.env.EBAY_MAX_AD_RATE||0.15),orderFee:Number(process.env.EBAY_ORDER_FEE_EUR||0.45)});
+ return target??Math.ceil((Math.max(current,base,ratioFloor,Number.isFinite(profitFloor)?profitFloor:0)-1e-9)*10)/10;
 }
 async function homestroAutoPriceVariants(productId,variants,title,token){
  const source=Array.isArray(variants)?variants:[];
@@ -803,12 +807,38 @@ async function repairExistingDraftImages(productId,product,token){
  return {checked:mediaNodes.length,kept:keep.length-generated,removed:remove.length,generated,validation:'strict-ai-vision'};
 }
 
-async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}',{id:productId},token);
+function configuredCollectionId(product){
+ let map={};
+ try{map=JSON.parse(process.env.HOMESTRO_COLLECTION_MAP_JSON||'{}');}catch{console.error('Invalid HOMESTRO_COLLECTION_MAP_JSON');}
+ return String(map[categoryKey([product?.title,product?.productType,product?.description].join(' '))]||'').trim();
+}
+async function assignDraftCollection(product,token){
+ const collectionId=configuredCollectionId(product);
+ if(!collectionId)return {assigned:false,pending:true,reason:'collection-map-not-configured'};
+ const check=await shopifyGraphQL('query($id:ID!){product(id:$id){id status collections(first:50){nodes{id}}}}',{id:product.id},token);
+ assertDraftProduct(check.product);
+ if((check.product.collections?.nodes||[]).some(c=>c.id===collectionId))return {assigned:true,id:collectionId,existing:true};
+ const d=await shopifyGraphQL('mutation($productId:ID!,$collectionIds:[ID!]!){collectionsAddProducts(productIds:[$productId],collectionIds:$collectionIds){userErrors{field message}}}',{productId:product.id,collectionIds:[collectionId]},token);
+ const errors=d.collectionsAddProducts?.userErrors||[];if(errors.length)throw new Error('Collection assignment failed: '+errors.map(e=>e.message).join('; '));
+ return {assigned:true,id:collectionId};
+}
+async function associateDraftVariantImages(product,token){
+ const assignments=variantMediaAssociations(product.variants?.nodes||[],product.media?.nodes||[]);
+ if(!assignments.length)return {changed:0,pending:(product.variants?.nodes||[]).filter(v=>!v.image).length};
+ const safety=await shopifyGraphQL('query($id:ID!){product(id:$id){status}}',{id:product.id},token);assertDraftProduct(safety.product);
+ const d=await shopifyGraphQL('mutation($productId:ID!,$variantMedia:[ProductVariantAppendMediaInput!]!){productVariantAppendMedia(productId:$productId,variantMedia:$variantMedia){product{id} userErrors{field message}}}',{productId:product.id,variantMedia:assignments},token);
+ const errors=d.productVariantAppendMedia?.userErrors||[];if(errors.length)throw new Error('Variant image assignment failed: '+errors.map(e=>e.message).join('; '));
+ return {changed:assignments.length,pending:Math.max(0,(product.variants?.nodes||[]).filter(v=>!v.image).length-assignments.length)};
+}
+
+async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');assertDraftProduct(p);
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
  if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
  const alreadyProcessed=existingTags.includes('homestro-ai-processed-existing');
- const contentNeedsWork=!alreadyProcessed;
+ // Pending/failed products must be repaired on later runs; the old one-shot tag
+ // made transient OpenAI and supplier failures permanent.
+ const contentNeedsWork=!alreadyProcessed||existingTags.some(t=>/pending|failed/.test(t));
  const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
  const srcMatch=desc.match(new RegExp("https?://(?:www\\\\.)?aliexpress\\\\.com/item/\\\\d+\\\\.html[^\\\\s<]*","i"));
@@ -921,6 +951,8 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  }
  const optionsUpdated=contentNeedsWork?await homestroUpdateOptionNames(productId,p.options||[],token):0;
  const variantsUpdated=contentNeedsWork?await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token):0;
+ const collection=await assignDraftCollection({id:productId,title:x.title,productType:category,description:x.description},token);
+ const variantImages=await associateDraftVariantImages(p,token);
  const existingImages=(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  let media={count:existingImages.length,validation:existingImages.length?'preserved-existing':'not-run'};
  let imagesVerified=existingImages.length>0&&existingTags.includes('homestro-ai-images-verified');
@@ -958,9 +990,15 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   ...(profitPending?['homestro-profit-pending']:['homestro-profit-checked']),
   ...(imagePending?['homestro-ai-image-pending']:['homestro-ai-images-verified'])
  ])];
- if(!profitPending&&!imagePending)finalTags.push('homestro-ai-complete');
- await setProductTags(productId,finalTags,token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,complete:!profitPending&&!imagePending};
+ // Read after every write. This is both the final DRAFT guard and the QA gate;
+ // tags never claim readiness based on optimistic local state.
+ const verified=(await shopifyGraphQL('query($id:ID!){product(id:$id){id status title description productType seo{title description} collections(first:20){nodes{id title handle}} variants(first:100){nodes{id price selectedOptions{name value} image{id url} inventoryItem{unitCost{amount}}}} media(first:30){nodes{id ... on MediaImage{image{url width height}}}}}}',{id:productId},token)).product;
+ assertDraftProduct(verified);
+ const qa=qaProduct({...verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
+ finalTags.push(qa.ok?'homestro-ai-complete':'homestro-ai-qa-pending');
+ const cleanFinal=finalTags.filter(t=>qa.ok?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
+ await setProductTags(productId,[...new Set(cleanFinal)],token);
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
@@ -970,7 +1008,8 @@ async function processExistingDrafts(limit,token){
   try{results.push(await processExistingDraftProduct(p.id,token));}
   catch(e){
    try{
-    const current=await shopifyGraphQL('query($id:ID!){product(id:$id){tags}}',{id:p.id},token);
+    const current=await shopifyGraphQL('query($id:ID!){product(id:$id){status tags}}',{id:p.id},token);
+    assertDraftProduct(current.product);
     const tags=[...new Set([...(current.product?.tags||[]),'homestro-ai-failed-existing'])];
     await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags}},token);
    }catch{}
@@ -994,18 +1033,23 @@ async function runDraftImageQA(){
   for(const p of imageEligible){
    try{
     const result=await repairExistingDraftImages(p.id,p,token);
+    const safety=await shopifyGraphQL('query($id:ID!){product(id:$id){status}}',{id:p.id},token);
+    assertDraftProduct(safety.product);
     const tags=[...(p.tags||[]).map(String)].filter(t=>!['homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-complete','homestro-ai-images-verified'].includes(t));
-    tags.push('homestro-ai-images-verified','homestro-ai-complete');
+    // Image QA is only one stage. It must never independently declare the
+    // complete product ready (content, variants, pricing and collection may fail).
+    tags.push('homestro-ai-images-verified');
     const u=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags:[...new Set(tags)]}},token);
     const errs=u.productUpdate?.userErrors||[];
     if(errs.length)throw new Error(errs.map(x=>x.message).join('; '));
     console.log('DRAFT IMAGE REPAIR COMPLETE',p.id,'checked='+result.checked,'kept='+result.kept,'removed='+result.removed,'generated='+result.generated);
    }catch(e){
     try{
-      const current=await shopifyGraphQL('query($id:ID!){product(id:$id){tags}}',{id:p.id},token);
+      const current=await shopifyGraphQL('query($id:ID!){product(id:$id){status tags}}',{id:p.id},token);
+      assertDraftProduct(current.product);
       const tags=[...(current.product?.tags||[]).map(String)].filter(t=>!['homestro-ai-complete','homestro-ai-images-verified','homestro-ai-images-checked'].includes(t));
       tags.push('homestro-ai-image-pending');
-      await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags:[...new Set(tags)]}});
+      await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags:[...new Set(tags)]}},token);
     }catch{}
     console.error('DRAFT IMAGE REPAIR FAILED',p.id,e.message);
    }
