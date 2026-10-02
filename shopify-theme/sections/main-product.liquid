@@ -59,9 +59,7 @@
     <div class="product__info">
       <div class="eyebrow">HOMESTRO Auswahl</div>
       <h1 class="product__title">{{ product.title }}</h1>
-      {% if section.settings.show_rating %}
-        <div class="rating" aria-label="Qualitätsversprechen">★★★★★ <span>Bewährte Qualität</span></div>
-      {% endif %}
+
 
       <div class="product__price" aria-live="polite">
         <span class="price" data-product-price>{{ current_variant.price | money }}</span>
@@ -113,8 +111,8 @@
       {% endform %}
 
       <div class="benefits">
-        <div>✓ Kostenloser Versand ab 50 €</div>
-        <div>↺ 30 Tage Rückgaberecht</div>
+        <div><a href="{{ shop.shipping_policy.url }}">Versandinformationen</a></div>
+        <div>↺ Informationen zur Rückgaberecht</div>
         <div>▣ Sichere, verschlüsselte Zahlung</div>
       </div>
     </div>
