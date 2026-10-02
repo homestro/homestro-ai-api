@@ -1,3 +1,4 @@
+const {supplierReferenceMetafields}=require('./supplier-reference');
 const {normalizeSelectedDraftId}=require('./selected-draft');
 // Railway sync: DSers-imported Shopify DRAFTs are eligible for Homestro autopilot.
 const express=require('express');
@@ -374,11 +375,9 @@ function homestroTargetSellingPrice(cost,currentPrice,title){
  const isHeadphone=/(earphone|earbuds?|headphone|headset|kopfhörer|ohrhörer|bluetooth)/i.test(t);
  const r=rules();
  const base=r.minSellingPrice;
- const minRatio=isHeadphone?r.headphoneMinRatio:r.minRatio;
- const ratioFloor=landed*minRatio;
- const profitFloor=ebayProfitability({selling_price:Math.max(base,ratioFloor),landed_cost_eur:landed}).minRequiredSellingPriceEur;
- const target=priceForCost(landed,current,{minSellingPrice:base,minRatio,minNetProfit:r.minNetProfit,commissionRate:Number(process.env.EBAY_COMMISSION_RATE||0.14),feeVatRate:Number(process.env.EBAY_FEE_VAT_RATE||0.19),adRate:Number(process.env.EBAY_MAX_AD_RATE||0.15),orderFee:Number(process.env.EBAY_ORDER_FEE_EUR||0.45)});
- return target??Math.ceil((Math.max(current,base,ratioFloor,Number.isFinite(profitFloor)?profitFloor:0)-1e-9)*10)/10;
+
+ const target=priceForCost(landed,current,{minSellingPrice:base,minNetProfit:r.minNetProfit,commissionRate:Number(process.env.EBAY_COMMISSION_RATE||0.14),feeVatRate:Number(process.env.EBAY_FEE_VAT_RATE||0.19),adRate:Number(process.env.EBAY_MAX_AD_RATE||0.15),orderFee:Number(process.env.EBAY_ORDER_FEE_EUR||0.45)});
+ return target??current;
 }
 async function homestroAutoPriceVariants(productId,variants,title,token){
  const source=Array.isArray(variants)?variants:[];
@@ -845,8 +844,15 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const desc=String(p.description||'');
  const reference=aliExpressReference({url:mf.aliexpress_url,productId:mf.aliexpress_product_id,description:desc});
  const src=reference.url;
- if(!src||!reference.productId)return {id:productId,title:p.title,processed:false,skipped:true,reason:'verified-supplier-reference-missing'};
+ if(!src||!reference.productId)return {id:productId,title:p.title,processed:false,skipped:true,reason:'verified-supplier-reference-missing',pendingChecks:['actual-dsers-supplier-link','variant-landed-cost','destination-shipping','matched-market-price']};
  const id=reference.productId;
+ // Persist source BEFORE pricing/content/image operations can replace the imported description.
+ const sourceFields=supplierReferenceMetafields(p,mf);
+ if(sourceFields.length){
+  const saved=await shopifyGraphQL('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){userErrors{field message}}}',{metafields:sourceFields},token);
+  if(saved.metafieldsSet?.userErrors?.length)throw new Error(saved.metafieldsSet.userErrors.map(e=>e.message).join('; '));
+ }
+
  let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
  const hasImages=(p.media?.nodes||[]).some(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  const imageNeedsSource=existingTags.includes('homestro-ai-image-pending')||!hasImages;
@@ -876,7 +882,8 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   return {id:v.id,price:vp,cost:vc,economics:ebayProfitability({selling_price:vp,landed_cost_eur:vc})};
  });
  const profitability=ebayProfitability({selling_price:price,landed_cost_eur:cost});
- const profitPending=variantEconomics.length===0||variantEconomics.some(v=>!Number.isFinite(v.cost)||v.cost<=0||!v.economics.valid);
+ const profitPending=true; // Supplier unit costs exclude destination shipping/tax; keep actual profit pending.
+ const supplierContributionPending=variantEconomics.length===0||variantEconomics.some(v=>!Number.isFinite(v.cost)||v.cost<=0||!v.economics.valid);
  let x=null;
  const aiInput={
   title:details.page_title||p.title,
@@ -1000,7 +1007,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  finalTags.push(qa.ok?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>qa.ok?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
  await setProductTags(productId,[...new Set(cleanFinal)],token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok,landedCostVerified:false,profitStatus:'PROVISIONAL_BEFORE_SHIPPING_AND_TAX',supplierContributionPending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);

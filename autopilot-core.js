@@ -34,13 +34,14 @@ function priceForCost(cost, currentPrice, rules = {}) {
   const landed = Number(cost);
   if (!Number.isFinite(landed) || landed <= 0) return null;
   const minPrice = Number(rules.minSellingPrice ?? 34.9);
-  const ratio = Number(rules.minRatio ?? 3);
-  const minProfit = Number(rules.minNetProfit ?? 12);
+  const minProfit = Number(rules.minNetProfit ?? 10);
   const commission = Number(rules.commissionRate ?? 0.14) * (1 + Number(rules.feeVatRate ?? 0.19));
   const ad = Number(rules.adRate ?? 0.15);
   const orderFee = Number(rules.orderFee ?? 0.45) * (1 + Number(rules.feeVatRate ?? 0.19));
-  const profitFloor = (landed + orderFee + minProfit) / (1 - commission - ad);
-  const target = Math.max(minPrice, landed * ratio, profitFloor, Number(currentPrice) || 0);
+  const denominator = 1 - commission - ad;
+  if (!Number.isFinite(denominator) || denominator <= 0) return null;
+  const profitFloor = (landed + orderFee + minProfit) / denominator;
+  const target = Math.max(minPrice, profitFloor, Number(currentPrice) || 0);
   return Number((Math.ceil((target - 1e-9) * 10) / 10).toFixed(2));
 }
 
@@ -99,9 +100,11 @@ function qaProduct(product = {}) {
     if (values.some(v => RAW_VARIANT.test(String(v).trim()))) reasons.push(`variant-label:${index}`);
     if (!(Number(v.price) > 0)) reasons.push(`variant-price:${index}`);
     const cost = Number(v.cost ?? v.inventoryItem?.unitCost?.amount);
-    if (!(cost > 0) || priceForCost(cost, v.price, product.rules) > Number(v.price)) reasons.push(`variant-margin:${index}`);
+    const required = priceForCost(cost, v.price, product.rules);
+    if (!(cost > 0) || required === null || required > Number(v.price)) reasons.push(`variant-margin:${index}`);
     if (variants.length > 1 && !v.image?.url && !v.image?.id) reasons.push(`variant-image:${index}`);
   });
+  if (product.landedCostVerified !== true) reasons.push('landed-cost-unverified');
   const images = product.media?.nodes || product.images || [];
   if (selectImages(images).length < 1) reasons.push('images');
   if (!(product.collections?.nodes || product.collections || []).length) reasons.push('collection');

@@ -11,7 +11,7 @@ const germanDescription = '<p>' + ('Dieses Produkt bietet eine praktische Anwend
 
 function ready(overrides = {}) {
   return {
-    status: 'DRAFT', title: 'Praktischer Küchenhelfer für den Alltag', description: germanDescription,
+    landedCostVerified: true, status: 'DRAFT', title: 'Praktischer Küchenhelfer für den Alltag', description: germanDescription,
     seo: { title: 'Praktischer Küchenhelfer', description: 'Küchenhelfer für eine einfache und zuverlässige Anwendung.' },
     collections: { nodes: [{ id: 'gid://shopify/Collection/1' }] },
     variants: { nodes: [{ id: 'v1', price: '39.90', selectedOptions: [{ name: 'Farbe', value: 'Schwarz' }], image: { url: 'https://cdn.example/a.jpg' }, inventoryItem: { unitCost: { amount: '10' } } }] },
@@ -82,4 +82,16 @@ test('DRAFT-only QA rejects ACTIVE products even when all quality fields pass', 
   const qa = qaProduct(ready({ status: 'ACTIVE' }));
   assert.equal(qa.ok, false);
   assert.ok(qa.reasons.includes('draft-only'));
+});
+
+
+test('profit target permits 15 EUR cost and 39 EUR price without a hard 3x ratio', () => {
+  assert.equal(priceForCost(15, 39, { minNetProfit: 10, minRatio: 3 }), 39);
+  assert.equal(priceForCost(15, 35, { minNetProfit: 10 }), 37.4);
+  assert.equal(priceForCost(15, 39, { adRate: 1 }), null);
+});
+test('supplier cost alone cannot mark a product sell-ready', () => {
+  const qa = qaProduct(ready({ landedCostVerified: undefined }));
+  assert.equal(qa.ok, false);
+  assert.ok(qa.reasons.includes('landed-cost-unverified'));
 });
