@@ -1,2 +1,16 @@
-<section class="section section--cream"><div class="page-width"><div class="section-head"><div><div class="eyebrow">Für jeden Raum</div><h2 class="section-title">{{ section.settings.heading }}</h2></div></div><div class="grid grid--3">{% for block in section.blocks %}{% assign collection = block.settings.collection %}<a class="collection-card" href="{{ collection.url | default: routes.all_products_collection_url }}" {{ block.shopify_attributes }}>{% if collection.image %}{{ collection.image | image_url: width: 900 | image_tag: loading: 'lazy', widths: '400,700,900', alt: collection.title }}{% else %}{{ 'collection-' | append: forloop.index | placeholder_svg_tag: 'placeholder' }}{% endif %}<div class="collection-card__overlay"><h3>{{ collection.title | default: block.settings.title }}</h3><span>Entdecken →</span></div></a>{% endfor %}</div></div></section>
-{% schema %}{"name":"Kollektionen","settings":[{"type":"text","id":"heading","label":"Überschrift","default":"Entdecken Sie unsere Welten"}],"blocks":[{"type":"collection","name":"Kollektion","settings":[{"type":"collection","id":"collection","label":"Kollektion"},{"type":"text","id":"title","label":"Ersatztitel","default":"Schöner wohnen"}]}],"presets":[{"name":"Kollektionen","blocks":[{"type":"collection"},{"type":"collection"},{"type":"collection"}]}]}{% endschema %}
+<section class="section category-section"><div class="page-width">
+  <div class="section-head"><div><div class="eyebrow">Shop nach Kategorie</div><h2 class="section-title">{{ section.settings.heading }}</h2></div></div>
+  <div class="category-grid">
+    {% for block in section.blocks %}
+      {% assign featured_collection = block.settings.collection %}
+      {% assign card_image = block.settings.image | default: featured_collection.image %}
+      <a class="collection-card" href="{{ featured_collection.url | default: routes.collections_url }}" {{ block.shopify_attributes }}>
+        {% if card_image %}{{ card_image | image_url: width: 800 | image_tag: loading: 'lazy', widths: '260,400,600,800', sizes: '(max-width: 700px) 50vw, 15vw', alt: card_image.alt | default: block.settings.title | default: featured_collection.title }}{% else %}{{ 'collection-' | append: forloop.index | placeholder_svg_tag: 'placeholder' }}{% endif %}
+        <div class="collection-card__overlay"><h3>{{ block.settings.title | default: featured_collection.title }}</h3><span>Entdecken <span aria-hidden="true">→</span></span></div>
+      </a>
+    {% endfor %}
+  </div>
+</div></section>
+{% schema %}
+{"name":"Bildkategorien","max_blocks":8,"settings":[{"type":"text","id":"heading","label":"Überschrift","default":"Kategorien entdecken"}],"blocks":[{"type":"collection","name":"Kategorie","settings":[{"type":"collection","id":"collection","label":"Kollektion"},{"type":"image_picker","id":"image","label":"Eigenes Bild (optional)"},{"type":"text","id":"title","label":"Titel (optional)"}]}],"presets":[{"name":"Bildkategorien","blocks":[{"type":"collection"},{"type":"collection"},{"type":"collection"},{"type":"collection"},{"type":"collection"},{"type":"collection"},{"type":"collection"}]}]}
+{% endschema %}

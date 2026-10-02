@@ -116,15 +116,7 @@
         <div>▣ Sichere, verschlüsselte Zahlung</div>
       </div>
     </div>
-    <aside class="product__complementary" data-complementary-slot hidden aria-label="Ergänzende Produkte"></aside>
   </div>
-
-  {% if product.description != blank %}
-    <div class="section product-details">
-      <h2 class="section-title">Produktdetails</h2>
-      <div class="rte">{{ product.description }}</div>
-    </div>
-  {% endif %}
 
   <script type="application/json" data-product-variants>
     [
@@ -146,13 +138,6 @@
 {% schema %}
 {
   "name": "Produkt",
-  "settings": [
-    {
-      "type": "checkbox",
-      "id": "show_rating",
-      "label": "Qualitätsbewertung anzeigen",
-      "default": true
-    }
-  ]
+  "settings": []
 }
 {% endschema %}

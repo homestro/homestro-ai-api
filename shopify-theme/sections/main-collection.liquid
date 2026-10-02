@@ -1,4 +1,6 @@
-<header class="collection-hero">
+{% assign collection_banner = section.settings.banner_image | default: collection.image %}
+<header class="collection-hero{% if collection_banner %} collection-hero--image{% endif %}">
+  {% if collection_banner %}<div class="collection-hero__media">{{ collection_banner | image_url: width: 2200 | image_tag: loading: 'eager', fetchpriority: 'high', widths: '750,1200,1700,2200', sizes: '100vw', alt: collection_banner.alt | default: collection.title }}</div>{% endif %}
   <div class="page-width">
     <div class="eyebrow">HOMESTRO Kollektion</div>
     <h1 class="section-title">{{ collection.title }}</h1>
@@ -152,6 +154,11 @@
 {
   "name": "Kollektion",
   "settings": [
+    {
+      "type": "image_picker",
+      "id": "banner_image",
+      "label": "Bannerbild (Collection-Bild als Fallback)"
+    },
     {
       "type": "range",
       "id": "products_per_page",

@@ -156,9 +156,6 @@ async function addToCart(form) {
 function initializeRecommendations(section) {
   if (!section.dataset.url || section.dataset.loaded === 'true') return;
   section.dataset.loaded = 'true';
-  const slot = section.dataset.recommendationIntent === 'complementary'
-    ? document.querySelector('[data-complementary-slot]') : null;
-  if (slot) slot.append(section);
   fetch(section.dataset.url)
     .then((response) => {
       if (!response.ok) throw new Error('Recommendations request failed');
@@ -169,10 +166,6 @@ function initializeRecommendations(section) {
       const replacement = html.querySelector('[data-product-recommendations]');
       if (replacement?.querySelector('.product-card')) {
         section.innerHTML = replacement.innerHTML;
-        if (slot) {
-          slot.hidden = false;
-          slot.closest('.product').classList.add('product--with-complementary');
-        }
       } else section.remove();
     })
     .catch(() => section.remove());
