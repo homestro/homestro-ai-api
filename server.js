@@ -1,3 +1,4 @@
+const {summarizeAutopilotResults}=require('./autopilot-results');
 const {fulfillmentCostEvidence}=require('./fulfillment-cost-evidence');
 const {supplierReferenceMetafields}=require('./supplier-reference');
 const {normalizeSelectedDraftId}=require('./selected-draft');
@@ -1032,7 +1033,7 @@ async function processExistingDrafts(limit,token){
  }
  return results;
 }
-const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0};
+const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0,pending:0,lastResult:null};
 function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
 async function runDraftImageQA(){
  if(process.env.HOMESTRO_IMAGE_QA_ENABLED==='false'){console.log('DRAFT IMAGE QA DISABLED');return {disabled:true};}
@@ -1040,9 +1041,9 @@ async function runDraftImageQA(){
  draftAutopilotState.imageRunning=true;
  try{
   const token=await getClientToken();
-  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const imageEligible=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'))).slice(0,50);
+  const imageEligible=nodes.filter(p=>{const mf=Object.fromEntries((p.metafields?.nodes||[]).map(m=>[m.key,m.value]));return !p.tags?.includes('homestro-ai-rejected')&&Boolean(aliExpressReference({url:mf.aliexpress_url,description:p.description}).url)&&String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'));}).slice(0,50);
   console.log('DRAFT IMAGE QA QUEUE','drafts='+nodes.length,'eligible='+imageEligible.length);
   for(const p of imageEligible){
    try{
@@ -1087,12 +1088,16 @@ async function draftAutopilotRun(){
   for(let i=0;i<eligible.length;i+=concurrency){
    const chunk=eligible.slice(i,i+concurrency);
    const results=await Promise.all(chunk.map(async p=>{
-    try{await processExistingDraftProduct(p.id,token);return {ok:true,id:p.id};}
-    catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);return {ok:false,id:p.id};}
+    try{return await processExistingDraftProduct(p.id,token);}
+    catch(e){console.error('DRAFT AUTOPILOT PRODUCT FAILED',p.id,e.message);return {processed:false,id:p.id,error:String(e.message)};}
    }));
-   done+=results.filter(x=>x.ok).length;
+   allResults.push(...results);
+   done+=results.filter(x=>x.processed===true).length;
    console.log('DRAFT AUTOPILOT PROGRESS','batch='+Math.floor(i/concurrency+1),'done='+done,'target='+eligible.length);
   }
+  draftAutopilotState.lastResult=summarizeAutopilotResults(allResults);
+  draftAutopilotState.skipped=draftAutopilotState.lastResult.skipped;
+  draftAutopilotState.pending=draftAutopilotState.lastResult.pending;
   draftAutopilotState.processed+=done;
   draftAutopilotState.lastRun=new Date().toISOString();
   draftAutopilotState.lastError=null;
@@ -1252,7 +1257,7 @@ if(process.env.HOMESTRO_CATALOG_ENABLED!=='false'){setTimeout(()=>catalogRun().c
 app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'homestro-catalog-autopilot',enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',intervalMs:catalogInterval(),running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 
 
-app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skippedNonDsers:draftAutopilotState.skipped}));
+app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skipped:draftAutopilotState.skipped,pending:draftAutopilotState.pending,lastResult:draftAutopilotState.lastResult}));
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
