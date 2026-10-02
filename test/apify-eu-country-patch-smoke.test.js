@@ -1,10 +1,9 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('fs');
-test('build patch includes concrete-country Apify warehouse detector',()=>{
- const s=fs.readFileSync('patch-autopilot-quality.js','utf8');
- assert.match(s,/countryPattern='Germany\|Deutschland\|Poland\|Polen/);
- assert.match(s,/shippingBlob/);
- assert.match(s,/variantsBlob/);
- assert.match(s,/homestroEuWarehouseValue\(warehouse\)/);
+test('runtime includes concrete-country Apify warehouse detector',()=>{
+ const s=fs.readFileSync('sourcing-evidence.js','utf8');
+ assert.match(s,/\['GERMANY', 'Germany'\]/);
+ assert.match(s,/shipFromCountry/);
+ assert.match(s,/DESTINATION_FIELDS/);
 });

@@ -7,7 +7,7 @@ const { catalogCandidateRejection, externalCandidateRejection, targetSellingPric
 test('central rules provide one set of defaults and environment overrides', () => {
   assert.deepEqual(getProductRules({}), {
     maxCost: 15, minSellingPrice: 34.9, minRatio: 3, minSold: 1000, minNetProfit: 12,
-    headphoneMinCost: 10, headphoneMaxCost: 27, headphoneMinRatio: 2.9
+    headphoneMinCost: 10, headphoneMaxCost: 27, headphoneMinRatio: 2.9, amazonMinMatchConfidence: 0.85
   });
   assert.equal(getProductRules({ MAX_PRODUCT_COST: '9' }).maxCost, 9);
   assert.equal(validateProductEconomics({ cost: 10, sellingPrice: 35 }, {}).valid, true);
