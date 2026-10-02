@@ -15,5 +15,7 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV CHROMIUM_PATH=/usr/bin/chromium
 RUN npm install --omit=dev
 COPY . .
-RUN node ./test-quality-repair.js && node ./patch-autopilot-quality.js && node --check ./server.js
+# Autopilot quality logic is now integrated directly in server.js/autopilot-core.js.
+# Do not run the legacy source-text patcher here because its targets may no longer exist.
+RUN node ./test-quality-repair.js && node --check ./server.js && node --check ./autopilot-core.js
 CMD ["node", "./server.js"]
