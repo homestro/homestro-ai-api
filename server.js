@@ -1084,6 +1084,7 @@ async function draftAutopilotRun(){
   draftAutopilotState.skipped=0;
   console.log('DRAFT AUTOPILOT QUEUE','shopifyDraftQuery='+nodes.length,'eligible='+eligible.length);
   let done=0;
+  const allResults=[];
   const concurrency=3;
   for(let i=0;i<eligible.length;i+=concurrency){
    const chunk=eligible.slice(i,i+concurrency);
