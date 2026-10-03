@@ -18,6 +18,9 @@ function normalizeVariantValue(value, { optionName = '', position = 0, imageAlt 
   if (/^as\s*(?:picture|shown)$/i.test(raw) && alt && !/^image|produktbild$/i.test(alt)) raw = alt;
   const colors = { black: 'Schwarz', white: 'Weiß', red: 'Rot', blue: 'Blau', green: 'Grün', grey: 'Grau', gray: 'Grau', pink: 'Rosa', beige: 'Beige', brown: 'Braun', silver: 'Silber', gold: 'Gold', orange: 'Orange', yellow: 'Gelb', purple: 'Violett' };
   if (colors[raw.toLowerCase()]) return colors[raw.toLowerCase()];
+  // Keep standard clothing/product sizes clean for customers. Do not turn
+  // S/M/L into labels such as "Ausführung S".
+  if (/^(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)$/i.test(raw)) return raw.toUpperCase();
   const elbow = raw.match(/^elbow[- ]*(\d+)\s*pairs?$/i);
   if (elbow) return `Ellbogenbandage – ${elbow[1]} Paar`;
   const count = raw.match(/^(\d+)\s*(?:pcs?|pieces?)$/i);
