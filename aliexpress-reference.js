@@ -15,4 +15,24 @@ function aliExpressReference({ url = '', productId = '', description = '' } = {}
   }
 }
 
-module.exports = { aliExpressReference };
+function aliExpressReferenceFromProduct(product = {}, existing = {}) {
+  const explicitValues = [
+    existing.aliexpress_url,
+    product.description,
+    ...(Array.isArray(product.tags) ? product.tags : []),
+    ...(product.metafields?.nodes || []).map(field => field?.value),
+    ...(product.variants?.nodes || []).flatMap(variant => [
+      variant?.sku,
+      ...(variant?.metafields?.nodes || []).map(field => field?.value)
+    ])
+  ];
+  // Only a literal, validated AliExpress item URL is evidence. Numeric SKUs,
+  // tags, titles and standalone IDs are intentionally insufficient.
+  for (const value of explicitValues) {
+    const reference = aliExpressReference({ description: String(value || '') });
+    if (reference.url && reference.productId) return reference;
+  }
+  return aliExpressReference({ productId: existing.aliexpress_product_id });
+}
+
+module.exports = { aliExpressReference, aliExpressReferenceFromProduct };
