@@ -1338,6 +1338,7 @@ app.post('/api/autopilot/run-once',apiKey,async(_q,res)=>{
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
+if(process.env.HOMESTRO_AUTOPILOT_RUN_ONCE==='true') setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT RUN ONCE FAILED',e.message)),15000);
 // One-time visual QA safety net: runs independently of the text autopilot flag and is idempotent via homestro-ai-images-checked.
 if(process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false')setTimeout(()=>runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
 
