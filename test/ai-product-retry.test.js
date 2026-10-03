@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { extractOpenAiResponseText } = require('../openai-response');
 
 const source = fs.readFileSync(require.resolve('../server.js'), 'utf8');
 const body = source.slice(source.indexOf('async function aiProduct'), source.indexOf('\n\napp.post(\'/api/ai/product\''));
@@ -15,10 +16,17 @@ const sanitize = (product, input) => ({
   seoDescription: product.seoDescription || plain(product.description),
   tags: product.tags || []
 });
-const load = consoleStub => new Function('cleanJson','homestroSanitizeProduct','homestroPlain','homestroStripEmoji','homestroCleanHandle','console',body+';return aiProduct;')(
-  JSON.parse,sanitize,plain,value=>String(value || ''),()=> 'produkt',consoleStub
+const load = consoleStub => new Function('cleanJson','homestroSanitizeProduct','homestroPlain','homestroStripEmoji','homestroCleanHandle','extractOpenAiResponseText','console',body+';return aiProduct;')(
+  JSON.parse,sanitize,plain,value=>String(value || ''),()=> 'produkt',extractOpenAiResponseText,consoleStub
 );
 const response = product => ({ ok:true,status:200,text:async()=>JSON.stringify({output_text:JSON.stringify(product)}) });
+const messageResponse = product => ({ ok:true,status:200,text:async()=>JSON.stringify({
+  status:'completed',
+  output:[
+    {type:'reasoning',summary:[]},
+    {type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify(product),annotations:[]}]}
+  ]
+}) });
 const product = length => ({title:'Deutsches Testprodukt',description:'<p>'+'D'.repeat(length)+'</p>',seoTitle:'Testprodukt',seoDescription:'Beschreibung'});
 
 async function run(responses) {
@@ -37,10 +45,29 @@ async function run(responses) {
   }
 }
 
-test('first sufficiently long AI description does not retry', async()=>{
+test('top-level output_text containing valid JSON is parsed without retry', async()=>{
   const {result,calls}=await run([response(product(1000))]);
   assert.equal(result.fallback,false);
   assert.equal(calls.length,1);
+});
+
+test('Responses API assistant output_text content is parsed as valid product JSON', async()=>{
+  const {result,calls}=await run([messageResponse(product(1000))]);
+  assert.equal(result.fallback,false);
+  assert.equal(plain(result.product.description).length,1000);
+  assert.equal(calls.length,1);
+});
+
+test('missing or empty assistant text produces a safe structural diagnostic', async()=>{
+  const {result,logs}=await run([{
+    ok:true,status:200,text:async()=>JSON.stringify({status:'completed',secret:'must-not-appear',output:[
+      {type:'reasoning',summary:[{text:'private reasoning'}]},
+      {type:'message',role:'assistant',content:[{type:'output_text',text:'   '},{type:'refusal',refusal:'private refusal'}]}
+    ]})
+  }]);
+  assert.equal(result.fallback,true);
+  assert.match(result.reason,/httpStatus=200,responseStatus=completed,outputStructure=reasoning\[\]\|message:assistant\[output_text,refusal\]/);
+  assert.doesNotMatch(result.reason+logs.join('\n'),/must-not-appear|private reasoning|private refusal/);
 });
 
 test('short first description is repaired once and successful repair is used', async()=>{

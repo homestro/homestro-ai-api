@@ -13,6 +13,7 @@ const {selectAmazonMatch}=require('./amazon-market');
 const {aliExpressReference,aliExpressReferenceFromProduct}=require('./aliexpress-reference');
 const {supplierProcessingState}=require('./supplier-processing-state');
 const {collectionAssignmentRequest,optionNameUpdateRequest}=require('./shopify-draft-operations');
+const {extractOpenAiResponseText}=require('./openai-response');
 const {assertDraftProduct,isDraftProduct}=require('./shopify-safety');
 const {registerSidekickApi}=require('./sidekick-api');
 const {normalizeOptionName,normalizeVariantValue,priceForCost,categoryKey,variantMediaAssociations,qaProduct}=require('./autopilot-core');
@@ -156,7 +157,7 @@ async function aiProduct(input){
   const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:messages,text:{format:{type:'json_object'}},max_output_tokens:5000})});
   const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{throw new Error('OpenAI returned non-JSON HTTP '+r.status);}
   if(!r.ok)throw new Error(d?.error?.message||'OpenAI request failed');
-  return cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');
+  return cleanJson(extractOpenAiResponseText(d,{httpStatus:r.status}));
  };
  try{
   let p=await request([{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\n'+payload}]}]);
