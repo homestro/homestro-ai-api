@@ -1327,6 +1327,14 @@ app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'hom
 
 
 app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skipped:draftAutopilotState.skipped,pending:draftAutopilotState.pending,lastResult:draftAutopilotState.lastResult}));
+app.post('/api/autopilot/run-once',apiKey,async(_q,res)=>{
+ if(draftAutopilotState.running)return res.status(409).json({ok:false,error:'autopilot-already-running'});
+ try{
+  const before={processed:draftAutopilotState.processed,lastRun:draftAutopilotState.lastRun};
+  await draftAutopilotRun();
+  return res.json({ok:true,mode:'run-once',automaticEnabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',before,after:{processed:draftAutopilotState.processed,skipped:draftAutopilotState.skipped,pending:draftAutopilotState.pending,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,lastResult:draftAutopilotState.lastResult}});
+ }catch(e){return res.status(500).json({ok:false,error:String(e?.message||e)});}
+});
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
