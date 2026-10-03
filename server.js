@@ -1,4 +1,6 @@
+const {contentReadiness}=require('./content-readiness');
 const {summarizeAutopilotResults}=require('./autopilot-results');
+const {registerSupplierQuoteBridge}=require('./supplier-quote-bridge');
 const {fulfillmentCostEvidence}=require('./fulfillment-cost-evidence');
 const {supplierReferenceMetafields}=require('./supplier-reference');
 const {normalizeSelectedDraftId}=require('./selected-draft');
@@ -30,6 +32,7 @@ async function exchangeIdToken(idToken,payload){const c=cfg(),shop=new URL(paylo
 async function getRequestToken(req){const a=req.get('authorization')||'',id=a.startsWith('Bearer ')?a.slice(7):'';const payload=validateIdToken(id);return exchangeIdToken(id,payload);}
 async function shopifyGraphQL(query,variables={},overrideToken){const c=cfg();if(!c.domain)throw Object.assign(new Error('Shopify is not configured.'),{status:503});const token=overrideToken||await getClientToken();const r=await fetch(`https://${c.domain}/admin/api/2026-07/graphql.json`,{method:'POST',headers:{'Content-Type':'application/json','X-Shopify-Access-Token':token},body:JSON.stringify({query,variables})});const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch(e){throw Object.assign(new Error('Shopify GraphQL returned non-JSON HTTP '+r.status+' '+raw.slice(0,180)),{status:502});}if(!r.ok||d.errors?.length)throw Object.assign(new Error(d.errors?.map(x=>x.message).join('; ')||`Shopify HTTP ${r.status}`),{status:502});return d.data;}
 function apiKey(req,res,next){const k=process.env.HOMESTRO_API_KEY,a=req.get('authorization')||'';if(!k)return res.status(503).json({ok:false,error:'API key is not configured.'});if(a==='Bearer '+k)return next();return res.status(401).json({ok:false,error:'Unauthorized'});}
+registerSupplierQuoteBridge(app,{apiKey,graphql:shopifyGraphQL,getToken:getClientToken});
 async function sidekick(req,res,next){try{req.sidekick=await getRequestToken(req);next();}catch(e){res.set('X-Shopify-Retry-Invalid-Session-Request','1');res.status(e.status||401).json({ok:false,error:e.message});}}
 // SHOPIFY OAUTH INSTALL FLOW
 const oauthStates=new Map();
@@ -942,15 +945,8 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  let price=Number(p.variants?.nodes?.[0]?.price||0);
  let cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
  let pricing={changed:0,planned:[]};
- if(supplierState.available&&landedEvidence.verified&&(p.variants?.nodes||[]).length){
-  pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token,landedEvidence.landedByVariant);
-  if(pricing.changed){
-   const refreshed=await shopifyGraphQL('query($id:ID!){product(id:$id){variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}}}}',{id:productId},token);
-   p.variants.nodes=refreshed.product?.variants?.nodes||p.variants.nodes;
-   price=Number(p.variants?.nodes?.[0]?.price||0);
-   cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
-  }
- }
+ // Preserve the merchant's imported DSers prices, even when costs are verified.
+
  const supplierCost=supplierState.available&&Number.isFinite(cost)&&cost>0?cost:null;
  if(landedEvidence.verified)cost=landedEvidence.landedByVariant[p.variants?.nodes?.[0]?.id]??cost;
  const ratio=cost>0&&price>0?price/cost:NaN;
@@ -1093,13 +1089,16 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  for(const v of verified.variants?.nodes||[])if(landedEvidence.verified)v.cost=landedEvidence.landedByVariant[v.id];
  const qa=qaProduct({...verified,landedCostVerified:landedEvidence.verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
  const optionalPending=[['option-normalization',optionStep],['image-alt',altStep],['collection-assignment',collectionStep]].filter(([,step])=>!step.ok).map(([name])=>name);
- const complete=qa.ok&&optionalPending.length===0&&aiContentSucceeded;
+ const contentQA=contentReadiness(qa,{aiSucceeded:aiContentSucceeded,imagesVerified,optionalPending});
+ const contentComplete=contentQA.complete;
+ const complete=qa.ok&&optionalPending.length===0&&aiContentSucceeded&&imagesVerified;
+ finalTags.push(contentComplete?'homestro-ai-content-complete':'homestro-ai-content-pending');
  finalTags.push(complete?'homestro-ai-complete':'homestro-ai-qa-pending');
- const cleanFinal=finalTags.filter(t=>complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
+ const cleanFinal=finalTags.filter(t=>(complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete')&&(contentComplete?t!=='homestro-ai-content-pending':t!=='homestro-ai-content-complete'));
  await setProductTags(productId,[...new Set(cleanFinal)],token);
  const pendingChecks=[...new Set([...supplierState.pendingChecks,...optionalPending,...(!aiContentSucceeded?['ai-content']:[]),...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
  if(pendingChecks.length)console.log('EXISTING_DRAFT_QA_PENDING',productId,'reason='+(supplierState.reason||landedEvidence.reason||'qa-incomplete'),'pendingChecks='+pendingChecks.join(','));
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,contentQA,contentComplete,pricingPolicy:'PRESERVE_DSERS',complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
