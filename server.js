@@ -887,6 +887,20 @@ async function associateDraftVariantImages(product,token){
  return {changed:assignments.length,pending:Math.max(0,(product.variants?.nodes||[]).filter(v=>!v.image).length-assignments.length)};
 }
 
+async function ensureDraftImageAltText(productId,mediaNodes,title,token){
+ const missing=(mediaNodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.id&&!String(m.alt||'').trim());
+ if(!missing.length)return {changed:0,pending:0};
+ const safety=await shopifyGraphQL('query($id:ID!){product(id:$id){status}}',{id:productId},token);assertDraftProduct(safety.product);
+ let changed=0;
+ for(let i=0;i<missing.length;i++){
+  const alt=(String(title||'Homestro Produkt').trim()+' – Produktbild '+(i+1)).slice(0,125);
+  const d=await shopifyGraphQL('mutation($productId:ID!,$media:[UpdateMediaInput!]!){productUpdateMedia(productId:$productId,media:$media){media{alt} mediaUserErrors{field message}}}',{productId,media:[{id:missing[i].id,alt}]},token);
+  const errors=d.productUpdateMedia?.mediaUserErrors||[];if(errors.length)throw new Error('Image ALT update failed: '+errors.map(e=>e.message).join('; '));
+  changed++;
+ }
+ return {changed,pending:Math.max(0,missing.length-changed)};
+}
+
 async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name optionValues{id name}} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}} metafields(first:20){nodes{namespace key value}}}} metafields(first:100){nodes{namespace key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');assertDraftProduct(p);
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
@@ -1027,6 +1041,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  // productOptionUpdate renames the option values in place, and Shopify carries
  // those value IDs through to existing variants without recreating them.
  const optionStep=await optionalDraftOperation('option-normalization',productId,()=>homestroUpdateOptionNames(productId,p.options||[],token),{options:0,values:0});
+ const altStep=await optionalDraftOperation('image-alt',productId,()=>ensureDraftImageAltText(productId,p.media?.nodes||[],x.title,token),{changed:0,pending:(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&!String(m.alt||'').trim()).length});
  const collectionStep=await optionalDraftOperation('collection-assignment',productId,()=>assignDraftCollection({id:productId,title:x.title,productType:category,description:x.description},token),{assigned:false,pending:true,reason:'collection-assignment-failed'});
  const optionsUpdated=optionStep.value.options;
  const variantsUpdated=optionStep.value.values;
@@ -1073,11 +1088,11 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  ])];
  // Read after every write. This is both the final DRAFT guard and the QA gate;
  // tags never claim readiness based on optimistic local state.
- const verified=(await shopifyGraphQL('query($id:ID!){product(id:$id){id status title description productType seo{title description} collections(first:20){nodes{id title handle}} variants(first:100){nodes{id price selectedOptions{name value} image{id url} inventoryItem{unitCost{amount}}}} media(first:30){nodes{id ... on MediaImage{image{url width height}}}}}}',{id:productId},token)).product;
+ const verified=(await shopifyGraphQL('query($id:ID!){product(id:$id){id status title description productType seo{title description} collections(first:20){nodes{id title handle}} variants(first:100){nodes{id price selectedOptions{name value} image{id url} inventoryItem{unitCost{amount}}}} media(first:30){nodes{id mediaContentType alt ... on MediaImage{image{url width height}}}}}}',{id:productId},token)).product;
  assertDraftProduct(verified);
  for(const v of verified.variants?.nodes||[])if(landedEvidence.verified)v.cost=landedEvidence.landedByVariant[v.id];
  const qa=qaProduct({...verified,landedCostVerified:landedEvidence.verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
- const optionalPending=[['option-normalization',optionStep],['collection-assignment',collectionStep]].filter(([,step])=>!step.ok).map(([name])=>name);
+ const optionalPending=[['option-normalization',optionStep],['image-alt',altStep],['collection-assignment',collectionStep]].filter(([,step])=>!step.ok).map(([name])=>name);
  const complete=qa.ok&&optionalPending.length===0&&aiContentSucceeded;
  finalTags.push(complete?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
