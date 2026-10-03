@@ -959,11 +959,14 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   image_urls:details.image_urls||[],
   cost:supplierState.available&&Number.isFinite(cost)&&cost>0?cost:null,selling_price:price
  };
+ let aiContentSucceeded=!contentNeedsWork;
  if(contentNeedsWork){
   try{
    if(process.env.OPENAI_API_KEY){
     const ai=await aiProduct(aiInput);
+    if(ai?.fallback===true)throw new Error('AI returned local fallback: '+String(ai.reason||'unknown'));
     x=homestroSanitizeProduct(ai.product||{}, {title:p.title,category:p.productType});
+    aiContentSucceeded=true;
    }
   }catch(e){
    console.error('EXISTING_DRAFT_AI_FALLBACK',productId,String(e?.message||e));
@@ -1012,7 +1015,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  if(!x.title)throw new Error('Product has no usable title');
  const baseTags=Array.isArray(x.tags)?x.tags:[];
  const oldTags=Array.isArray(p.tags)?p.tags:[];
- const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing','homestro-ai-complete','homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-rejected','⚠️-chybi-foto','⚠️-nizka-cena'].includes(String(t))),...baseTags,'homestro-ai-processed-existing',...(profitPending?['homestro-profit-pending']:['homestro-profit-checked'])])];
+ const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing','homestro-ai-complete','homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-rejected','⚠️-chybi-foto','⚠️-nizka-cena'].includes(String(t))),...baseTags,...(aiContentSucceeded?['homestro-ai-processed-existing']:['homestro-ai-ai-pending']),...(profitPending?['homestro-profit-pending']:['homestro-profit-checked'])])];
  const category=homestroInferCategory(x.title||p.title,x.category||p.productType);
  const input={id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),productType:category,tags,seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}};
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
@@ -1064,7 +1067,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const imagePending=!imagesVerified;
  const finalTags=[...new Set([
   ...tags.filter(t=>!['homestro-ai-image-pending','homestro-ai-images-checked','homestro-ai-images-verified','homestro-ai-complete','homestro-profit-pending','homestro-profit-checked'].includes(String(t))),
-  'homestro-ai-processed-existing',
+  ...(aiContentSucceeded?['homestro-ai-processed-existing']:['homestro-ai-ai-pending']),
   ...(profitPending?['homestro-profit-pending']:['homestro-profit-checked']),
   ...(imagePending?['homestro-ai-image-pending']:['homestro-ai-images-verified'])
  ])];
@@ -1075,11 +1078,11 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  for(const v of verified.variants?.nodes||[])if(landedEvidence.verified)v.cost=landedEvidence.landedByVariant[v.id];
  const qa=qaProduct({...verified,landedCostVerified:landedEvidence.verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
  const optionalPending=[['option-normalization',optionStep],['collection-assignment',collectionStep]].filter(([,step])=>!step.ok).map(([name])=>name);
- const complete=qa.ok&&optionalPending.length===0;
+ const complete=qa.ok&&optionalPending.length===0&&aiContentSucceeded;
  finalTags.push(complete?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
  await setProductTags(productId,[...new Set(cleanFinal)],token);
- const pendingChecks=[...new Set([...supplierState.pendingChecks,...optionalPending,...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
+ const pendingChecks=[...new Set([...supplierState.pendingChecks,...optionalPending,...(!aiContentSucceeded?['ai-content']:[]),...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
  if(pendingChecks.length)console.log('EXISTING_DRAFT_QA_PENDING',productId,'reason='+(supplierState.reason||landedEvidence.reason||'qa-incomplete'),'pendingChecks='+pendingChecks.join(','));
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
 }
