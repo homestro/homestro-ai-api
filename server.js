@@ -1026,7 +1026,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  }
  // productOptionUpdate renames the option values in place, and Shopify carries
  // those value IDs through to existing variants without recreating them.
- const optionStep=contentNeedsWork?await optionalDraftOperation('option-normalization',productId,()=>homestroUpdateOptionNames(productId,p.options||[],token),{options:0,values:0}):{ok:true,value:{options:0,values:0}};
+ const optionStep=await optionalDraftOperation('option-normalization',productId,()=>homestroUpdateOptionNames(productId,p.options||[],token),{options:0,values:0});
  const collectionStep=await optionalDraftOperation('collection-assignment',productId,()=>assignDraftCollection({id:productId,title:x.title,productType:category,description:x.description},token),{assigned:false,pending:true,reason:'collection-assignment-failed'});
  const optionsUpdated=optionStep.value.options;
  const variantsUpdated=optionStep.value.values;
@@ -1151,7 +1151,7 @@ async function draftAutopilotRun(limit=50){
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)&&!((p.tags||[]).map(String).includes('homestro-ai-processed-existing'))).slice(0,Math.min(Math.max(Number(limit)||50,1),50));
+  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)&&!((p.tags||[]).map(String).includes('homestro-ai-rejected'))).slice(0,Math.min(Math.max(Number(limit)||50,1),50));
   draftAutopilotState.skipped=0;
   console.log('DRAFT AUTOPILOT QUEUE','shopifyDraftQuery='+nodes.length,'eligible='+eligible.length);
   let done=0;
