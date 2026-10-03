@@ -10,7 +10,7 @@ const {getProductRules,validateProductEconomics}=require('./homestro-rules');
 const {catalogCandidateRejection,externalCandidateRejection,targetSellingPrice,candidateProfitEvidence}=require('./product-hunter');
 const {detectEuWarehouse}=require('./sourcing-evidence');
 const {selectAmazonMatch}=require('./amazon-market');
-const {aliExpressReference}=require('./aliexpress-reference');
+const {aliExpressReference,aliExpressReferenceFromProduct}=require('./aliexpress-reference');
 const {supplierProcessingState}=require('./supplier-processing-state');
 const {collectionAssignmentRequest,optionNameUpdateRequest}=require('./shopify-draft-operations');
 const {assertDraftProduct,isDraftProduct}=require('./shopify-safety');
@@ -150,15 +150,34 @@ async function homestroUpdateOptionNames(productId,options,token){
 async function aiProduct(input){
  if(!process.env.OPENAI_API_KEY)throw Object.assign(new Error('OPENAI_API_KEY is not configured.'),{status:503});
  const model=process.env.OPENAI_MODEL||'gpt-5-mini';
- const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, professionelles Deutsch. Nutze nur belegbare Angaben aus den gelieferten Quelldaten. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. Keine Emojis, keine chinesischen/japanischen/koreanischen Werbetexte und keine Lieferanten-SKUs oder Rohcodes im sichtbaren Text. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und mindestens 900 Zeichen reinen Text ergeben. Erstelle natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 deutsche Tags. Ausgabe ausschließlich JSON.';
+ const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, professionelles Deutsch. Nutze nur belegbare Angaben aus den gelieferten Quelldaten. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. Keine Emojis, keine chinesischen/japanischen/koreanischen Werbetexte und keine Lieferanten-SKUs oder Rohcodes im sichtbaren Text. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und 1100 bis 1500 Zeichen reinen Text ergeben. Erstelle natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 deutsche Tags. Ausgabe ausschließlich JSON.';
  const payload=JSON.stringify(input,null,2);
- try{
-  const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\n'+payload}]}],text:{format:{type:'json_object'}},max_output_tokens:4000})});
+ const request=async(messages)=>{
+  const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:messages,text:{format:{type:'json_object'}},max_output_tokens:5000})});
   const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{throw new Error('OpenAI returned non-JSON HTTP '+r.status);}
   if(!r.ok)throw new Error(d?.error?.message||'OpenAI request failed');
-  let p=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');
+  return cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');
+ };
+ try{
+  let p=await request([{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\n'+payload}]}]);
   p=homestroSanitizeProduct(p,input);
-  if(homestroPlain(p.description).length<900)throw new Error('AI description shorter than 900 characters');
+  const currentLength=homestroPlain(p.description).length;
+  if(currentLength<900){
+   console.log('AI PRODUCT DESCRIPTION RETRY','currentLength='+currentLength);
+   try{
+    const repairSystem=system+' Überarbeite beim folgenden Reparaturauftrag das bestehende JSON. Die Beschreibung muss mindestens 1000 Zeichen reinen Text enthalten. Bewahre ausschließlich Fakten aus den ursprünglichen Quelldaten; erfinde insbesondere keine Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen, Lieferantenaussagen oder nicht belegte technische Daten.';
+    const repairPayload=JSON.stringify({sourceProduct:input,firstGeneratedProduct:p,currentDescriptionLength:currentLength},null,2);
+    let repaired=await request([{role:'system',content:[{type:'input_text',text:repairSystem}]},{role:'user',content:[{type:'input_text',text:'Repariere und erweitere das Produkt-JSON. Gib NUR gültiges JSON zurück.\n'+repairPayload}]}]);
+    repaired=homestroSanitizeProduct(repaired,input);
+    const repairedLength=homestroPlain(repaired.description).length;
+    if(repairedLength<900)throw new Error('retry description shorter than 900 characters (length='+repairedLength+')');
+    console.log('AI PRODUCT DESCRIPTION RETRY SUCCESS','length='+repairedLength);
+    return{model,product:repaired,fallback:false,retried:true};
+   }catch(retryError){
+    console.error('AI PRODUCT DESCRIPTION RETRY FAILED',String(retryError?.message||retryError));
+    throw retryError;
+   }
+  }
   return{model,product:p,fallback:false};
  }catch(e){
   console.error('AI PRODUCT FALLBACK',String(e?.message||e));
@@ -846,7 +865,7 @@ async function associateDraftVariantImages(product,token){
  return {changed:assignments.length,pending:Math.max(0,(product.variants?.nodes||[]).filter(v=>!v.image).length-assignments.length)};
 }
 
-async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name optionValues{id name}} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
+async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name optionValues{id name}} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}} metafields(first:20){nodes{namespace key value}}}} metafields(first:100){nodes{namespace key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');assertDraftProduct(p);
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
  if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
@@ -854,9 +873,9 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  // Pending/failed products must be repaired on later runs; the old one-shot tag
  // made transient OpenAI and supplier failures permanent.
  const contentNeedsWork=!alreadyProcessed||existingTags.some(t=>/pending|failed/.test(t));
- const mf=Object.fromEntries((p.metafields?.nodes||[]).map(x=>[x.key,String(x.value||'')]));
+ const mf=Object.fromEntries((p.metafields?.nodes||[]).filter(x=>x.namespace==='homestro').map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
- const reference=aliExpressReference({url:mf.aliexpress_url,productId:mf.aliexpress_product_id,description:desc});
+ const reference=aliExpressReferenceFromProduct(p,mf);
  const src=reference.url;
  const id=reference.productId;
  const supplierState=supplierProcessingState(reference);
@@ -864,7 +883,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  // A missing supplier reference blocks evidence-dependent work, not safe content,
  // SEO, category, option, or variant normalization.
  // Persist source BEFORE pricing/content/image operations can replace the imported description.
- const sourceFields=supplierReferenceMetafields(p,mf);
+ const sourceFields=supplierReferenceMetafields(p,mf,reference);
  if(sourceFields.length){
   const saved=await shopifyGraphQL('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){userErrors{field message}}}',{metafields:sourceFields},token);
   if(saved.metafieldsSet?.userErrors?.length)throw new Error(saved.metafieldsSet.userErrors.map(e=>e.message).join('; '));

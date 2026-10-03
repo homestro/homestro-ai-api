@@ -26,3 +26,13 @@ test('Sidekick preserves legitimate source and rejects ACTIVE and spoofed URLs',
  assert.throws(()=>sourceMetafieldsBeforeRewrite({...product,status:'ACTIVE'}),/only DRAFT/);
  assert.deepEqual(sourceMetafieldsBeforeRewrite({...product,descriptionHtml:'https://evil.test/item/123.html'}),[]);
 });
+
+test('persists a separately verified metadata reference in HOMESTRO fields',()=>{
+ const product={id:'gid://shopify/Product/1',status:'DRAFT',description:'Imported by DSers'};
+ const reference={url:'https://www.aliexpress.com/item/123456789.html',productId:'123456789'};
+ const fields=supplierReferenceMetafields(product,{},reference);
+ assert.deepEqual(Object.fromEntries(fields.map(field=>[field.key,field.value])),{
+  aliexpress_url:reference.url,
+  aliexpress_product_id:reference.productId
+ });
+});
