@@ -1144,14 +1144,14 @@ async function runDraftImageQA(){
  finally{draftAutopilotState.imageRunning=false;}
 }
 
-async function draftAutopilotRun(){
+async function draftAutopilotRun(limit=50){
  if(draftAutopilotState.running)return;
  draftAutopilotState.running=true;
  try{
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)&&!((p.tags||[]).map(String).includes('homestro-ai-processed-existing'))).slice(0,50);
+  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)&&!((p.tags||[]).map(String).includes('homestro-ai-processed-existing'))).slice(0,Math.min(Math.max(Number(limit)||50,1),50));
   draftAutopilotState.skipped=0;
   console.log('DRAFT AUTOPILOT QUEUE','shopifyDraftQuery='+nodes.length,'eligible='+eligible.length);
   let done=0;
@@ -1334,14 +1334,14 @@ app.post('/api/autopilot/run-once',apiKey,async(_q,res)=>{
  if(draftAutopilotState.running)return res.status(409).json({ok:false,error:'autopilot-already-running'});
  try{
   const before={processed:draftAutopilotState.processed,lastRun:draftAutopilotState.lastRun};
-  await draftAutopilotRun();
+  await draftAutopilotRun(1);
   return res.json({ok:true,mode:'run-once',automaticEnabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',before,after:{processed:draftAutopilotState.processed,skipped:draftAutopilotState.skipped,pending:draftAutopilotState.pending,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,lastResult:draftAutopilotState.lastResult}});
  }catch(e){return res.status(500).json({ok:false,error:String(e?.message||e)});}
 });
 if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
  setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),15000); setInterval(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT AUTO FAILED',e.message)),draftAutopilotInterval());
 }
-if(process.env.HOMESTRO_AUTOPILOT_RUN_ONCE==='true') setTimeout(()=>draftAutopilotRun().catch(e=>console.error('DRAFT AUTOPILOT RUN ONCE FAILED',e.message)),15000);
+if(process.env.HOMESTRO_AUTOPILOT_RUN_ONCE==='true') setTimeout(()=>draftAutopilotRun(1).catch(e=>console.error('DRAFT AUTOPILOT RUN ONCE FAILED',e.message)),15000);
 // One-time visual QA safety net: runs independently of the text autopilot flag and is idempotent via homestro-ai-images-checked.
 if(process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false')setTimeout(()=>runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
 
