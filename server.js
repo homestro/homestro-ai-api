@@ -166,11 +166,13 @@ async function aiProduct(input){
    if(!r.ok){lastError=new Error(d?.error?.message||'OpenAI request failed');if(attempt+1<attempts.length&&r.status>=500)continue;throw lastError;}
    try{
     const text=extractOpenAiResponseText(d,{httpStatus:r.status});
-    return cleanJson(text);
+    const parsed=cleanJson(text);
+    if(homestroPlain(parsed?.description).length<900)throw new Error('AI description too short');
+    return parsed;
    }catch(e){
     lastError=e;
     const incomplete=String(d?.status||'')==='incomplete';
-    const malformed=/JSON|no usable assistant text|no JSON object/i.test(String(e?.message||e));
+    const malformed=/JSON|no usable assistant text|no JSON object|description too short/i.test(String(e?.message||e));
     console.warn('OPENAI PRODUCT RESPONSE RETRY','attempt='+(attempt+1),'status='+String(d?.status||'unknown'),'reason='+String(d?.incomplete_details?.reason||'unknown'),'error='+String(e?.message||e));
     if(attempt+1<attempts.length&&(incomplete||malformed))continue;
     throw e;
