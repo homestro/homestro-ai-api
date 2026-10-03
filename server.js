@@ -11,6 +11,7 @@ const {catalogCandidateRejection,externalCandidateRejection,targetSellingPrice,c
 const {detectEuWarehouse}=require('./sourcing-evidence');
 const {selectAmazonMatch}=require('./amazon-market');
 const {aliExpressReference}=require('./aliexpress-reference');
+const {supplierProcessingState}=require('./supplier-processing-state');
 const {assertDraftProduct,isDraftProduct}=require('./shopify-safety');
 const {registerSidekickApi}=require('./sidekick-api');
 const {normalizeOptionName,normalizeVariantValue,priceForCost,categoryKey,variantMediaAssociations,qaProduct}=require('./autopilot-core');
@@ -846,8 +847,11 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const desc=String(p.description||'');
  const reference=aliExpressReference({url:mf.aliexpress_url,productId:mf.aliexpress_product_id,description:desc});
  const src=reference.url;
- if(!src||!reference.productId)return {id:productId,title:p.title,processed:false,skipped:true,reason:'verified-supplier-reference-missing',pendingChecks:['actual-dsers-supplier-link','variant-landed-cost','destination-shipping','matched-market-price']};
  const id=reference.productId;
+ const supplierState=supplierProcessingState(reference);
+ if(!supplierState.available)console.log('EXISTING_DRAFT_SUPPLIER_PENDING',productId,'reason='+supplierState.reason,'safe-processing=continue','pendingChecks='+supplierState.pendingChecks.join(','));
+ // A missing supplier reference blocks evidence-dependent work, not safe content,
+ // SEO, category, option, or variant normalization.
  // Persist source BEFORE pricing/content/image operations can replace the imported description.
  const sourceFields=supplierReferenceMetafields(p,mf);
  if(sourceFields.length){
@@ -855,7 +859,9 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   if(saved.metafieldsSet?.userErrors?.length)throw new Error(saved.metafieldsSet.userErrors.map(e=>e.message).join('; '));
  }
 
- const landedEvidence=fulfillmentCostEvidence(mf.fulfillment_cost_evidence,p.variants?.nodes||[],src);
+ const landedEvidence=supplierState.available
+  ?fulfillmentCostEvidence(mf.fulfillment_cost_evidence,p.variants?.nodes||[],src)
+  :{verified:false,landedByVariant:{},reason:'verified-supplier-reference-missing'};
  let details={page_title:'',page_text:'',image_urls:[],variants:[],options:[],euWarehouse:false};
  const hasImages=(p.media?.nodes||[]).some(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  const imageNeedsSource=existingTags.includes('homestro-ai-image-pending')||!hasImages;
@@ -870,7 +876,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  let price=Number(p.variants?.nodes?.[0]?.price||0);
  let cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
  let pricing={changed:0,planned:[]};
- if((p.variants?.nodes||[]).length){
+ if(supplierState.available&&landedEvidence.verified&&(p.variants?.nodes||[]).length){
   pricing=await homestroAutoPriceVariants(productId,p.variants.nodes,p.title,token,landedEvidence.landedByVariant);
   if(pricing.changed){
    const refreshed=await shopifyGraphQL('query($id:ID!){product(id:$id){variants(first:100){nodes{id title price sku selectedOptions{name value} inventoryItem{unitCost{amount currencyCode}}}}}}',{id:productId},token);
@@ -879,7 +885,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
    cost=Number(p.variants?.nodes?.[0]?.inventoryItem?.unitCost?.amount||NaN);
   }
  }
- const supplierCost=cost;
+ const supplierCost=supplierState.available&&Number.isFinite(cost)&&cost>0?cost:null;
  if(landedEvidence.verified)cost=landedEvidence.landedByVariant[p.variants?.nodes?.[0]?.id]??cost;
  const ratio=cost>0&&price>0?price/cost:NaN;
  const variantEconomics=(p.variants?.nodes||[]).map(v=>{
@@ -899,7 +905,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   variants:details.variants||[],
   options:details.options||[],
   image_urls:details.image_urls||[],
-  cost,selling_price:price
+  cost:supplierState.available&&Number.isFinite(cost)&&cost>0?cost:null,selling_price:price
  };
  if(contentNeedsWork){
   try{
@@ -966,11 +972,13 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const optionsUpdated=contentNeedsWork?await homestroUpdateOptionNames(productId,p.options||[],token):0;
  const variantsUpdated=contentNeedsWork?await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token):0;
  const collection=await assignDraftCollection({id:productId,title:x.title,productType:category,description:x.description},token);
- const variantImages=await associateDraftVariantImages(p,token);
+ // Preserve imported images until supplier identity is known; image association
+ // is not part of the safe metadata/content normalization path.
+ const variantImages=supplierState.available?await associateDraftVariantImages(p,token):{changed:0,pending:(p.variants?.nodes||[]).filter(v=>!v.image).length,reason:supplierState.reason};
  const existingImages=(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  let media={count:existingImages.length,validation:existingImages.length?'preserved-existing':'not-run'};
  let imagesVerified=existingImages.length>0&&existingTags.includes('homestro-ai-images-verified');
- if(existingTags.includes('homestro-ai-image-pending')||existingImages.length===0){
+ if(supplierState.available&&(existingTags.includes('homestro-ai-image-pending')||existingImages.length===0)){
    try{
     if(process.env.OPENAI_API_KEY){
       let relevant=0;
@@ -1013,7 +1021,9 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  finalTags.push(qa.ok?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>qa.ok?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
  await setProductTags(productId,[...new Set(cleanFinal)],token);
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost,supplierCost,ratio,profitPending,estimatedProfitEur:profitability.estimatedProfitEur,pricingChanged:pricing.changed,processed:true,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PROVISIONAL_BEFORE_SHIPPING_AND_TAX',supplierContributionPending};
+ const pendingChecks=[...new Set([...supplierState.pendingChecks,...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
+ if(pendingChecks.length)console.log('EXISTING_DRAFT_QA_PENDING',productId,'reason='+(supplierState.reason||landedEvidence.reason||'qa-incomplete'),'pendingChecks='+pendingChecks.join(','));
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);

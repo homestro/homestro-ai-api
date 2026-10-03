@@ -16,3 +16,11 @@ test('actual background runner records skipped sources instead of successful pro
  await invoke(state,async()=> 'test',async()=>({products:{nodes:[{id:'missing'},{id:'ready'}]}}),()=>true,async id=>id==='missing'?{id,processed:false,skipped:true,reason:'source-missing'}:{id,processed:true,complete:true},summarizeAutopilotResults,{log(){},error(){}});
  assert.equal(state.processed,1);assert.equal(state.skipped,1);assert.equal(state.lastResult.complete,1);assert.equal(state.lastError,null);assert.equal(state.running,false);
 });
+
+test('missing supplier evidence is counted as processed pending rather than skipped',()=>{
+ const summary=summarizeAutopilotResults([{id:'dsers-draft',processed:true,skipped:false,complete:false,reason:'verified-supplier-reference-missing',pendingChecks:['supplier-verification','variant-landed-cost']}]);
+ assert.equal(summary.processed,1);
+ assert.equal(summary.pending,1);
+ assert.equal(summary.skipped,0);
+ assert.equal(summary.complete,0);
+});
