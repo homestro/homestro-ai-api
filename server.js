@@ -892,9 +892,9 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
  if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
  const alreadyProcessed=existingTags.includes('homestro-ai-processed-existing');
- // Pending/failed products must be repaired on later runs; the old one-shot tag
- // made transient OpenAI and supplier failures permanent.
- const contentNeedsWork=!alreadyProcessed||existingTags.some(t=>/pending|failed/.test(t));
+ // AI content generation is one-shot. Pending supplier/image/profit QA must never
+ // spend OpenAI credits again for a product whose content was already processed.
+ const contentNeedsWork=!alreadyProcessed;
  const mf=Object.fromEntries((p.metafields?.nodes||[]).filter(x=>x.namespace==='homestro').map(x=>[x.key,String(x.value||'')]));
  const desc=String(p.description||'');
  const reference=aliExpressReferenceFromProduct(p,mf);
@@ -1148,7 +1148,7 @@ async function draftAutopilotRun(){
   const token=await getClientToken();
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
   const nodes=d.products.nodes||[];
-  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)).slice(0,50);
+  const eligible=nodes.filter(p=>isDsersImportedCandidate(p)&&!((p.tags||[]).map(String).includes('homestro-ai-processed-existing'))).slice(0,50);
   draftAutopilotState.skipped=0;
   console.log('DRAFT AUTOPILOT QUEUE','shopifyDraftQuery='+nodes.length,'eligible='+eligible.length);
   let done=0;
