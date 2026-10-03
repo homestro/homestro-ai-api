@@ -12,6 +12,7 @@ const {detectEuWarehouse}=require('./sourcing-evidence');
 const {selectAmazonMatch}=require('./amazon-market');
 const {aliExpressReference}=require('./aliexpress-reference');
 const {supplierProcessingState}=require('./supplier-processing-state');
+const {collectionAssignmentRequest,optionNameUpdateRequest}=require('./shopify-draft-operations');
 const {assertDraftProduct,isDraftProduct}=require('./shopify-safety');
 const {registerSidekickApi}=require('./sidekick-api');
 const {normalizeOptionName,normalizeVariantValue,priceForCost,categoryKey,variantMediaAssociations,qaProduct}=require('./autopilot-core');
@@ -129,22 +130,22 @@ function homestroGermanOptionName(name){
  return map[v.toLowerCase()]||normalizeOptionName(v);
 }
 async function homestroUpdateOptionNames(productId,options,token){
- const updates=(options||[]).map(o=>({id:o.id,name:homestroGermanOptionName(o.name)})).filter(o=>o.id&&o.name&&o.name!==String((options||[]).find(x=>x.id===o.id)?.name||''));
- if(!updates.length)return 0;
- let changed=0;
+ const updates=(options||[]).map(o=>({
+  id:o.id,
+  name:homestroGermanOptionName(o.name),
+  oldName:String(o.name||''),
+  values:(o.optionValues||[]).map(v=>({id:v.id,name:homestroVariantLabel(v.name),oldName:String(v.name||'')})).filter(v=>v.id&&v.name&&v.name!==v.oldName)
+ })).filter(o=>o.id&&o.name&&(o.name!==o.oldName||o.values.length));
+ if(!updates.length)return {options:0,values:0};
+ let changed=0,valuesChanged=0;
  for(const u of updates){
-  const d=await shopifyGraphQL('mutation($productId:ID!,$optionId:ID!,$option:ProductOptionUpdateInput!){productOptionUpdate(productId:$productId,optionId:$optionId,option:$option){product{id options{id name}}userErrors{field message}}}',{productId,optionId:u.id,option:{name:u.name}},token);
+  const request=optionNameUpdateRequest(productId,u.id,u.name,u.values.map(({id,name})=>({id,name})));
+  const d=await shopifyGraphQL(request.query,request.variables,token);
   const e=d.productOptionUpdate?.userErrors||[]; if(e.length)throw new Error(e.map(x=>x.message).join('; '));
   changed++;
+  valuesChanged+=u.values.length;
  }
- return changed;
-}
-async function homestroUpdateVariantNames(productId,variants,token){
- const updates=(variants||[]).map(v=>{const optionValues=(v.selectedOptions||[]).map(o=>({optionName:o.name,name:homestroVariantLabel(o.value)}));return {id:v.id,optionValues,changed:optionValues.some((x,i)=>x.name!==v.selectedOptions[i].value)};}).filter(x=>x.changed).map(({id,optionValues})=>({id,optionValues}));
- if(!updates.length)return 0;
- const d=await shopifyGraphQL('mutation($productId:ID!,$variants:[ProductVariantsBulkInput!]!){productVariantsBulkUpdate(productId:$productId,variants:$variants){productVariants{id title selectedOptions{name value}}userErrors{field message}}}',{productId,variants:updates},token);
- const e=d.productVariantsBulkUpdate?.userErrors||[];if(e.length)throw new Error(e.map(x=>x.message).join('; '));
- return (d.productVariantsBulkUpdate?.productVariants||[]).length;
+ return {options:changed,values:valuesChanged};
 }
 async function aiProduct(input){
  if(!process.env.OPENAI_API_KEY)throw Object.assign(new Error('OPENAI_API_KEY is not configured.'),{status:503});
@@ -822,9 +823,19 @@ async function assignDraftCollection(product,token){
  const check=await shopifyGraphQL('query($id:ID!){product(id:$id){id status collections(first:50){nodes{id}}}}',{id:product.id},token);
  assertDraftProduct(check.product);
  if((check.product.collections?.nodes||[]).some(c=>c.id===collectionId))return {assigned:true,id:collectionId,existing:true};
- const d=await shopifyGraphQL('mutation($productId:ID!,$collectionIds:[ID!]!){collectionsAddProducts(productIds:[$productId],collectionIds:$collectionIds){userErrors{field message}}}',{productId:product.id,collectionIds:[collectionId]},token);
- const errors=d.collectionsAddProducts?.userErrors||[];if(errors.length)throw new Error('Collection assignment failed: '+errors.map(e=>e.message).join('; '));
+ const request=collectionAssignmentRequest(collectionId,product.id);
+ const d=await shopifyGraphQL(request.query,request.variables,token);
+ const errors=d.collectionAddProducts?.userErrors||[];if(errors.length)throw new Error('Collection assignment failed: '+errors.map(e=>e.message).join('; '));
  return {assigned:true,id:collectionId};
+}
+
+async function optionalDraftOperation(operation,productId,work,fallback){
+ try{return {ok:true,value:await work()};}
+ catch(e){
+  const message=String(e?.message||e);
+  console.error('EXISTING_DRAFT_OPTIONAL_PENDING',productId,'operation='+operation,'error='+message);
+  return {ok:false,value:fallback,pending:true,reason:operation+'-failed',error:message};
+ }
 }
 async function associateDraftVariantImages(product,token){
  const assignments=variantMediaAssociations(product.variants?.nodes||[],product.media?.nodes||[]);
@@ -835,7 +846,7 @@ async function associateDraftVariantImages(product,token){
  return {changed:assignments.length,pending:Math.max(0,(product.variants?.nodes||[]).filter(v=>!v.image).length-assignments.length)};
 }
 
-async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
+async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name optionValues{id name}} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}}}} metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');assertDraftProduct(p);
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
  if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
@@ -969,9 +980,13 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
   upd=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id title description productType seo{title description} tags}userErrors{field message}}}',{input},token);
   if(upd.productUpdate.userErrors?.length)throw new Error(upd.productUpdate.userErrors.map(e=>e.message).join('; '));
  }
- const optionsUpdated=contentNeedsWork?await homestroUpdateOptionNames(productId,p.options||[],token):0;
- const variantsUpdated=contentNeedsWork?await homestroUpdateVariantNames(productId,p.variants?.nodes||[],token):0;
- const collection=await assignDraftCollection({id:productId,title:x.title,productType:category,description:x.description},token);
+ // productOptionUpdate renames the option values in place, and Shopify carries
+ // those value IDs through to existing variants without recreating them.
+ const optionStep=contentNeedsWork?await optionalDraftOperation('option-normalization',productId,()=>homestroUpdateOptionNames(productId,p.options||[],token),{options:0,values:0}):{ok:true,value:{options:0,values:0}};
+ const collectionStep=await optionalDraftOperation('collection-assignment',productId,()=>assignDraftCollection({id:productId,title:x.title,productType:category,description:x.description},token),{assigned:false,pending:true,reason:'collection-assignment-failed'});
+ const optionsUpdated=optionStep.value.options;
+ const variantsUpdated=optionStep.value.values;
+ const collection=collectionStep.value;
  // Preserve imported images until supplier identity is known; image association
  // is not part of the safe metadata/content normalization path.
  const variantImages=supplierState.available?await associateDraftVariantImages(p,token):{changed:0,pending:(p.variants?.nodes||[]).filter(v=>!v.image).length,reason:supplierState.reason};
@@ -1018,12 +1033,14 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  assertDraftProduct(verified);
  for(const v of verified.variants?.nodes||[])if(landedEvidence.verified)v.cost=landedEvidence.landedByVariant[v.id];
  const qa=qaProduct({...verified,landedCostVerified:landedEvidence.verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
- finalTags.push(qa.ok?'homestro-ai-complete':'homestro-ai-qa-pending');
- const cleanFinal=finalTags.filter(t=>qa.ok?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
+ const optionalPending=[['option-normalization',optionStep],['collection-assignment',collectionStep]].filter(([,step])=>!step.ok).map(([name])=>name);
+ const complete=qa.ok&&optionalPending.length===0;
+ finalTags.push(complete?'homestro-ai-complete':'homestro-ai-qa-pending');
+ const cleanFinal=finalTags.filter(t=>complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete');
  await setProductTags(productId,[...new Set(cleanFinal)],token);
- const pendingChecks=[...new Set([...supplierState.pendingChecks,...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
+ const pendingChecks=[...new Set([...supplierState.pendingChecks,...optionalPending,...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
  if(pendingChecks.length)console.log('EXISTING_DRAFT_QA_PENDING',productId,'reason='+(supplierState.reason||landedEvidence.reason||'qa-incomplete'),'pendingChecks='+pendingChecks.join(','));
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete:qa.ok,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
