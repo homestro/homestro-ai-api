@@ -154,10 +154,29 @@ async function aiProduct(input){
  const system='Du bist der deutsche E-Commerce-Redakteur von Homestro.de. Schreibe ausschließlich natürliches, professionelles Deutsch. Nutze nur belegbare Angaben aus den gelieferten Quelldaten. Keine erfundenen technischen Daten, Materialien, Maße, Zertifikate, Garantien, Lieferzeiten, Bewertungen, Verkaufszahlen oder Varianten. Keine Emojis, keine chinesischen/japanischen/koreanischen Werbetexte und keine Lieferanten-SKUs oder Rohcodes im sichtbaren Text. Die Beschreibung muss vollständiges HTML mit 3 bis 5 Absätzen plus 5 bis 7 konkreten Vorteilen enthalten und 1100 bis 1500 Zeichen reinen Text ergeben. Erstelle natürlichen SEO-Titel, SEO-Beschreibung, sauberen Handle und 5 bis 10 deutsche Tags. Ausgabe ausschließlich JSON.';
  const payload=JSON.stringify(input,null,2);
  const request=async(messages)=>{
-  const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:messages,text:{format:{type:'json_object'}},max_output_tokens:5000})});
-  const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{throw new Error('OpenAI returned non-JSON HTTP '+r.status);}
-  if(!r.ok)throw new Error(d?.error?.message||'OpenAI request failed');
-  return cleanJson(extractOpenAiResponseText(d,{httpStatus:r.status}));
+  const attempts=[
+   {max_output_tokens:8000,reasoning:{effort:'low'}},
+   {max_output_tokens:12000,reasoning:{effort:'minimal'}}
+  ];
+  let lastError=null;
+  for(let attempt=0;attempt<attempts.length;attempt++){
+   const settings=attempts[attempt];
+   const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:messages,text:{format:{type:'json_object'}},...settings})});
+   const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{lastError=new Error('OpenAI returned non-JSON HTTP '+r.status);if(attempt+1<attempts.length)continue;throw lastError;}
+   if(!r.ok){lastError=new Error(d?.error?.message||'OpenAI request failed');if(attempt+1<attempts.length&&r.status>=500)continue;throw lastError;}
+   try{
+    const text=extractOpenAiResponseText(d,{httpStatus:r.status});
+    return cleanJson(text);
+   }catch(e){
+    lastError=e;
+    const incomplete=String(d?.status||'')==='incomplete';
+    const malformed=/JSON|no usable assistant text|no JSON object/i.test(String(e?.message||e));
+    console.warn('OPENAI PRODUCT RESPONSE RETRY','attempt='+(attempt+1),'status='+String(d?.status||'unknown'),'reason='+String(d?.incomplete_details?.reason||'unknown'),'error='+String(e?.message||e));
+    if(attempt+1<attempts.length&&(incomplete||malformed))continue;
+    throw e;
+   }
+  }
+  throw lastError||new Error('OpenAI product request failed');
  };
  try{
   let p=await request([{role:'system',content:[{type:'input_text',text:system}]},{role:'user',content:[{type:'input_text',text:'Verarbeite dieses Produkt und gib NUR gültiges JSON zurück.\n'+payload}]}]);
