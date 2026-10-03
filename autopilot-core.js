@@ -1,6 +1,7 @@
 'use strict';
 
 const RAW_VARIANT = /^(?:[A-Z]|as\s*(?:picture|shown)|default(?:\s+title)?|type\s*[A-Z0-9]+|style\s*[A-Z0-9]+)$/i;
+const DIRTY_VARIANT = /(?:^|\s|\/)(?:china|mainland china|cn)(?:$|\s|\/)|\bausführung\s+(?:xxxs|xxs|xs|s|m|l|xl|xxl|xxxl)\b|\bas\s*(?:picture|shown)\b|\b(?:elbow[- ]*\d+\s*pairs?|\d+\s*pcs?)\b/i;
 const GERMAN_SIGNAL = /\b(?:der|die|das|und|mit|für|aus|eine?|Produkt|Anwendung|Eigenschaften|Vorteile|Technische|Daten)\b/i;
 const FOREIGN_COMMERCE = /\b(?:add to cart|buy now|ships? from|supplier|wholesale|mainland china)\b/i;
 
@@ -95,12 +96,15 @@ function qaProduct(product = {}) {
   const body = text(product.description || product.descriptionHtml);
   if (!text(product.title) || text(product.title).length < 12) reasons.push('title');
   if (body.length < 900 || !GERMAN_SIGNAL.test(body) || FOREIGN_COMMERCE.test(body)) reasons.push('german-content');
-  if (!text(product.seo?.title || product.seoTitle) || !text(product.seo?.description || product.seoDescription)) reasons.push('seo');
+  const seoTitle = text(product.seo?.title || product.seoTitle), seoDescription = text(product.seo?.description || product.seoDescription);
+  if (!seoTitle || !seoDescription || seoTitle.length < 20 || seoTitle.length > 70 || seoDescription.length < 80 || seoDescription.length > 320) reasons.push('seo');
   const variants = product.variants?.nodes || product.variants || [];
   if (!variants.length) reasons.push('variants');
   variants.forEach((v, index) => {
     const values = (v.selectedOptions || []).map(o => o.value);
-    if (values.some(v => RAW_VARIANT.test(String(v).trim()))) reasons.push(`variant-label:${index}`);
+    if (values.some(v => RAW_VARIANT.test(String(v).trim()) || DIRTY_VARIANT.test(String(v).trim()))) reasons.push(`variant-label:${index}`);
+    const normalizedValues = values.map(v => normalizeVariantValue(v));
+    if (new Set(normalizedValues.map(v => String(v).toLowerCase())).size !== normalizedValues.length) reasons.push(`variant-duplicate:${index}`);
     if (!(Number(v.price) > 0)) reasons.push(`variant-price:${index}`);
     const cost = Number(v.cost ?? v.inventoryItem?.unitCost?.amount);
     const required = priceForCost(cost, v.price, product.rules);
@@ -110,9 +114,11 @@ function qaProduct(product = {}) {
   if (product.landedCostVerified !== true) reasons.push('landed-cost-unverified');
   const images = product.media?.nodes || product.images || [];
   if (selectImages(images).length < 1) reasons.push('images');
-  if (!(product.collections?.nodes || product.collections || []).length) reasons.push('collection');
+  const collections = product.collections?.nodes || product.collections || [];
+  const meaningfulCollections = collections.filter(x => !/^(?:alle produkte|all products)/i.test(text(x?.title || x)));
+  if (!meaningfulCollections.length) reasons.push('collection');
   if (String(product.status || '').toUpperCase() !== 'DRAFT') reasons.push('draft-only');
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
-module.exports = { RAW_VARIANT, text, normalizeOptionName, normalizeVariantValue, priceForCost, canonicalImageUrl, selectImages, categoryKey, variantMediaAssociations, qaProduct };
+module.exports = { RAW_VARIANT, DIRTY_VARIANT, text, normalizeOptionName, normalizeVariantValue, priceForCost, canonicalImageUrl, selectImages, categoryKey, variantMediaAssociations, qaProduct };
