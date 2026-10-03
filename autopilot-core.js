@@ -114,6 +114,8 @@ function qaProduct(product = {}) {
   if (product.landedCostVerified !== true) reasons.push('landed-cost-unverified');
   const images = product.media?.nodes || product.images || [];
   if (selectImages(images).length < 1) reasons.push('images');
+  const imageNodes = images.filter(x => x?.image?.url || x?.url || String(x?.mediaContentType || '') === 'IMAGE');
+  if (imageNodes.some(x => !text(x?.alt || x?.altText || x?.image?.altText))) reasons.push('image-alt');
   const collections = product.collections?.nodes || product.collections || [];
   const meaningfulCollections = collections.filter(x => !/^(?:alle produkte|all products)/i.test(text(x?.title || x)));
   if (!meaningfulCollections.length) reasons.push('collection');
