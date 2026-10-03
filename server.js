@@ -172,7 +172,7 @@ async function aiProduct(input){
    }catch(e){
     lastError=e;
     const incomplete=String(d?.status||'')==='incomplete';
-    const malformed=/JSON|no usable assistant text|no JSON object/i.test(String(e?.message||e));
+    const malformed=/JSON|no usable assistant text|no JSON object|description too short/i.test(String(e?.message||e));
     console.warn('OPENAI PRODUCT RESPONSE RETRY','attempt='+(attempt+1),'status='+String(d?.status||'unknown'),'reason='+String(d?.incomplete_details?.reason||'unknown'),'error='+String(e?.message||e));
     if(attempt+1<attempts.length&&(incomplete||malformed))continue;
     throw e;
