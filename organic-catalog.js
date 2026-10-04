@@ -34,7 +34,6 @@ function registerOrganicCatalog(app,apiKey,graphql){
   if(process.env.META_PAGE_ACCESS_TOKEN){
     void organicPreview(graphql).then(result=>console.log('[organic-marketing-preview] '+JSON.stringify(result))).catch(()=>console.log('[organic-marketing-preview] product preview failed'));
   }
-}
 
   if(process.env.META_ORGANIC_PUBLISH_ONCE==='approved-2026-10-04'){
     void organicPreview(graphql).then(async preview=>{
