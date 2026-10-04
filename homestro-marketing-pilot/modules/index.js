@@ -98,6 +98,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.set('Cache-Control','no-store').type('application/xml').send(generateFeed(products,cfg));
     }));
     worker.start();
+    if(cfg.syncOnce){
+      void sync().then(async r=>{
+        const rows=(await pool.query(`SELECT id,channel,payload FROM marketing_posts WHERE status='draft_queued' ORDER BY created_at DESC LIMIT 100`)).rows;
+        const carousels=rows.filter(x=>x.payload?.format==='carousel').map(x=>({id:x.id,channel:x.channel,imageCount:Array.isArray(x.payload?.imageURLs)?x.payload.imageURLs.length:0,title:x.payload?.title||null}));
+        log('SYNC_ONCE_COMPLETE',{processed:r?.processed||0,carouselCount:carousels.length,carousels});
+      }).catch(e=>log('SYNC_ONCE_FAILED',{reason:codeOf(e)}));
+    }
     if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();void sync();}
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
     return {enabled:true,processProduct,sync,store,worker,
