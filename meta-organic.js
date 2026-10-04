@@ -92,7 +92,13 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
     return {channel:'facebook',published:true,id:result.post_id||result.id};
   }
   if(draft.channel==='instagram'){
-    const container=await post(`${instagramId}/media`,{image_url:draft.imageUrl,caption:draft.caption});
+    const sourceImage=new URL(draft.imageUrl);
+    // Shopify CDN can transform source WEBP assets to a Meta-compatible JPEG.
+    if(/cdn\.shopify\.com$/i.test(sourceImage.hostname)){
+      sourceImage.searchParams.set('format','jpg');
+    }
+    const instagramImageUrl=sourceImage.href;
+    const container=await post(`${instagramId}/media`,{image_url:instagramImageUrl,caption:draft.caption});
     let status=null;
     for(let attempt=0;attempt<12;attempt++){
       await new Promise(resolve=>setTimeout(resolve,5000));
