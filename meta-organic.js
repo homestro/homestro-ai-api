@@ -26,16 +26,15 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
     const cfg = config();
     if (!configured(cfg)) return {status:503, body:{ok:false,error:'Meta connection configuration is incomplete',published:false}};
     try {
-      const page = await read(cfg.token, 'me', 'id,name,tasks,instagram_business_account');
+      const page = await read(cfg.token, 'me', 'id,name,instagram_business_account');
       if (page.id !== cfg.pageId || page.instagram_business_account?.id !== cfg.instagramId) {
         return {status:409, body:{ok:false,error:'Meta account does not match configured Homestro accounts',published:false}};
       }
       const instagram = await read(cfg.token, cfg.instagramId, 'id,username,media_count');
       if (instagram.id !== cfg.instagramId) throw new Error('Instagram account mismatch');
-      const tasks = Array.isArray(page.tasks) ? page.tasks : [];
-      return {status:200, body:{ok:true,page:{id:page.id,name:page.name,tasks},
+      return {status:200, body:{ok:true,page:{id:page.id,name:page.name},
         instagram:{id:instagram.id,username:instagram.username,mediaCount:instagram.media_count},
-        publishingVerified:tasks.includes('CREATE_CONTENT'),published:false,schedulerEnabled:false}};
+        publishingVerified:false,published:false,schedulerEnabled:false}};
     } catch (error) {
       return {status:502, body:{ok:false,error:'Meta connection verification failed; check token validity and account permissions',
         metaCode:error.metaCode||null,metaSubcode:error.metaSubcode||null,published:false}};
@@ -48,8 +47,7 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
   const verifyPublishing = async (_req, res) => {
     const result = await connectionState();
     if (!result.body.ok) return res.status(result.status).json(result.body);
-    const tasks = result.body.page.tasks || [];
-    const facebookReady = tasks.includes('CREATE_CONTENT');
+    const facebookReady = null;
     let instagramReady = false;
     let instagramLimit = null;
     try {
@@ -60,9 +58,9 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
     } catch (_) {
       instagramReady = false;
     }
-    return res.status(facebookReady && instagramReady ? 200 : 409).json({
-      ok: facebookReady && instagramReady,
-      facebook:{ready:facebookReady,requiredTask:'CREATE_CONTENT'},
+    return res.status(instagramReady ? 200 : 409).json({
+      ok: instagramReady,
+      facebook:{ready:null,note:'Write access is verified only by a publish attempt; no test post is created by this endpoint.'},
       instagram:{ready:instagramReady,publishingLimit:instagramLimit},
       published:false,paidAds:false
     });
