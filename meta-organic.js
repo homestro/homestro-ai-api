@@ -1,7 +1,7 @@
 'use strict';
 
 function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = process.env } = {}) {
-  app.get('/api/marketing/organic/connection', apiKey, async (_req, res) => {
+  const verifyConnection = async (_req, res) => {
     const token = String(env.META_PAGE_ACCESS_TOKEN || '').trim();
     const pageId = String(env.META_PAGE_ID || '').trim();
     const instagramId = String(env.META_INSTAGRAM_ACCOUNT_ID || '').trim();
@@ -31,7 +31,14 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
     } catch (_) {
       return res.status(502).json({ ok: false, error: 'Meta connection verification failed; check token validity and account permissions', published: false });
     }
-  });
+  };
+  app.get('/api/marketing/organic/connection', apiKey, verifyConnection);
+  if (env.META_PAGE_ACCESS_TOKEN && env.META_PAGE_ID && env.META_INSTAGRAM_ACCOUNT_ID) {
+    const report = { status(code) { this.code = code; return this; }, json(result) {
+      console.log('[meta-organic-connection] ' + JSON.stringify(result));
+    } };
+    void verifyConnection({}, report).catch(() => console.log('[meta-organic-connection] verification failed'));
+  }
 }
 
 module.exports = { registerMetaOrganic };
