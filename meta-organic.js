@@ -26,7 +26,7 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
     const cfg = config();
     if (!configured(cfg)) return {status:503, body:{ok:false,error:'Meta connection configuration is incomplete',published:false}};
     try {
-      const page = await read(cfg.token, 'me', 'id,name,instagram_business_account');
+      const page = await read(cfg.token, cfg.pageId, 'id,name,instagram_business_account');
       if (page.id !== cfg.pageId || page.instagram_business_account?.id !== cfg.instagramId) {
         return {status:409, body:{ok:false,error:'Meta account does not match configured Homestro accounts',published:false}};
       }
