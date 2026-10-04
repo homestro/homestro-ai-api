@@ -2,12 +2,14 @@
 const {buildOrganicDraft}=require('./organic-marketing');
 const {publishOrganicDraft}=require('./meta-organic');
 const {queueDraft,listDrafts,approveDraft,markPublished,hasQueuedProduct}=require('./organic-staging');
-const QUERY='query OrganicProducts { products(first: 30, query: "status:active") { nodes { id title handle status tags onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } featuredMedia { ... on MediaImage { image { url } } } variants(first: 100) { nodes { id price inventoryQuantity inventoryPolicy } } } } }';
+const QUERY='query OrganicProducts { products(first: 30, query: "status:active") { nodes { id title handle status tags onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } featuredMedia { ... on MediaImage { image { url } } } metafields(first:20,namespace:"homestro"){nodes{key value}} variants(first: 100) { nodes { id price inventoryQuantity inventoryPolicy } } } } }';
 async function organicPreview(graphql,fetchImpl=global.fetch){
   const data=await graphql(QUERY);
   const skipped=[];
   for(const p of data.products.nodes){
     try {
+      const marketingMf=Object.fromEntries((p.metafields?.nodes||[]).map(m=>[m.key,String(m.value||'')]));
+      if(marketingMf.organic_facebook_post_id&&marketingMf.organic_instagram_post_id)throw Error('Product already published on Meta');
       if(hasQueuedProduct(p.id))throw Error('Product already queued or published in this worker session');
       if(p.priceRangeV2.minVariantPrice.currencyCode!=='EUR')throw Error('Unsupported currency');
       if(!p.onlineStoreUrl)throw Error('Not published in online store');
@@ -32,7 +34,11 @@ async function organicPreview(graphql,fetchImpl=global.fetch){
 function registerOrganicCatalog(app,apiKey,graphql){
   app.get('/api/marketing/organic/drafts',apiKey,(_req,res)=>res.json({ok:true,drafts:listDrafts()}));
   app.post('/api/marketing/organic/drafts/:id/approve',apiKey,(req,res)=>{try{const d=approveDraft(req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});res.json({ok:true,draft:d});}catch(e){res.status(409).json({ok:false,error:e.message});}});
-  app.post('/api/marketing/organic/drafts/:id/publish',apiKey,async(req,res)=>{try{const d=listDrafts().find(x=>x.id===req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});if(d.status!=='approved')return res.status(409).json({ok:false,error:'Draft must be approved first'});const result=await publishOrganicDraft(d);res.json({ok:true,draft:markPublished(d.id,result),result,paidAds:false});}catch(e){res.status(502).json({ok:false,error:e.message,published:false,paidAds:false});}});
+  app.post('/api/marketing/organic/drafts/:id/publish',apiKey,async(req,res)=>{try{const d=listDrafts().find(x=>x.id===req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});if(d.status!=='approved')return res.status(409).json({ok:false,error:'Draft must be approved first'});const result=await publishOrganicDraft(d);
+      const key=result.channel==='facebook'?'organic_facebook_post_id':'organic_instagram_post_id';
+      const saved=await graphql('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){userErrors{field message code}}}',{metafields:[{ownerId:d.productId,namespace:'homestro',key,type:'single_line_text_field',value:String(result.id)}]});
+      const errs=saved.metafieldsSet?.userErrors||[];if(errs.length)throw Error('Published but Shopify history save failed: '+errs.map(e=>e.message).join('; '));
+      res.json({ok:true,draft:markPublished(d.id,result),result,paidAds:false});}catch(e){res.status(502).json({ok:false,error:e.message,published:false,paidAds:false});}});
   app.get('/api/marketing/organic/preview',apiKey,async(_req,res)=>{
     try{res.json(await organicPreview(graphql));}catch(_){res.status(502).json({ok:false,error:'Product preview failed',published:false});}
   });
