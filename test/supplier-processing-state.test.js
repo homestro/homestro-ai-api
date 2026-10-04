@@ -23,5 +23,6 @@ test('draft processor soft-pends missing supplier evidence instead of returning 
 
   assert.doesNotMatch(processor, /if\s*\(!src\|\|!reference\.productId\)\s*return/);
   assert.match(processor, /processed:true,skipped:false,reason:supplierState\.reason,pendingChecks/);
-  assert.match(processor, /supplierState\.available&&landedEvidence\.verified/);
+  assert.match(processor, /let pricing=\{changed:0,planned:\[\]\}/);
+  assert.doesNotMatch(processor, /applyDraftVariantEconomics\(/);
 });
