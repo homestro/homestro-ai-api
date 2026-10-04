@@ -39,7 +39,7 @@ function registerOrganicCatalog(app,apiKey,graphql){
     void organicPreview(graphql).then(async preview=>{
       if(!preview.ok)throw new Error(preview.error||'No organic preview');
       const results=[];
-      for(const draft of preview.drafts){
+      for(const draft of preview.drafts.filter(d=>process.env.META_ORGANIC_PUBLISH_CHANNEL?d.channel===process.env.META_ORGANIC_PUBLISH_CHANNEL:true)){
         try{results.push(await publishOrganicDraft(draft));}
         catch(error){results.push({channel:draft.channel,published:false,error:error.message,metaCode:error.meta?.code||null,metaSubcode:error.meta?.error_subcode||null});}
       }
