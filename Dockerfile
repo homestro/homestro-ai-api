@@ -2,7 +2,7 @@ FROM node:20-bookworm-slim
 
 # Railway healthchecks + system Chromium for Playwright.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates chromium \
+  && apt-get install -y --no-install-recommends curl ca-certificates chromium ffmpeg fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
