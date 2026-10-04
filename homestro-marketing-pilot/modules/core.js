@@ -5,7 +5,7 @@ export class PilotError extends Error {
 }
 export const fail = code => { throw new PilotError(code); };
 export const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export const codeOf = e => e instanceof PilotError ? e.code : 'INTERNAL_ERROR';
+export const codeOf = e => e instanceof PilotError ? e.code : ['MEDIA_TIMEOUT','MEDIA_BINARY_MISSING','MEDIA_ENCODING_FAILED','FFMPEG_MISSING','ENCODING_FAILED'].includes(e?.message) ? e.message : 'INTERNAL_ERROR';
 export const sleep = ms => new Promise(resolve => setTimeout(resolve,ms));
 export function log(code, extra={}) {
   // Do not serialize errors, HTTP responses, tokens, captions or supplier URLs.
