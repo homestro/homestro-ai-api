@@ -45,7 +45,7 @@ export function config(env=process.env) {
     token:env.META_PAGE_ACCESS_TOKEN||'', adminKey:env.PILOT_ADMIN_KEY||'',
     dataDir:env.PILOT_DATA_DIR||'/data/marketing',
     workerEnabled:env.PILOT_WORKER_ENABLED==='true', publishingEnabled:env.PILOT_PUBLISH_ENABLED==='true',
-    publishOnce:env.PILOT_PUBLISH_ONCE==='true',
+    publishOnce:env.PILOT_PUBLISH_ONCE==='true', syncOnce:env.PILOT_SYNC_ONCE==='true',
     feedEnabled:env.PILOT_FEED_ENABLED==='true',
     // Merchant fees are separate from ad spend. Feed shipping must match checkout.
     feeRate:Number(env.PILOT_PAYMENT_FEE_RATE||0),
