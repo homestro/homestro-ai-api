@@ -1,6 +1,7 @@
 'use strict';
 const {buildOrganicDraft}=require('./organic-marketing');
 const {publishOrganicDraft}=require('./meta-organic');
+const {queueDraft,listDrafts,approveDraft,markPublished}=require('./organic-staging');
 const QUERY='query OrganicProducts { products(first: 30, query: "status:active") { nodes { id title handle status tags onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } featuredMedia { ... on MediaImage { image { url } } } variants(first: 100) { nodes { id price inventoryQuantity inventoryPolicy } } } } }';
 async function organicPreview(graphql,fetchImpl=global.fetch){
   const data=await graphql(QUERY);
@@ -22,12 +23,15 @@ async function organicPreview(graphql,fetchImpl=global.fetch){
       const variant=available[0];
       const productUrl=new URL(p.onlineStoreUrl);productUrl.searchParams.set('variant',String(variant.id));
       const product={id:p.id,title:p.title,status:p.status,tags:p.tags,url:productUrl.href,price:Number(variant.price)/100,available:true,imageUrl:variant.featured_image?.src||p.featuredMedia?.image?.url};
-      return {ok:true,drafts:['facebook','instagram'].map(channel=>buildOrganicDraft(product,channel)),skipped,published:false};
+      return {ok:true,drafts:['facebook','instagram'].map(channel=>queueDraft(buildOrganicDraft(product,channel))),skipped,published:false};
     }catch(error){skipped.push({productId:p.id,reason:error.message});}
   }
   return {ok:false,error:'No eligible product in the first 30 active products',skipped,published:false};
 }
 function registerOrganicCatalog(app,apiKey,graphql){
+  app.get('/api/marketing/organic/drafts',apiKey,(_req,res)=>res.json({ok:true,drafts:listDrafts()}));
+  app.post('/api/marketing/organic/drafts/:id/approve',apiKey,(req,res)=>{try{const d=approveDraft(req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});res.json({ok:true,draft:d});}catch(e){res.status(409).json({ok:false,error:e.message});}});
+  app.post('/api/marketing/organic/drafts/:id/publish',apiKey,async(req,res)=>{try{const d=listDrafts().find(x=>x.id===req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});if(d.status!=='approved')return res.status(409).json({ok:false,error:'Draft must be approved first'});const result=await publishOrganicDraft(d);res.json({ok:true,draft:markPublished(d.id,result),result,paidAds:false});}catch(e){res.status(502).json({ok:false,error:e.message,published:false,paidAds:false});}});
   app.get('/api/marketing/organic/preview',apiKey,async(_req,res)=>{
     try{res.json(await organicPreview(graphql));}catch(_){res.status(502).json({ok:false,error:'Product preview failed',published:false});}
   });
