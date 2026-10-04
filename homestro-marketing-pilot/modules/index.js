@@ -104,7 +104,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         const r=await sync();
         const rows=(await pool.query(`SELECT id,channel,payload FROM marketing_posts WHERE status='draft_queued' ORDER BY created_at DESC LIMIT 100`)).rows;
         const carousels=rows.filter(x=>x.payload?.format==='carousel').map(x=>({id:x.id,channel:x.channel,imageCount:Array.isArray(x.payload?.imageURLs)?x.payload.imageURLs.length:0,title:x.payload?.title||null}));
-        log('SYNC_ONCE_COMPLETE',{processed:r?.processed||0,carouselCount:carousels.length,carousels});
+        const pendingReasons=(await pool.query(`SELECT reason, count(*)::int AS count FROM marketing_products p CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason WHERE p.status='pending_marketing' GROUP BY reason ORDER BY count DESC,reason LIMIT 20`)).rows;
+        log('SYNC_ONCE_COMPLETE',{processed:r?.processed||0,carouselCount:carousels.length,carousels,pendingReasons});
       } catch(e) { log('SYNC_ONCE_FAILED',{reason:codeOf(e)}); }
     }
     if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();void sync();}
