@@ -9,8 +9,8 @@ function text(value) { return String(value || '').replace(/<[^>]*>/g, ' ').repla
 
 function normalizeOptionName(value) {
   const name = String(value || '').trim();
-  const names = { color: 'Farbe', colour: 'Farbe', size: 'Größe', style: 'Ausführung', model: 'Modell', quantity: 'Menge', material: 'Material', 'ships from': 'Versandlager' };
-  return names[name.toLowerCase()] || name;
+  const names = { color: 'Farbe', colors: 'Farbe', colour: 'Farbe', colours: 'Farbe', 'color name': 'Farbe', 'colour name': 'Farbe', size: 'Größe', style: 'Ausführung', model: 'Modell', quantity: 'Menge', material: 'Material', 'ships from': 'Versandlager' };
+  return names[name.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ')] || name;
 }
 
 function normalizeVariantValue(value, { optionName = '', position = 0, imageAlt = '' } = {}) {
@@ -101,6 +101,7 @@ function qaProduct(product = {}) {
   const variants = product.variants?.nodes || product.variants || [];
   if (!variants.length) reasons.push('variants');
   variants.forEach((v, index) => {
+    if ((v.selectedOptions || []).some(o => normalizeOptionName(o.name) !== String(o.name || '').trim())) reasons.push(`variant-option-name:${index}`);
     const values = (v.selectedOptions || []).map(o => o.value);
     if (values.some(v => RAW_VARIANT.test(String(v).trim()) || DIRTY_VARIANT.test(String(v).trim()))) reasons.push(`variant-label:${index}`);
     const normalizedValues = values.map(v => normalizeVariantValue(v));
