@@ -1,0 +1,6 @@
+{
+  "name": "homestro-organic-pilot", "version": "1.0.0", "private": true,
+  "type": "module", "engines": {"node": ">=22"},
+  "scripts": {"start": "node server.example.js", "test": "node --test test/*.test.js"},
+  "dependencies": {"express": "^5.1.0", "pg": "^8.16.3"}
+}
