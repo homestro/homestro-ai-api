@@ -53,14 +53,14 @@ export class MediaRenderer {
       const vf=`scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x151515,setsar=1,fps=30,${hook}`;
       const args=['-hide_banner','-loglevel','error','-y'];
       await downloadMedia(selected.videoURL,join(tmp,'source.mp4'),this.cfg.mediaHosts);
-      const probe=JSON.parse(await run('ffprobe',['-v','error','-show_format','-of','json',join(tmp,'source.mp4')]));
+      const probe=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_format','-of','json',join(tmp,'source.mp4')]));
       if(Number(probe.format?.duration)<4 || !Number.isFinite(Number(probe.format?.duration))) fail('VIDEO_TOO_SHORT');
       args.push('-i',join(tmp,'source.mp4'),'-t','30','-vf',vf,'-an');
       args.push('-threads','1','-filter_threads','1','-filter_complex_threads','1',
         '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',join(tmp,'out.mp4'));
       // drawtext file resolved under the temp directory, never from a shell.
       await new Promise((resolve,reject)=>{
-        const c=spawn('ffmpeg',args,{cwd:tmp,stdio:'ignore'});
+        const c=spawn('/usr/bin/ffmpeg',args,{cwd:tmp,stdio:'ignore'});
         const timer=setTimeout(()=>c.kill('SIGKILL'),180000);
         c.once('error',()=>{clearTimeout(timer);reject(new Error('FFMPEG_MISSING'));});
         c.once('close',code=>{clearTimeout(timer);code===0?resolve():reject(new Error('ENCODING_FAILED'));});
@@ -79,7 +79,7 @@ export class MediaRenderer {
         try {
           await downloadMedia(image,join(tmp,'input'),this.cfg.mediaHosts,fetch,15*1024*1024);
           // JPEG, consistent 4:5 frame, preserve entire product with padding. No video encoding.
-          await run('ffmpeg',['-hide_banner','-loglevel','error','-y','-i',join(tmp,'input'),
+          await run('/usr/bin/ffmpeg',['-hide_banner','-loglevel','error','-y','-i',join(tmp,'input'),
             '-vf','scale=1080:1350:force_original_aspect_ratio=decrease,pad=1080:1350:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1',
             '-frames:v','1','-threads','1','-filter_threads','1','-q:v','3',join(tmp,'image.jpg')]);
           const info=await stat(join(tmp,'image.jpg'));if(info.size>8*1024*1024)fail('INSTAGRAM_IMAGE_TOO_LARGE');
