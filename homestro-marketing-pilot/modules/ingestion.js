@@ -36,7 +36,20 @@ export class Ingestion {
       try{productURL(p.url);}catch{reasons.push('NO_PUBLIC_PRODUCT_URL');}
       // Persist BEFORE localization/media: supplier misses never terminate ingestion.
       await this.store.saveProduct(p,'pending_marketing',reasons);
-      try{if(!p.localized)p.localized=await localize(p,this.localizer);}catch(e){reasons.push(codeOf(e));}
+      try{if(!p.localized)p.localized=await localize(p,this.localizer);}catch(e){
+        reasons.push(codeOf(e));
+        // Preview-only fallback: use existing Shopify German copy to render a review draft.
+        // This does NOT clear CONTENT_REVIEW_REQUIRED and therefore cannot become publishable.
+        const clean=s=>String(s||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+        const title=clean(p.title).slice(0,150);
+        const description=clean(p.description)||title;
+        const fallbackFacts=(p.facts||[]).slice(0,3);
+        while(fallbackFacts.length<3)fallbackFacts.push({id:`preview-${fallbackFacts.length+1}`,text:title});
+        p.facts=fallbackFacts;
+        p.localized={language:'de',title,description,hook:title.slice(0,100),searchTitle:title,
+          seoTitle:title.slice(0,70),seoDescription:description.slice(0,160),
+          benefits:fallbackFacts.map(x=>({factId:x.id,text:clean(x.text).slice(0,200)||title}))};
+      }
       // Marketing media/drafts may be prepared while commercial/review gates are pending.
       // Approval and publishing remain fail-closed because Store.approve() requires product status=ready.
       let asset=null,queued=0;
