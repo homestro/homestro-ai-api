@@ -9,6 +9,7 @@ const {normalizeSelectedDraftId}=require('./selected-draft');
 const express=require('express');
 const {registerMetaOrganic}=require('./meta-organic');
 const {registerOrganicCatalog}=require('./organic-catalog');
+const {registerGoogleOrganicFeed}=require('./google-organic-feed');
 const cors=require('cors');
 const crypto=require('crypto');
 const {getProductRules,validateProductEconomics}=require('./homestro-rules');
@@ -37,6 +38,7 @@ async function shopifyGraphQL(query,variables={},overrideToken){const c=cfg();if
 function apiKey(req,res,next){const k=process.env.HOMESTRO_API_KEY,a=req.get('authorization')||'';if(!k)return res.status(503).json({ok:false,error:'API key is not configured.'});if(a==='Bearer '+k)return next();return res.status(401).json({ok:false,error:'Unauthorized'});}
 registerMetaOrganic(app,apiKey);
 registerOrganicCatalog(app,apiKey,shopifyGraphQL);
+registerGoogleOrganicFeed(app,shopifyGraphQL);
 registerSupplierQuoteBridge(app,{apiKey,graphql:shopifyGraphQL,getToken:getClientToken});
 async function sidekick(req,res,next){try{req.sidekick=await getRequestToken(req);next();}catch(e){res.set('X-Shopify-Retry-Invalid-Session-Request','1');res.status(e.status||401).json({ok:false,error:e.message});}}
 // SHOPIFY OAUTH INSTALL FLOW
