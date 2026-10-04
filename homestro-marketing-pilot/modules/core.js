@@ -37,6 +37,7 @@ export function pricing(price,cost,feeRate=0) {
     marginEUR:known?Number((p-p*feeRate-numericCost).toFixed(2)):null,
     mayReprice:known, recommendedPrice:null};
 }
+const envBool=(value)=>String(value??'').trim().toLowerCase()==='true';
 export function config(env=process.env) {
   const publicOrigin=new URL(env.PILOT_PUBLIC_ORIGIN || 'https://homestro-ai-api-fixed-current-production.up.railway.app').origin;
   if (!publicOrigin.startsWith('https://')) fail('HTTPS_REQUIRED');
@@ -44,9 +45,9 @@ export function config(env=process.env) {
     pageId:env.META_PAGE_ID||'187533961115946', instagramId:env.META_INSTAGRAM_ACCOUNT_ID||'17841463937458002',
     token:env.META_PAGE_ACCESS_TOKEN||'', adminKey:env.PILOT_ADMIN_KEY||'',
     dataDir:env.PILOT_DATA_DIR||'/data/marketing',
-    workerEnabled:env.PILOT_WORKER_ENABLED==='true', publishingEnabled:env.PILOT_PUBLISH_ENABLED==='true',
-    publishOnce:env.PILOT_PUBLISH_ONCE==='true', syncOnce:env.PILOT_SYNC_ONCE==='true',
-    feedEnabled:env.PILOT_FEED_ENABLED==='true',
+    workerEnabled:envBool(env.PILOT_WORKER_ENABLED), publishingEnabled:envBool(env.PILOT_PUBLISH_ENABLED),
+    publishOnce:envBool(env.PILOT_PUBLISH_ONCE), syncOnce:envBool(env.PILOT_SYNC_ONCE),
+    feedEnabled:envBool(env.PILOT_FEED_ENABLED),
     // Merchant fees are separate from ad spend. Feed shipping must match checkout.
     feeRate:Number(env.PILOT_PAYMENT_FEE_RATE||0),
     shipping:JSON.parse(env.PILOT_SHIPPING_JSON||'[{"country":"DE","price":6.99,"freeFrom":50}]'),
