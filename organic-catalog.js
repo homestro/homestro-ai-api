@@ -1,5 +1,6 @@
 'use strict';
 const {buildOrganicDraft}=require('./organic-marketing');
+const {publishOrganicDraft}=require('./meta-organic');
 const QUERY='query OrganicProducts { products(first: 30, query: "status:active") { nodes { id title handle status tags onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } featuredMedia { ... on MediaImage { image { url } } } variants(first: 100) { nodes { id price inventoryQuantity inventoryPolicy } } } } }';
 async function organicPreview(graphql,fetchImpl=global.fetch){
   const data=await graphql(QUERY);
@@ -32,6 +33,19 @@ function registerOrganicCatalog(app,apiKey,graphql){
   });
   if(process.env.META_PAGE_ACCESS_TOKEN){
     void organicPreview(graphql).then(result=>console.log('[organic-marketing-preview] '+JSON.stringify(result))).catch(()=>console.log('[organic-marketing-preview] product preview failed'));
+  }
+}
+
+  if(process.env.META_ORGANIC_PUBLISH_ONCE==='approved-2026-10-04'){
+    void organicPreview(graphql).then(async preview=>{
+      if(!preview.ok)throw new Error(preview.error||'No organic preview');
+      const results=[];
+      for(const draft of preview.drafts){
+        try{results.push(await publishOrganicDraft(draft));}
+        catch(error){results.push({channel:draft.channel,published:false,error:error.message,metaCode:error.meta?.code||null,metaSubcode:error.meta?.error_subcode||null});}
+      }
+      console.log('[organic-marketing-publish-once] '+JSON.stringify({results,paidAds:false}));
+    }).catch(error=>console.log('[organic-marketing-publish-once] '+JSON.stringify({error:error.message,published:false,paidAds:false})));
   }
 }
 module.exports={organicPreview,registerOrganicCatalog};
