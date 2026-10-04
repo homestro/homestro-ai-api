@@ -26,6 +26,7 @@ export class Worker {
         try {
           await this.meta.publish(job,async state=>{remote=state;await this.store.checkpoint(job.id,state);});
           await this.store.setStatus(job.id,'published');log('PUBLISHED',{postId:job.id,channel:job.channel});
+          if(this.cfg.publishOnce){this.cfg.publishingEnabled=false;this.cfg.workerEnabled=false;this.stop();log('ONE_SHOT_COMPLETE',{postId:job.id,channel:job.channel});}
         }catch(e){
           // No automatic retry of writes: timeout may mean the platform already accepted publication.
           await this.store.setStatus(job.id,'recovery_required',codeOf(e));
