@@ -22,6 +22,6 @@ export function prepareExistingInputs(raw) {
     previouslyPublished:{facebook:raw.publishedFacebook?.jsonValue||null,instagram:raw.publishedInstagram?.jsonValue||null},
     // Owner previously confirmed existing DSers prices; never recalculate from zero cost.
     priceReviewed:true,contentReviewed:Boolean(germanCopy),
-    rightsVerified:false,germanCopy,facts,productType,
+    rightsVerified:tags.includes('homestro-media-rights-verified'),germanCopy,facts,productType,
     categoryKey:/küch|kitchen|aufbewahr/i.test(productType||raw.title)?'kitchen':'home'};
 }
