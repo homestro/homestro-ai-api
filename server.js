@@ -9,6 +9,7 @@ const {normalizeSelectedDraftId}=require('./selected-draft');
 const express=require('express');
 const {registerMetaOrganic}=require('./meta-organic');
 const {registerOrganicCatalog}=require('./organic-catalog');
+const {registerMarketingPilot}=require('./homestro-marketing-pilot/runtime.cjs');
 const {registerGoogleOrganicFeed}=require('./google-organic-feed');
 const cors=require('cors');
 const crypto=require('crypto');
@@ -37,7 +38,8 @@ async function getRequestToken(req){const a=req.get('authorization')||'',id=a.st
 async function shopifyGraphQL(query,variables={},overrideToken){const c=cfg();if(!c.domain)throw Object.assign(new Error('Shopify is not configured.'),{status:503});const token=overrideToken||await getClientToken();const r=await fetch(`https://${c.domain}/admin/api/2026-07/graphql.json`,{method:'POST',headers:{'Content-Type':'application/json','X-Shopify-Access-Token':token},body:JSON.stringify({query,variables})});const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch(e){throw Object.assign(new Error('Shopify GraphQL returned non-JSON HTTP '+r.status+' '+raw.slice(0,180)),{status:502});}if(!r.ok||d.errors?.length)throw Object.assign(new Error(d.errors?.map(x=>x.message).join('; ')||`Shopify HTTP ${r.status}`),{status:502});return d.data;}
 function apiKey(req,res,next){const k=process.env.HOMESTRO_API_KEY,a=req.get('authorization')||'';if(!k)return res.status(503).json({ok:false,error:'API key is not configured.'});if(a==='Bearer '+k)return next();return res.status(401).json({ok:false,error:'Unauthorized'});}
 registerMetaOrganic(app,apiKey);
-registerOrganicCatalog(app,apiKey,shopifyGraphQL);
+if(process.env.PILOT_V2_ENABLED!=='true')registerOrganicCatalog(app,apiKey,shopifyGraphQL);
+const marketingPilot=registerMarketingPilot(app,{graphql:shopifyGraphQL,apiKey});
 registerGoogleOrganicFeed(app,shopifyGraphQL);
 registerSupplierQuoteBridge(app,{apiKey,graphql:shopifyGraphQL,getToken:getClientToken});
 async function sidekick(req,res,next){try{req.sidekick=await getRequestToken(req);next();}catch(e){res.set('X-Shopify-Retry-Invalid-Session-Request','1');res.status(e.status||401).json({ok:false,error:e.message});}}
@@ -1089,6 +1091,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const cleanFinal=finalTags.filter(t=>(complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete')&&(contentComplete?t!=='homestro-ai-content-pending':t!=='homestro-ai-content-complete'));
  await setProductTags(productId,[...new Set(cleanFinal)],token);
  const pendingChecks=[...new Set([...supplierState.pendingChecks,...optionalPending,...(!aiContentSucceeded?['ai-content']:[]),...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
+ void marketingPilot.processProduct(productId).catch(()=>console.warn('[organic-pilot-v2] isolated pipeline hook failure'));
  if(pendingChecks.length)console.log('EXISTING_DRAFT_QA_PENDING',productId,'reason='+(supplierState.reason||landedEvidence.reason||'qa-incomplete'),'pendingChecks='+pendingChecks.join(','));
  return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,contentQA,contentComplete,pricingPolicy:'PRESERVE_DSERS',complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
 }
