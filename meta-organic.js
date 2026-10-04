@@ -93,6 +93,19 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
   }
   if(draft.channel==='instagram'){
     const container=await post(`${instagramId}/media`,{image_url:draft.imageUrl,caption:draft.caption});
+    let status=null;
+    for(let attempt=0;attempt<12;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,5000));
+      const url=new URL(`https://graph.facebook.com/v26.0/${container.id}`);
+      url.searchParams.set('fields','status_code,status');
+      const response=await fetchImpl(url,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
+      const data=await response.json();
+      if(!response.ok||data.error){const e=new Error(data?.error?.message||'Instagram container status failed');e.meta=data?.error||null;throw e;}
+      status=data;
+      if(data.status_code==='FINISHED')break;
+      if(data.status_code==='ERROR'||data.status_code==='EXPIRED')throw new Error(`Instagram media processing failed: ${data.status||data.status_code}`);
+    }
+    if(status?.status_code!=='FINISHED')throw new Error('Instagram media processing timed out');
     const result=await post(`${instagramId}/media_publish`,{creation_id:container.id});
     return {channel:'instagram',published:true,id:result.id,containerId:container.id};
   }
