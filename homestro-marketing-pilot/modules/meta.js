@@ -15,7 +15,7 @@ export class MetaOrganic {
     return b;
   }
   async verifyConnection() {
-    const p=await this.request('me',{fields:'id,instagram_business_account'});
+    const p=await this.request(this.cfg.pageId,{fields:'id,instagram_business_account'});
     if(String(p.id)!==this.cfg.pageId || String(p.instagram_business_account?.id)!==this.cfg.instagramId)
       fail('META_ACCOUNT_MISMATCH');
   }
