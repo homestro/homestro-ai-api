@@ -19,7 +19,7 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env}={}) {
         })]).finally(()=>clearTimeout(timer));
       };
       instance=await attachMarketing(app,{pool,graphql:boundedGraphql,cfg,prepareInputs:prepareExistingInputs,apiKeyMiddleware:apiKey});
-      state={enabled:instance.enabled,workerEnabled:cfg.workerEnabled,publishingEnabled:cfg.publishingEnabled};
+      state={enabled:instance.enabled,workerEnabled:cfg.workerEnabled,publishingEnabled:cfg.publishingEnabled,syncOnce:cfg.syncOnce};
       console.log('[organic-pilot-v2] '+JSON.stringify(state));
       process.once('SIGTERM',()=>{instance?.stop();void pool.end().catch(()=>{});});
       if(!instance.enabled)await pool.end();
