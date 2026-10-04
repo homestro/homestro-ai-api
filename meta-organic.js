@@ -76,4 +76,27 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
   }
 }
 
-module.exports = { registerMetaOrganic };
+
+async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = process.env } = {}) {
+  const token=String(env.META_PAGE_ACCESS_TOKEN||'').trim();
+  const pageId=String(env.META_PAGE_ID||'').trim();
+  const instagramId=String(env.META_INSTAGRAM_ACCOUNT_ID||'').trim();
+  if(!token||!pageId||!instagramId) throw new Error('Meta publishing configuration incomplete');
+  async function post(path, params) {
+    const body=new URLSearchParams(params); const response=await fetchImpl(`https://graph.facebook.com/v26.0/${path}`,{
+      method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/x-www-form-urlencoded'},body,signal:AbortSignal.timeout(30000)
+    }); const data=await response.json(); if(!response.ok||data.error){const e=new Error(data?.error?.message||'Meta publish rejected');e.meta=data?.error||null;throw e;} return data;
+  }
+  if(draft.channel==='facebook'){
+    const result=await post(`${pageId}/photos`,{url:draft.imageUrl,caption:draft.caption,published:'true'});
+    return {channel:'facebook',published:true,id:result.post_id||result.id};
+  }
+  if(draft.channel==='instagram'){
+    const container=await post(`${instagramId}/media`,{image_url:draft.imageUrl,caption:draft.caption});
+    const result=await post(`${instagramId}/media_publish`,{creation_id:container.id});
+    return {channel:'instagram',published:true,id:result.id,containerId:container.id};
+  }
+  throw new Error('Unsupported channel');
+}
+
+module.exports = { registerMetaOrganic, publishOrganicDraft };
