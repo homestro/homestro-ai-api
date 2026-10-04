@@ -103,7 +103,12 @@ function qaProduct(product = {}) {
   variants.forEach((v, index) => {
     if ((v.selectedOptions || []).some(o => normalizeOptionName(o.name) !== String(o.name || '').trim())) reasons.push(`variant-option-name:${index}`);
     const values = (v.selectedOptions || []).map(o => o.value);
-    if (values.some(v => RAW_VARIANT.test(String(v).trim()) || DIRTY_VARIANT.test(String(v).trim()))) reasons.push(`variant-label:${index}`);
+    if (values.some((value, i) => {
+      const label = String(value).trim(), name = normalizeOptionName(v.selectedOptions[i].name);
+      if (name === 'Größe' && /^(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[1-6]XL)$/i.test(label)) return false;
+      if (/^(?:curl|schwung)$/i.test(name) && /^[CD]$/i.test(label)) return false;
+      return RAW_VARIANT.test(label) || DIRTY_VARIANT.test(label);
+    })) reasons.push(`variant-label:${index}`);
     const normalizedValues = values.map(v => normalizeVariantValue(v));
     if (new Set(normalizedValues.map(v => String(v).toLowerCase())).size !== normalizedValues.length) reasons.push(`variant-duplicate:${index}`);
     if (!(Number(v.price) > 0)) reasons.push(`variant-price:${index}`);
