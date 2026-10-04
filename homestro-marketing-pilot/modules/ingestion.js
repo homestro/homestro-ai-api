@@ -37,17 +37,26 @@ export class Ingestion {
       // Persist BEFORE localization/media: supplier misses never terminate ingestion.
       await this.store.saveProduct(p,'pending_marketing',reasons);
       try{if(!p.localized)p.localized=await localize(p,this.localizer);}catch(e){reasons.push(codeOf(e));}
-      if(reasons.length){await this.store.saveProduct(p,'pending_marketing',reasons);return {processed:1,status:'pending_marketing',reasons};}
-      const asset=await this.renderer.render(p);
-      p.asset=asset;
-      await this.store.saveProduct(p,'ready',[]);
-      let queued=0;
-      for(const channel of ['facebook','instagram']){
-        if(p.previouslyPublished[channel])continue;
-        const payload=compilePost(p,channel,asset);
-        if(await this.store.queue(p.id,channel,hash(payload),payload))queued++;
+      // Marketing media/drafts may be prepared while commercial/review gates are pending.
+      // Approval and publishing remain fail-closed because Store.approve() requires product status=ready.
+      let asset=null,queued=0;
+      if(p.localized){
+        try {
+          asset=await this.renderer.render(p);
+          p.asset=asset;
+          for(const channel of ['facebook','instagram']){
+            if(p.previouslyPublished[channel])continue;
+            const payload=compilePost(p,channel,asset);
+            if(await this.store.queue(p.id,channel,hash(payload),payload))queued++;
+          }
+        } catch(e) { reasons.push(codeOf(e)); }
       }
-      return {processed:1,status:'draft_queued',queued};
+      if(reasons.length){
+        await this.store.saveProduct(p,'pending_marketing',reasons);
+        return {processed:1,status:'pending_marketing',reasons,queued,assetFormat:asset?.format||null};
+      }
+      await this.store.saveProduct(p,'ready',[]);
+      return {processed:1,status:'draft_queued',queued,assetFormat:asset?.format||null};
     } catch(e){
       const reason=codeOf(e);log(reason,{productId:raw.id});
       // A failure remains isolated. Caller must NOT use this result to undo product ingestion.
