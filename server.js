@@ -1,3 +1,4 @@
+const {checkGallery}=require('./gallery-readiness');
 const {contentReadiness}=require('./content-readiness');
 const {summarizeAutopilotResults}=require('./autopilot-results');
 const {registerSupplierQuoteBridge}=require('./supplier-quote-bridge');
@@ -357,7 +358,7 @@ async function imageIsRelevant(url,input,pageContext){
  if(!process.env.OPENAI_API_KEY)return false;
  const model=process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||'gpt-5-mini';
  const prompt='Prüfe dieses konkrete Produktbild für Homestro extrem streng. Freigabe NUR wenn exakt das Produkt aus dem Produktnamen/der Beschreibung gezeigt wird und das Bild für einen deutschen Online-Shop geeignet ist. ABLEHNEN bei anderem Produkt, Zubehör statt Hauptprodukt, Banner, Logo, Wasserzeichen, Verpackung als Hauptmotiv, chinesischen/japanischen/koreanischen Schriftzeichen, fremdsprachigem Werbetext, irreführenden Angaben, starker Unschärfe oder schlechter Qualität. Wenn du unsicher bist, ABLEHNEN. Produkt: '+String(input?.title||'')+'. Kategorie: '+String(input?.category||input?.productType||'')+'. Beschreibung: '+homestroPlain(input?.description||'').slice(0,1500)+'. Quellkontext: '+String(pageContext||'').slice(0,3000)+'. Antworte nur JSON {"relevant":true/false,"confidence":0-1,"hasForeignText":true/false,"lowQuality":true/false}.';
- try{const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});const raw=await r.text();const d=JSON.parse(raw);if(!r.ok){console.error('IMAGE VISION HTTP',r.status,raw.slice(0,500));return false;}const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;}catch{return false;}
+ try{const r=await fetch('https://api.openai.com/v1/responses',{signal:AbortSignal.timeout(25000),method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});const raw=await r.text();const d=JSON.parse(raw);if(!r.ok){console.error('IMAGE VISION HTTP',r.status,raw.slice(0,500));return false;}const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;}catch{return false;}
 }
 
 async function generateHomestroImage(input,title,pageContext){
@@ -904,7 +905,7 @@ async function ensureDraftImageAltText(productId,mediaNodes,title,token){
  return {changed,pending:Math.max(0,missing.length-changed)};
 }
 
-async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name optionValues{id name}} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}} metafields(first:20){nodes{namespace key value}}}} metafields(first:100){nodes{namespace key value}} media(first:30){nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
+async function processExistingDraftProduct(productId,token){ const d=await shopifyGraphQL('query($id:ID!){product(id:$id){id title description vendor productType tags status seo{title description} options{id name optionValues{id name}} collections(first:50){nodes{id title handle}} variants(first:100){nodes{id title price sku selectedOptions{name value} image{id url altText width height} inventoryItem{unitCost{amount currencyCode}} metafields(first:20){nodes{namespace key value}}}} metafields(first:100){nodes{namespace key value}} media(first:30){pageInfo{hasNextPage} nodes{id mediaContentType status alt ... on MediaImage { image { url width height } }}}}}',{id:productId},token);
  const p=d.product;if(!p)throw new Error('Product not found');assertDraftProduct(p);
  const existingTags=(Array.isArray(p.tags)?p.tags:[]).map(String);
  if(existingTags.includes('homestro-ai-rejected'))return {id:productId,title:p.title,processed:false,skipped:true,reason:'rejected'};
@@ -1047,34 +1048,19 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  const variantImages=supplierState.available?await associateDraftVariantImages(p,token):{changed:0,pending:(p.variants?.nodes||[]).filter(v=>!v.image).length,reason:supplierState.reason};
  const existingImages=(p.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
  let media={count:existingImages.length,validation:existingImages.length?'preserved-existing':'not-run'};
- let imagesVerified=existingImages.length>0&&existingTags.includes('homestro-ai-images-verified');
- if(supplierState.available&&(existingTags.includes('homestro-ai-image-pending')||existingImages.length===0)){
-   try{
-    if(process.env.OPENAI_API_KEY){
-      let relevant=0;
-      for(const m of existingImages.slice(0,5)){
-       if(await imageIsRelevant(m.image.url,{...aiInput,title:x.title,category:x.category||p.productType},(details.page_title+' '+details.page_text).slice(0,4000)))relevant++;
-      }
-      if(relevant>0){
-       imagesVerified=true;
-       media={count:existingImages.length,validation:'strict-ai-vision-existing-preserved',relevant};
-      }else{
-       let added=0;
-       for(let i=0;i<3&&existingImages.length+added<5;i++){
-        const dataUrl=await generateHomestroImage({...aiInput,title:x.title,category:x.category||p.productType},x.title,(details.page_title+' '+details.page_text).slice(0,4000));
-        if(!dataUrl)break;
-        const uploaded=await uploadGeneratedImageToShopify(productId,dataUrl,x.title,token,i+1);
-        if(uploaded)added++;
-       }
-       if(added>0){imagesVerified=true;media={count:existingImages.length+added,validation:'strict-ai-vision-replacement-added',generated:added};}
-       else media={count:existingImages.length,validation:'image-pending'};
-      }
-    }else media={count:existingImages.length,validation:'image-pending-no-api'};
-   }catch(e){
-    console.error('EXISTING_DRAFT_IMAGE_NON_BLOCKING',productId,String(e?.message||e));
-    media={count:existingImages.length,validation:'image-pending'};
-   }
- }
+ let imagesVerified=false;
+ // Review retained images independently of supplier cost availability. Never
+ // generate a substitute product from text to make a failed gallery pass.
+ if(process.env.OPENAI_API_KEY){
+  const review=await checkGallery(existingImages,m=>imageIsRelevant(m.image.url,
+   {...aiInput,title:x.title,description:x.description||p.description,category:x.category||p.productType},
+   (details.page_title+' '+details.page_text).slice(0,4000)),
+   {hasNextPage:p.media?.pageInfo?.hasNextPage===true});
+  imagesVerified=review.verified;
+  media={count:existingImages.length,validation:review.verified?'strict-ai-vision-all-existing':'image-pending',...review};
+  console.log('DRAFT GALLERY QA',productId,JSON.stringify(review));
+ }else media={count:existingImages.length,validation:'image-pending-no-api'};
+
  const imagePending=!imagesVerified;
  const finalTags=[...new Set([
   ...tags.filter(t=>!['homestro-ai-image-pending','homestro-ai-images-checked','homestro-ai-images-verified','homestro-ai-complete','homestro-profit-pending','homestro-profit-checked'].includes(String(t))),
