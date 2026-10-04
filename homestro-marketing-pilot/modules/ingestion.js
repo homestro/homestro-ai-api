@@ -62,7 +62,7 @@ export class Ingestion {
             const payload=compilePost(p,channel,asset);
             if(await this.store.queue(p.id,channel,hash(payload),payload))queued++;
           }
-        } catch(e) { reasons.push(codeOf(e)); }
+        } catch(e) { const reason=codeOf(e); reasons.push(reason); if(reason==='INTERNAL_ERROR') log('RENDER_INTERNAL_ERROR',{name:String(e?.name||'Error').slice(0,60),message:String(e?.message||'').slice(0,120)}); }
       }
       if(reasons.length){
         await this.store.saveProduct(p,'pending_marketing',reasons);
