@@ -1,13 +1,14 @@
 'use strict';
 const {buildOrganicDraft}=require('./organic-marketing');
 const {publishOrganicDraft}=require('./meta-organic');
-const {queueDraft,listDrafts,approveDraft,markPublished}=require('./organic-staging');
+const {queueDraft,listDrafts,approveDraft,markPublished,hasQueuedProduct}=require('./organic-staging');
 const QUERY='query OrganicProducts { products(first: 30, query: "status:active") { nodes { id title handle status tags onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } featuredMedia { ... on MediaImage { image { url } } } variants(first: 100) { nodes { id price inventoryQuantity inventoryPolicy } } } } }';
 async function organicPreview(graphql,fetchImpl=global.fetch){
   const data=await graphql(QUERY);
   const skipped=[];
   for(const p of data.products.nodes){
     try {
+      if(hasQueuedProduct(p.id))throw Error('Product already queued or published in this worker session');
       if(p.priceRangeV2.minVariantPrice.currencyCode!=='EUR')throw Error('Unsupported currency');
       if(!p.onlineStoreUrl)throw Error('Not published in online store');
       const tags=p.tags||[];
