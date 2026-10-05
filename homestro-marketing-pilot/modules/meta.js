@@ -4,7 +4,7 @@ export class MetaOrganic {
   constructor(cfg,fetchImpl=fetch) {this.cfg=cfg;this.fetch=fetchImpl;}
   async request(path,{method='GET',fields,body}={}) {
     // Positive allowlist. Ads, campaigns, adsets and creatives cannot be addressed.
-    if(!/^(?:me|\d+)(?:\/(?:media|media_publish|video_reels|photos|feed))?$/.test(path)) fail('NON_ORGANIC_ENDPOINT_BLOCKED');
+    if(!/^(?:me|\d+(?:_\d+)?)(?:\/(?:media|media_publish|video_reels|photos|feed))?$/.test(path)) fail('NON_ORGANIC_ENDPOINT_BLOCKED');
     const u=new URL(`https://graph.facebook.com/${this.cfg.graphVersion}/${path}`);
     if(fields)u.searchParams.set('fields',fields);
     const r=await this.fetch(u,{method,headers:{Authorization:`Bearer ${this.cfg.token}`,

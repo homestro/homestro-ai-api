@@ -5,7 +5,7 @@ import {Worker} from './worker.js';
 // Explicit owner-requested single test. Background publication remains disabled.
 export function validateOneShot(request) {
   if(!request || !/^gid:\/\/shopify\/Product\/\d+$/.test(request.productId) ||
-    request.channel!=='instagram' || request.publish!==true ||
+    !['instagram','facebook'].includes(request.channel) || request.publish!==true ||
     typeof request.reviewer!=='string' || !request.reviewer.trim() || request.reviewer.length>100)
     fail('INVALID_ONE_SHOT_REQUEST');
   const x=request.inputs;
@@ -25,7 +25,7 @@ export async function runOneShot({request,instance,pool,cfg,freshSnapshot,meta=n
       AND status IN ('publishing','published','recovery_required') ORDER BY updated_at DESC LIMIT 1`,
       [request.productId,request.channel])).rows[0];
     if(previous) {
-      if(previous.status==='recovery_required' && request.recover===true)
+      if(previous.channel==='instagram' && previous.status==='recovery_required' && request.recover===true)
         return await reconcileOneShot({job:previous,instance,pool,cfg,freshSnapshot,meta});
       log('TARGET_ONE_SHOT_ALREADY_HANDLED',{postId:previous.id,status:previous.status,remotePostId:previous.remote?.postId||null});
       return {status:previous.status,postId:previous.id,remote:previous.remote};
@@ -45,7 +45,7 @@ export async function runOneShot({request,instance,pool,cfg,freshSnapshot,meta=n
       !Array.isArray(job.payload.imageURLs) || job.payload.imageURLs.length<2)fail('ONE_SHOT_CAROUSEL_REQUIRED');
     if(job.status==='draft_queued')await instance.store.approve(job.id,request.reviewer);
     log('TARGET_ONE_SHOT_APPROVED',{postId:job.id,productId:request.productId,channel:request.channel,imageCount:job.payload.imageURLs.length});
-    const oneCfg={...cfg,workerEnabled:true,publishingEnabled:true,publishOnce:true,maxDailyPosts:1};
+    const oneCfg={...cfg,workerEnabled:true,publishingEnabled:true,publishOnce:true,maxDailyPosts:request.channel==='facebook'?2:1};
     const originalCfg=meta.cfg;meta.cfg=oneCfg;
     try {
       const worker=new Worker({store:instance.store,meta,cfg:oneCfg,freshSnapshot});
@@ -55,7 +55,12 @@ export async function runOneShot({request,instance,pool,cfg,freshSnapshot,meta=n
     log('TARGET_ONE_SHOT_RESULT',{postId:job.id,status:result.status,errorCode:result.error_code,remotePostId:result.remote?.postId||null,phase:result.remote?.phase||null});
     if(result.status==='published' && result.remote?.postId) {
       try {
-        const published=await meta.request(String(result.remote.postId),{fields:'id,permalink,media_type,children'});
+        const published=await meta.request(String(result.remote.postId),{fields:request.channel==='facebook'?'id,permalink_url,attachments{subattachments}':'id,permalink,media_type,children'});
+        if(request.channel==='facebook') {
+          published.permalink=published.permalink_url;
+          published.media_type='FACEBOOK_MULTI_PHOTO';
+          published.children={data:published.attachments?.data?.[0]?.subattachments?.data||[]};
+        }
         log('TARGET_ONE_SHOT_VERIFIED',{postId:job.id,remotePostId:published.id,permalink:published.permalink,mediaType:published.media_type,childCount:published.children?.data?.length||0});
         result.permalink=published.permalink;
       } catch {log('TARGET_ONE_SHOT_VERIFICATION_PENDING',{remotePostId:result.remote.postId});}

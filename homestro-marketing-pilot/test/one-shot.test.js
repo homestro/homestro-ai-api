@@ -93,3 +93,20 @@ for(const options of [{containerStatus:'PUBLISHED'},{alreadyAttempted:true}])tes
   assert.equal((await runOneShot(f.args)).status,'recovery_required');
   assert.equal(requests.filter(r=>r.options.method==='POST').length,0);
 });
+
+test('Facebook test uses only its requested draft and verifies the Facebook permalink',async()=>{
+  const f=fixture();f.args.request={...request,channel:'facebook'};f.job.channel='facebook';
+  f.args.meta.publish=async(job,checkpoint)=>{
+    assert.equal(job.channel,'facebook');assert.equal(f.args.meta.cfg.maxDailyPosts,2);
+    await checkpoint({phase:'published',postId:'187533961115946_999'});
+  };
+  f.args.meta.request=async(path,options)=>{
+    assert.equal(path,'187533961115946_999');
+    assert.match(options.fields,/permalink_url/);
+    return {id:path,permalink_url:'https://www.facebook.com/187533961115946/posts/999',attachments:{data:[{subattachments:{data:[{},{}]}}]}};
+  };
+  const result=await runOneShot(f.args);
+  assert.equal(result.status,'published');
+  assert.equal(result.permalink,'https://www.facebook.com/187533961115946/posts/999');
+  assert.equal(f.cfg.publishingEnabled,false);
+});
