@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildDraft, slugify } = require('../ms-handwerk-organic');
+const { buildDraft, registerMsHandwerkOrganic, slugify } = require('../ms-handwerk-organic');
 
 test('builds a zero-ad draft from supplied real project details without publishing', () => {
   const draft = buildDraft({
@@ -36,4 +36,34 @@ test('escapes customer supplied text and creates stable German slugs', () => {
   assert.doesNotMatch(draft.website.articleHtml, /<script>/);
   assert.match(draft.website.articleHtml, /&lt;script&gt;/);
   assert.equal(slugify('Vinylboden verlegen Füssen'), 'vinylboden-verlegen-fussen');
+});
+
+test('serves a usable no-key draft form and rate-limits the public draft endpoint', () => {
+  const routes = new Map();
+  const app = {
+    get: (path, ...handlers) => routes.set(`GET ${path}`, handlers),
+    post: (path, ...handlers) => routes.set(`POST ${path}`, handlers)
+  };
+  registerMsHandwerkOrganic(app);
+
+  let html = '';
+  const pageResponse = {
+    set() { return this; },
+    type() { return this; },
+    send(value) { html = value; return this; }
+  };
+  routes.get('GET /ms-handwerk-review')[0]({}, pageResponse);
+  assert.match(html, /Připravit návrhy/);
+  assert.doesNotMatch(html, /Soukromý API klíč|id="key"/);
+
+  const [limit] = routes.get('POST /api/ms-handwerk/organic/draft');
+  let allowed = 0;
+  let limited = 0;
+  const response = { set() { return this; }, status(code) { this.code = code; return this; }, json() { limited += 1; } };
+  for (let i = 0; i < 31; i++) {
+    limit({ ip: '203.0.113.7' }, response, () => { allowed += 1; });
+  }
+  assert.equal(allowed, 30);
+  assert.equal(limited, 1);
+  assert.equal(response.code, 429);
 });
