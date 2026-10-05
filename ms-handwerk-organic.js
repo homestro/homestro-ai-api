@@ -17,6 +17,27 @@ function cleanText(value, max, field) {
   return text;
 }
 
+function plainPostText(value) {
+  return String(value ?? '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function removeDuplicateLead(description, service, city) {
+  const prefixes = [
+    `Ein weiteres Projekt in ${city}:`,
+    `Ein Projekt aus ${city}: ${service}.`,
+    `${service} in ${city}:`
+  ];
+  const prefix = prefixes.find(value => description.toLowerCase().startsWith(value.toLowerCase()));
+  return prefix ? description.slice(prefix.length).trim() : description;
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -32,7 +53,9 @@ function buildDraft(input = {}) {
   const service = cleanText(input.service, 80, 'service');
   if (!SERVICES.has(service)) throw new Error('SERVICE_NOT_ALLOWED');
   const city = cleanText(input.city, 80, 'city');
-  const projectDescription = cleanText(input.projectDescription, 1400, 'project_description');
+  const projectDescription = removeDuplicateLead(
+    cleanText(plainPostText(input.projectDescription), 1400, 'project_description'), service, city
+  );
   const photoUrls = Array.isArray(input.photoUrls) ? input.photoUrls : [];
   if (photoUrls.length > 6) throw new Error('TOO_MANY_PHOTOS');
   const photos = photoUrls.map(value => {
@@ -54,7 +77,10 @@ function buildDraft(input = {}) {
 
   const intro = `Ein Projekt aus ${city}: ${service}.`;
   const articleHtml = `<article lang="de"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(intro)}</p><p>${escapeHtml(projectDescription)}</p><p>MS Handwerk &amp; Service unterstützt Privatkunden, Vermieter und Eigentümer in Kempten und Umgebung. Besprechen Sie Ihr Vorhaben telefonisch, per E-Mail oder WhatsApp.</p><p><a href="https://ms-handwerkservice.de/">Kontakt und weitere Informationen</a></p>${photos.map(url => `<figure><img src="${escapeHtml(url)}" alt="Projektfoto: ${escapeHtml(service)} in ${escapeHtml(city)}" loading="lazy"></figure>`).join('')}</article>`;
-  const googlePost = `${intro}\n\n${projectDescription}\n\nSie planen ein ähnliches Vorhaben? Kontaktieren Sie MS Handwerk & Service aus Kempten: 0176 36336476. Auch per WhatsApp erreichbar.`;
+  const relatedServices = service === 'Innenanstrich' || service === 'Spachtelarbeiten'
+    ? 'Innenanstriche, Spachtel- und Schleifarbeiten'
+    : `${service}, Renovierungs- und Hausservice`;
+  const googlePost = `${service} in ${city}\n\n${projectDescription}\n\nMS Handwerk & Service übernimmt ${relatedServices} in ${city} und Umgebung. Saubere und zuverlässige Ausführung, faire Preise, kurzfristige Termine und kostenlose Besichtigung.\n\nTelefon und WhatsApp: 0176 36336476.`;
   const localPost = `${intro}\n\n${projectDescription}\n\nMS Handwerk & Service aus Kempten ist für Renovierungen und Hausservice in der Umgebung erreichbar. Informationen: https://ms-handwerkservice.de`;
 
   return {
@@ -110,7 +136,7 @@ function registerMsHandwerkOrganic(app) {
       <script nonce="${nonce}">
       const $=id=>document.getElementById(id), results=$('results');
       function addOutput(title,value){const box=document.createElement('article'),h=document.createElement('h2'),area=document.createElement('textarea'),copy=document.createElement('button');h.textContent=title;area.readOnly=true;area.value=String(value||'');copy.className='copy';copy.textContent='Kopírovat';copy.onclick=()=>navigator.clipboard.writeText(area.value);box.append(h,area,copy);results.append(box);}
-      $('generate').onclick=async()=>{results.replaceChildren();$('error').textContent='';try{const response=await fetch('/api/ms-handwerk/organic/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:$('service').value,city:$('city').value,projectDescription:$('description').value,photoUrls:$('photos').value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean)})});const data=await response.json();if(!response.ok)throw Error(data.error||'Návrh se nepodařilo vytvořit');const d=data.draft;addOutput('Google profil – připraveno k ručnímu vložení',d.googleBusinessProfile.text+'\\n\\n'+d.googleBusinessProfile.link);addOutput('Návrh textu pro web (HTML)',d.website.articleHtml);addOutput('Nebenan / Facebook',d.localSocial.text);$('error').textContent='Hotovo jako návrh. Zkontroluj skutečnost údajů i práva k fotografiím. Nic nebylo zveřejněno.';}catch(e){$('error').textContent=e.message;}};
+      $('generate').onclick=async()=>{results.replaceChildren();$('error').textContent='';try{const response=await fetch('/api/ms-handwerk/organic/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:$('service').value,city:$('city').value,projectDescription:$('description').value,photoUrls:$('photos').value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean)})});const data=await response.json();if(!response.ok)throw Error(data.error||'Návrh se nepodařilo vytvořit');const d=data.draft;addOutput('Google profil – text příspěvku',d.googleBusinessProfile.text);addOutput('Google profil – odkaz pro tlačítko „Mehr erfahren“',d.googleBusinessProfile.link);addOutput('Návrh textu pro web (HTML)',d.website.articleHtml);addOutput('Nebenan / Facebook',d.localSocial.text);$('error').textContent='Hotovo jako návrh. Použij jen pravdivý popis skutečné zakázky a ověř práva k fotografiím. Nic nebylo zveřejněno.';}catch(e){$('error').textContent=e.message;}};
       </script></html>`);
   });
   app.get('/api/ms-handwerk/organic/status', (_req, res) => res.json({
