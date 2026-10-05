@@ -26,7 +26,7 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env}={}) {
       return instance;
     }catch(e){
       const name=String(e?.name||'Error').slice(0,60);
-      const message=String(e?.message||'').replace(/(token|key|password|secret|postgres(?:ql)?:\\/\\/)[^\\s]*/gi,'$1[redacted]').slice(0,180);
+      const message=String(e?.message||'').slice(0,180);
       const code=String(e?.code||'').slice(0,60);
       state={enabled:false,reason:'INITIALIZATION_FAILED'};
       console.warn('[organic-pilot-v2] '+JSON.stringify({reason:'INITIALIZATION_FAILED',name,code,message}));
