@@ -35,7 +35,7 @@ export function createShopifyClient({domain,token,version='2026-07',fetchImpl=fe
     return b.data;
   };
 }
-export async function fetchProduct(graphql,id) {
+function canonicalProductUrl(p) {\n  const raw=String(p?.onlineStoreUrl||'').trim();\n  try { const u=new URL(raw); if(u.origin==='https://homestro.de' && u.pathname.startsWith('/products/')) return u.toString(); } catch {}\n  // Shopify can legitimately return no onlineStoreUrl while the product handle is usable on the primary storefront.\n  // Build only from Shopify's own handle; never accept or invent an external host.\n  if(p?.status==='ACTIVE' && /^[a-z0-9][a-z0-9-]*$/i.test(String(p.handle||''))) return `https://homestro.de/products/${p.handle}`;\n  return raw || null;\n}\nexport async function fetchProduct(graphql,id) {
   let mediaAfter=null,variantsAfter=null, result, media=[],variants=[], first=true;
   let mediaDone=false,variantsDone=false;
   for(let page=0;page<100;page++) {
@@ -44,7 +44,7 @@ export async function fetchProduct(graphql,id) {
     if(first){result={...p};first=false;}
     if(!mediaDone){media.push(...p.media.nodes);mediaDone=!p.media.pageInfo.hasNextPage;mediaAfter=p.media.pageInfo.endCursor;}
     if(!variantsDone){variants.push(...p.variants.nodes);variantsDone=!p.variants.pageInfo.hasNextPage;variantsAfter=p.variants.pageInfo.endCursor;}
-    if(mediaDone && variantsDone) return {...result,media,variants};
+    if(mediaDone && variantsDone) return {...result,onlineStoreUrl:canonicalProductUrl(result),media,variants};
   }
   fail('PRODUCT_PAGINATION_LIMIT');
 }
