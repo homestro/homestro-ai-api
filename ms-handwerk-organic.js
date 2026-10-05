@@ -76,7 +76,24 @@ function buildDraft(input = {}) {
   };
 }
 
-function registerMsHandwerkOrganic(app, apiKey) {
+function registerMsHandwerkOrganic(app) {
+  const requestWindows = new Map();
+  const draftRateLimit = (req, res, next) => {
+    const now = Date.now();
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    let window = requestWindows.get(ip);
+    if (!window || window.resetAt <= now) window = { count: 0, resetAt: now + 10 * 60 * 1000 };
+    window.count += 1;
+    requestWindows.set(ip, window);
+    if (requestWindows.size > 2000) {
+      for (const [key, value] of requestWindows) if (value.resetAt <= now) requestWindows.delete(key);
+    }
+    if (window.count > 30) {
+      res.set('Retry-After', String(Math.max(1, Math.ceil((window.resetAt - now) / 1000))));
+      return res.status(429).json({ ok: false, error: 'RATE_LIMITED' });
+    }
+    return next();
+  };
   app.get('/ms-handwerk-review', (_req, res) => {
     const nonce = require('node:crypto').randomBytes(16).toString('base64');
     const services = [...SERVICES].map(service => `<option>${escapeHtml(service)}</option>`).join('');
@@ -85,7 +102,7 @@ function registerMsHandwerkOrganic(app, apiKey) {
     res.type('html').send(`<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MS Handwerk · organický marketing</title>
       <style nonce="${nonce}">body{font:16px system-ui;margin:0;background:#f7f7f4;color:#222}main{max-width:820px;margin:32px auto;padding:20px}section,article{background:#fff;border:1px solid #ddd;border-radius:12px;padding:20px;margin:16px 0}label{display:block;font-weight:650;margin-top:14px}input,select,textarea,button{font:inherit;padding:10px;margin:5px 0;max-width:100%;box-sizing:border-box}input,select,textarea{width:100%;border:1px solid #bbb;border-radius:6px}textarea{min-height:120px}button{border:0;border-radius:6px;background:#f80;color:#fff;font-weight:700;cursor:pointer}button.copy{background:#305d48;margin-left:8px}small,.muted{color:#666}#error{color:#a21}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>
       <main><h1>MS Handwerk &amp; Service</h1><p><strong>Organický marketing bez reklamního rozpočtu.</strong> Nástroj připraví návrhy; nic automaticky nezveřejní. Generování nepoužívá OpenAI API.</p>
-      <section><label>Soukromý API klíč<input id="key" type="password" autocomplete="off"></label><small>Klíč se neukládá do prohlížeče.</small>
+      <section>
       <label>Služba<select id="service">${services}</select></label><label>Město<input id="city" maxlength="80" value="Kempten"></label>
       <label>Popis skutečně dokončené zakázky v němčině<textarea id="description" maxlength="1400" placeholder="Např. In einer Wohnung wurden die Wände und Decken gespachtelt und anschließend gestrichen."></textarea></label>
       <label>Odkazy na vlastní fotografie (nepovinné, jeden odkaz na řádek)<textarea id="photos" placeholder="https://…"></textarea></label>
@@ -93,10 +110,10 @@ function registerMsHandwerkOrganic(app, apiKey) {
       <script nonce="${nonce}">
       const $=id=>document.getElementById(id), results=$('results');
       function addOutput(title,value){const box=document.createElement('article'),h=document.createElement('h2'),area=document.createElement('textarea'),copy=document.createElement('button');h.textContent=title;area.readOnly=true;area.value=String(value||'');copy.className='copy';copy.textContent='Kopírovat';copy.onclick=()=>navigator.clipboard.writeText(area.value);box.append(h,area,copy);results.append(box);}
-      $('generate').onclick=async()=>{results.replaceChildren();$('error').textContent='';try{const response=await fetch('/api/ms-handwerk/organic/draft',{method:'POST',headers:{Authorization:'Bearer '+$('key').value,'Content-Type':'application/json'},body:JSON.stringify({service:$('service').value,city:$('city').value,projectDescription:$('description').value,photoUrls:$('photos').value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean)})});const data=await response.json();if(!response.ok)throw Error(data.error||'Návrh se nepodařilo vytvořit');const d=data.draft;addOutput('Google profil – připraveno k ručnímu vložení',d.googleBusinessProfile.text+'\\n\\n'+d.googleBusinessProfile.link);addOutput('Návrh textu pro web (HTML)',d.website.articleHtml);addOutput('Nebenan / Facebook',d.localSocial.text);$('error').textContent='Hotovo jako návrh. Zkontroluj skutečnost údajů i práva k fotografiím. Nic nebylo zveřejněno.';}catch(e){$('error').textContent=e.message;}};
+      $('generate').onclick=async()=>{results.replaceChildren();$('error').textContent='';try{const response=await fetch('/api/ms-handwerk/organic/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:$('service').value,city:$('city').value,projectDescription:$('description').value,photoUrls:$('photos').value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean)})});const data=await response.json();if(!response.ok)throw Error(data.error||'Návrh se nepodařilo vytvořit');const d=data.draft;addOutput('Google profil – připraveno k ručnímu vložení',d.googleBusinessProfile.text+'\\n\\n'+d.googleBusinessProfile.link);addOutput('Návrh textu pro web (HTML)',d.website.articleHtml);addOutput('Nebenan / Facebook',d.localSocial.text);$('error').textContent='Hotovo jako návrh. Zkontroluj skutečnost údajů i práva k fotografiím. Nic nebylo zveřejněno.';}catch(e){$('error').textContent=e.message;}};
       </script></html>`);
   });
-  app.get('/api/ms-handwerk/organic/status', apiKey, (_req, res) => res.json({
+  app.get('/api/ms-handwerk/organic/status', (_req, res) => res.json({
     ok: true,
     business: 'MS Handwerk & Service',
     mode: 'DRAFT_ONLY',
@@ -105,7 +122,7 @@ function registerMsHandwerkOrganic(app, apiKey) {
     autoPublishingEnabled: false,
     contentGeneration: 'template-based; no OpenAI call'
   }));
-  app.post('/api/ms-handwerk/organic/draft', apiKey, (req, res) => {
+  app.post('/api/ms-handwerk/organic/draft', draftRateLimit, (req, res) => {
     try { return res.json({ ok: true, draft: buildDraft(req.body) }); }
     catch (error) { return res.status(400).json({ ok: false, error: error.message || 'INVALID_INPUT' }); }
   });
