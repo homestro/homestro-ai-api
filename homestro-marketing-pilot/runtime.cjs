@@ -24,7 +24,7 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env}={}) {
       process.once('SIGTERM',()=>{instance?.stop();void pool.end().catch(()=>{});});
       if(!instance.enabled)await pool.end();
       return instance;
-    }catch{state={enabled:false,reason:'INITIALIZATION_FAILED'};console.warn('[organic-pilot-v2] INITIALIZATION_FAILED');return null;}
+    }catch(e){\n      const name=String(e?.name||'Error').slice(0,60);\n      const message=String(e?.message||'').replace(/(token|key|password|secret|postgres(?:ql)?:\\/\\/)[^\\s]*/gi,'$1[redacted]').slice(0,180);\n      const code=String(e?.code||'').slice(0,60);\n      state={enabled:false,reason:'INITIALIZATION_FAILED'};\n      console.warn('[organic-pilot-v2] '+JSON.stringify({reason:'INITIALIZATION_FAILED',name,code,message}));\n      return null;\n    }
   })();
   return {ready,processProduct:async id=>{
     try{return (await ready)?.processProduct(id)||{processed:0,status:'marketing_disabled'};}
