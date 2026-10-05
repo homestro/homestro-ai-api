@@ -9,7 +9,8 @@ async function organicPreview(graphql,fetchImpl=global.fetch){
   const excludedProductIds=new Set(String(process.env.META_ORGANIC_EXCLUDED_PRODUCT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean));
   for(const p of data.products.nodes){
     try {
-      if(excludedProductIds.has(String(p.id))||/\\blick\\s*mat\\b|\\blick\\s*pad\\b/i.test(`${p.title||''} ${p.handle||''} ${p.onlineStoreUrl||''}`))throw Error('Product explicitly excluded from organic marketing');
+      const productIdentity=`${p.title||''} ${p.handle||''} ${p.onlineStoreUrl||''}`.toLowerCase();
+      if(excludedProductIds.has(String(p.id))||['lickmat','lick mat','lick-pad','lick pad'].some(term=>productIdentity.includes(term)))throw Error('Product explicitly excluded from organic marketing');
       const marketingMf=Object.fromEntries((p.metafields?.nodes||[]).map(m=>[m.key,String(m.value||'')]));
       if(marketingMf.organic_facebook_post_id&&marketingMf.organic_instagram_post_id)throw Error('Product already published on Meta');
       if(hasQueuedProduct(p.id))throw Error('Product already queued or published in this worker session');
