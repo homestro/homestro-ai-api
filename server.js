@@ -10,6 +10,7 @@ const express=require('express');
 const {registerMetaOrganic}=require('./meta-organic');
 const {registerOrganicCatalog}=require('./organic-catalog');
 const {registerMarketingPilot}=require('./homestro-marketing-pilot/runtime.cjs');
+const {registerMsHandwerkOrganic}=require('./ms-handwerk-organic');
 const {registerGoogleOrganicFeed}=require('./google-organic-feed');
 const cors=require('cors');
 const crypto=require('crypto');
@@ -40,6 +41,7 @@ function apiKey(req,res,next){const k=process.env.HOMESTRO_API_KEY,a=req.get('au
 registerMetaOrganic(app,apiKey);
 if(process.env.PILOT_V2_ENABLED!=='true')registerOrganicCatalog(app,apiKey,shopifyGraphQL);
 const marketingPilot=registerMarketingPilot(app,{graphql:shopifyGraphQL,apiKey});
+registerMsHandwerkOrganic(app,apiKey);
 registerGoogleOrganicFeed(app,shopifyGraphQL);
 registerSupplierQuoteBridge(app,{apiKey,graphql:shopifyGraphQL,getToken:getClientToken});
 async function sidekick(req,res,next){try{req.sidekick=await getRequestToken(req);next();}catch(e){res.set('X-Shopify-Retry-Invalid-Session-Request','1');res.status(e.status||401).json({ok:false,error:e.message});}}
