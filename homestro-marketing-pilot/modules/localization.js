@@ -1,6 +1,7 @@
 import {fail,trackingLink} from './core.js';
 
 const categories={
+  beauty:['#Haarklammern','#Haarschmuck','#Alltagslook'],
   kitchen:['#Küchenhelfer','#Küchenorganisation','#OrdnungImAlltag'],
   home:['#Wohnideen','#Zuhause','#Alltagshelfer'],
   garden:['#Gartenideen','#Gartenliebe','#Heimwerken'],

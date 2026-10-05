@@ -23,6 +23,19 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env}={}) {
       console.log('[organic-pilot-v2] '+JSON.stringify(state));
       process.once('SIGTERM',()=>{instance?.stop();void pool.end().catch(()=>{});});
       if(!instance.enabled)await pool.end();
+      if(instance.enabled && env.PILOT_TEST_ONCE_JSON) {
+        try {
+          const [{runOneShot},{fetchProduct},{snapshot}]=await Promise.all([
+            import('./modules/one-shot.js'),import('./modules/shopify.js'),import('./modules/ingestion.js')]);
+          const request=JSON.parse(env.PILOT_TEST_ONCE_JSON);
+          const freshSnapshot=async id=>{
+            const raw=await fetchProduct(boundedGraphql,id);
+            const saved=(await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{};
+            return snapshot(raw,{...prepareExistingInputs(raw),...saved},cfg.feeRate);
+          };
+          await runOneShot({request,instance,pool,cfg,freshSnapshot});
+        } catch(e) {console.warn('[organic-pilot-v2] '+JSON.stringify({reason:'TARGET_ONE_SHOT_FAILED',code:e?.code||'INTERNAL_ERROR'}));}
+      }
       return instance;
     }catch(e){
       const name=String(e?.name||'Error').slice(0,60);

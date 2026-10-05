@@ -2,7 +2,7 @@ import {codeOf,log} from './core.js';
 
 export class Worker {
   constructor({store,meta,cfg,freshSnapshot}) {Object.assign(this,{store,meta,cfg,freshSnapshot});this.busy=false;}
-  async tick() {
+  async tick(postId=null) {
     if(this.busy || !this.cfg.workerEnabled || !this.cfg.publishingEnabled)return;
     this.busy=true;
     try {
@@ -12,7 +12,9 @@ export class Worker {
           (status='published' AND updated_at>now()-interval '24 hours') OR status='recovery_required'`)).rows[0].count);
         // Uncertain jobs consume quota until reconciled; never trigger a retry storm.
         if(count>=this.cfg.maxDailyPosts)return;
-        const job=(await client.query("SELECT * FROM marketing_posts WHERE status='approved' ORDER BY approved_at LIMIT 1")).rows[0];
+        const job=(postId
+          ? await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND id=$1",[postId])
+          : await client.query("SELECT * FROM marketing_posts WHERE status='approved' ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job)return;
         const current=await this.freshSnapshot(job.product_id);
         const stored=await this.store.product(job.product_id);
