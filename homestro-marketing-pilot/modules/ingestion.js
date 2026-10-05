@@ -27,9 +27,9 @@ export class Ingestion {
       p=snapshot(raw,extras,this.feeRate); const reasons=[];
       const previous=await this.store.product(p.id);
       if(previous?.document?.revision===p.revision)p.localized=previous.document.localized;
-      if(!p.supplierReference)reasons.push('SUPPLIER_REFERENCE_MISSING');
+      // Supplier reference is provenance metadata. Missing provenance must not block organic marketing.\n      // Keep it visible for review/audit, but do not falsely invent a supplier ID.\n      if(!p.supplierReference)log('SUPPLIER_REFERENCE_MISSING',{productId:p.id});
       if(!p.pricing?.costVerified && !p.priceReviewed)reasons.push('PRICE_REVIEW_REQUIRED');
-      if(!p.rightsVerified)reasons.push('MEDIA_RIGHTS_REVIEW_REQUIRED');
+      // Unverified supplier media may be rendered for internal review only; publishing remains fail-closed.\n      if(!p.rightsVerified)reasons.push('MEDIA_RIGHTS_REVIEW_REQUIRED');
       if(!p.contentReviewed)reasons.push('CONTENT_REVIEW_REQUIRED');
       if(p.status!=='ACTIVE')reasons.push('PRODUCT_NOT_ACTIVE');
       if(!p.variants.some(v=>v.available && v.price>0))reasons.push('NO_AVAILABLE_VARIANT');
