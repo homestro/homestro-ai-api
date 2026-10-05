@@ -35,7 +35,15 @@ export function createShopifyClient({domain,token,version='2026-07',fetchImpl=fe
     return b.data;
   };
 }
-function canonicalProductUrl(p) {\n  const raw=String(p?.onlineStoreUrl||'').trim();\n  try { const u=new URL(raw); if(u.origin==='https://homestro.de' && u.pathname.startsWith('/products/')) return u.toString(); } catch {}\n  // Shopify can legitimately return no onlineStoreUrl while the product handle is usable on the primary storefront.\n  // Build only from Shopify's own handle; never accept or invent an external host.\n  if(p?.status==='ACTIVE' && /^[a-z0-9][a-z0-9-]*$/i.test(String(p.handle||''))) return `https://homestro.de/products/${p.handle}`;\n  return raw || null;\n}\nexport async function fetchProduct(graphql,id) {
+function canonicalProductUrl(p) {
+  const raw=String(p?.onlineStoreUrl||'').trim();
+  try { const u=new URL(raw); if(u.origin==='https://homestro.de' && u.pathname.startsWith('/products/')) return u.toString(); } catch {}
+  // Shopify can legitimately return no onlineStoreUrl while the product handle is usable on the primary storefront.
+  // Build only from Shopify's own handle; never accept or invent an external host.
+  if(p?.status==='ACTIVE' && /^[a-z0-9][a-z0-9-]*$/i.test(String(p.handle||''))) return `https://homestro.de/products/${p.handle}`;
+  return raw || null;
+}
+export async function fetchProduct(graphql,id) {
   let mediaAfter=null,variantsAfter=null, result, media=[],variants=[], first=true;
   let mediaDone=false,variantsDone=false;
   for(let page=0;page<100;page++) {
