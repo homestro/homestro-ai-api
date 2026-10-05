@@ -35,7 +35,7 @@ function fixture({previous=null,changed=false}={}) {
     await checkpoint({phase:'published',postId:'123456789'});
   },async request(){return {id:'123456789',permalink:'https://www.instagram.com/p/test/',media_type:'CAROUSEL_ALBUM',children:{data:[{},{}]}};}};
   const args={request,instance:{store,async processProduct(){return {processed:1};}},
-    pool:{async connect(){return client;}},cfg,meta,
+    pool:{async connect(){return client;},query:(sql,args)=>client.query(sql,args)},cfg,meta,
     freshSnapshot:async()=>({revision:changed?'changed':'r1',status:'ACTIVE',variants:[{available:true,price:13.08}]})};
   return {args,calls,job,cfg,get publishes(){return publishes;},get released(){return released;}};
 }
@@ -57,4 +57,39 @@ test('changed product is superseded without publication',async()=>{
 test('missing reviewed inputs is rejected before database access',async()=>{
   const f=fixture();f.args.request={...request,inputs:{...request.inputs,rightsVerified:false}};
   await assert.rejects(runOneShot(f.args),/ONE_SHOT_REVIEW_REQUIRED/);assert.equal(f.calls.length,0);
+});
+
+function recoveryFixture({containerStatus='FINISHED',alreadyAttempted=false,found=false}={}) {
+  const previous={id:'11111111-1111-4111-8111-111111111111',product_id:request.productId,channel:'instagram',
+    status:'recovery_required',approved_by:'owner',approved_at:new Date(),
+    payload:{format:'carousel',adSpendEUR:0,productRevision:'r1',caption:'expected caption'},
+    remote:{containerId:'1234',children:['1','2'],recoveryAttempted:alreadyAttempted}};
+  const f=fixture({previous});f.args.request={...request,recover:true};const requests=[];
+  f.args.cfg.instagramId='5678';
+  f.args.meta.request=async(path,options={})=>{
+    requests.push({path,options});
+    if(path==='1234')return {status_code:containerStatus};
+    if(path==='5678/media')return {data:found?[{id:'999',caption:'expected caption',permalink:'https://www.instagram.com/p/actual/',media_type:'CAROUSEL_ALBUM'}]:[]};
+    if(path==='5678/media_publish')return {id:'999'};
+    if(path==='999')return {id:'999',permalink:'https://www.instagram.com/p/actual/',media_type:'CAROUSEL_ALBUM',children:{data:[{},{}]}};
+    throw new Error('Unexpected recovery request');
+  };
+  return {f,requests};
+}
+test('recovery resumes only the existing FINISHED parent once',async()=>{
+  const {f,requests}=recoveryFixture();const result=await runOneShot(f.args);
+  assert.equal(result.status,'published');
+  const writes=requests.filter(r=>r.options.method==='POST');
+  assert.equal(writes.length,1);assert.equal(writes[0].options.body.creation_id,'1234');
+  assert.ok(!requests.some(r=>r.options.method==='POST' && r.path.endsWith('/media')));
+});
+test('published matching caption is reconciled without another mutation',async()=>{
+  const {f,requests}=recoveryFixture({containerStatus:'PUBLISHED',found:true});
+  assert.equal((await runOneShot(f.args)).status,'published');
+  assert.equal(requests.filter(r=>r.options.method==='POST').length,0);
+});
+for(const options of [{containerStatus:'PUBLISHED'},{alreadyAttempted:true}])test('uncertain or already retried parent is not published again '+JSON.stringify(options),async()=>{
+  const {f,requests}=recoveryFixture(options);
+  assert.equal((await runOneShot(f.args)).status,'recovery_required');
+  assert.equal(requests.filter(r=>r.options.method==='POST').length,0);
 });

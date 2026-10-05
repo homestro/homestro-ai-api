@@ -1,4 +1,4 @@
-import {fail,sleep} from './core.js';
+import {fail,sleep,log} from './core.js';
 
 export class MetaOrganic {
   constructor(cfg,fetchImpl=fetch) {this.cfg=cfg;this.fetch=fetchImpl;}
@@ -11,7 +11,11 @@ export class MetaOrganic {
       ...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},
       body:body?new URLSearchParams(body):undefined,signal:AbortSignal.timeout(30000),redirect:'error'});
     let b;try{b=await r.json();}catch{fail('META_INVALID_RESPONSE');}
-    if(!r.ok || b.error)fail(b.error?.code===190?'META_TOKEN_EXPIRED':'META_REQUEST_FAILED');
+    if(!r.ok || b.error) {
+      const message=String(b.error?.message||'').replace(/https?:\/\/\S+/g,'[URL]').replace(/[A-Za-z0-9_-]{40,}/g,'[REDACTED]').slice(0,240);
+      log('META_API_ERROR',{httpStatus:r.status,apiCode:b.error?.code||null,apiSubcode:b.error?.error_subcode||null,message});
+      fail(b.error?.code===190?'META_TOKEN_EXPIRED':'META_REQUEST_FAILED');
+    }
     return b;
   }
   async verifyConnection() {

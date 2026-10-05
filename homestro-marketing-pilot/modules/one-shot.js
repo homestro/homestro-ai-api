@@ -25,6 +25,8 @@ export async function runOneShot({request,instance,pool,cfg,freshSnapshot,meta=n
       AND status IN ('publishing','published','recovery_required') ORDER BY updated_at DESC LIMIT 1`,
       [request.productId,request.channel])).rows[0];
     if(previous) {
+      if(previous.status==='recovery_required' && request.recover===true)
+        return await reconcileOneShot({job:previous,instance,pool,cfg,freshSnapshot,meta});
       log('TARGET_ONE_SHOT_ALREADY_HANDLED',{postId:previous.id,status:previous.status,remotePostId:previous.remote?.postId||null});
       return {status:previous.status,postId:previous.id,remote:previous.remote};
     }
@@ -62,5 +64,50 @@ export async function runOneShot({request,instance,pool,cfg,freshSnapshot,meta=n
   } finally {
     if(locked)await client.query('SELECT pg_advisory_unlock(73341003)').catch(()=>{});
     client.release();
+  }
+}
+
+async function reconcileOneShot({job,instance,pool,cfg,freshSnapshot,meta}) {
+  const current=await freshSnapshot(job.product_id);
+  const stored=await instance.store.product(job.product_id);
+  if(stored?.status!=='ready' || current.revision!==job.payload.productRevision ||
+    !job.approved_by || !job.approved_at || job.payload.adSpendEUR!==0 ||
+    !/^\d+$/.test(String(job.remote?.containerId||'')))fail('ONE_SHOT_RECOVERY_NOT_VERIFIED');
+  await meta.verifyConnection();
+  const container=await meta.request(String(job.remote.containerId),{fields:'status_code,status'});
+  const recent=await meta.request(cfg.instagramId+'/media',{fields:'id,caption,permalink,media_type,timestamp'});
+  const found=(recent.data||[]).find(p=>p.caption===job.payload.caption);
+  log('TARGET_ONE_SHOT_RECOVERY_CHECK',{postId:job.id,containerStatus:container.status_code,matchingPostId:found?.id||null});
+  if(found) {
+    await instance.store.checkpoint(job.id,{...job.remote,phase:'published',postId:found.id});
+    await instance.store.setStatus(job.id,'published');
+    log('TARGET_ONE_SHOT_VERIFIED',{postId:job.id,remotePostId:found.id,permalink:found.permalink,mediaType:found.media_type});
+    return {status:'published',permalink:found.permalink};
+  }
+  // Resume only the same confirmed unpublished parent, never create another carousel.
+  if(container.status_code!=='FINISHED' || job.remote.recoveryAttempted) {
+    log('TARGET_ONE_SHOT_RECOVERY_BLOCKED',{postId:job.id,containerStatus:container.status_code,alreadyAttempted:Boolean(job.remote.recoveryAttempted)});
+    return {status:'recovery_required'};
+  }
+  const others=Number((await pool.query(`SELECT count(*) FROM marketing_posts WHERE id<>$1
+    AND ((status='published' AND updated_at>now()-interval '24 hours') OR status IN ('publishing','recovery_required'))`,[job.id])).rows[0].count);
+  if(others>=1)fail('ONE_SHOT_RECOVERY_QUOTA_BLOCKED');
+  const remote={...job.remote,recoveryAttempted:true,phase:'ig_recovery_publish_intent'};
+  await instance.store.checkpoint(job.id,remote);
+  await instance.store.setStatus(job.id,'publishing');
+  try {
+    const post=await meta.request(cfg.instagramId+'/media_publish',{method:'POST',body:{creation_id:job.remote.containerId}});
+    if(!/^\d+$/.test(String(post.id)))fail('META_PUBLISH_UNCONFIRMED');
+    await instance.store.checkpoint(job.id,{...remote,phase:'published',postId:post.id});
+    await instance.store.setStatus(job.id,'published');
+    const verified=await meta.request(String(post.id),{fields:'id,permalink,media_type,children'});
+    log('TARGET_ONE_SHOT_VERIFIED',{postId:job.id,remotePostId:verified.id,permalink:verified.permalink,mediaType:verified.media_type,childCount:verified.children?.data?.length||0});
+    return {status:'published',permalink:verified.permalink};
+  } catch(e) {
+    // A response-read failure after confirmed publication does not undo published state.
+    const result=(await pool.query('SELECT id,status,remote,error_code FROM marketing_posts WHERE id=$1',[job.id])).rows[0];
+    if(result.status!=='published')await instance.store.setStatus(job.id,'recovery_required',e.code||'INTERNAL_ERROR');
+    log('TARGET_ONE_SHOT_RECOVERY_RESULT',{postId:job.id,status:result.status==='published'?'published':'recovery_required',errorCode:e.code||'INTERNAL_ERROR'});
+    return result;
   }
 }
