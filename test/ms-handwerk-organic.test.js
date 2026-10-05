@@ -8,7 +8,7 @@ test('builds a zero-ad draft from supplied real project details without publishi
   const draft = buildDraft({
     service: 'Innenanstrich',
     city: 'Kempten',
-    projectDescription: 'Wände und Decken in einer Wohnung wurden neu gestrichen.',
+    projectDescription: 'Ein weiteres Projekt in Kempten: Wände und Decken in einer Wohnung wurden neu gestrichen.',
     photoUrls: ['https://ms-handwerkservice.de/fotos/projekt-1.jpg']
   });
   assert.equal(draft.adSpendEUR, 0);
@@ -16,6 +16,9 @@ test('builds a zero-ad draft from supplied real project details without publishi
   assert.equal(draft.autoPublished, false);
   assert.equal(draft.reviewRequired, true);
   assert.match(draft.website.articleHtml, /Wände und Decken in einer Wohnung wurden neu gestrichen/);
+  assert.doesNotMatch(draft.googleBusinessProfile.text, /Ein weiteres Projekt|Ein Projekt aus/);
+  assert.match(draft.googleBusinessProfile.text, /^Innenanstrich in Kempten\n\nWände und Decken/);
+  assert.doesNotMatch(draft.googleBusinessProfile.text, /<[^>]+>|[\u{1F000}-\u{1FAFF}]/u);
   assert.match(draft.googleBusinessProfile.link, /utm_source=google/);
   assert.deepEqual(draft.localSocial.photoUrls, ['https://ms-handwerkservice.de/fotos/projekt-1.jpg']);
 });
@@ -34,7 +37,8 @@ test('escapes customer supplied text and creates stable German slugs', () => {
     projectDescription: '<script>alert("x")</script> Boden in einer Wohnung verlegt.'
   });
   assert.doesNotMatch(draft.website.articleHtml, /<script>/);
-  assert.match(draft.website.articleHtml, /&lt;script&gt;/);
+  assert.doesNotMatch(draft.website.articleHtml, /&lt;script&gt;/);
+  assert.match(draft.website.articleHtml, /alert\(&quot;x&quot;\)/);
   assert.equal(slugify('Vinylboden verlegen Füssen'), 'vinylboden-verlegen-fussen');
 });
 
@@ -54,6 +58,7 @@ test('serves a usable no-key draft form and rate-limits the public draft endpoin
   };
   routes.get('GET /ms-handwerk-review')[0]({}, pageResponse);
   assert.match(html, /Připravit návrhy/);
+  assert.match(html, /Google profil – odkaz pro tlačítko/);
   assert.doesNotMatch(html, /Soukromý API klíč|id="key"/);
 
   const [limit] = routes.get('POST /api/ms-handwerk/organic/draft');
