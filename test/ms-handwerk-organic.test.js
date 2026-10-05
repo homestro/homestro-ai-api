@@ -59,6 +59,8 @@ test('serves a usable no-key draft form and rate-limits the public draft endpoin
   routes.get('GET /ms-handwerk-review')[0]({}, pageResponse);
   assert.match(html, /Připravit návrhy/);
   assert.match(html, /Google profil – odkaz pro tlačítko/);
+  assert.match(html, /Vymazat text/);
+  assert.doesNotMatch(html, /area\.readOnly\s*=\s*true/);
   assert.doesNotMatch(html, /Soukromý API klíč|id="key"/);
 
   const [limit] = routes.get('POST /api/ms-handwerk/organic/draft');
