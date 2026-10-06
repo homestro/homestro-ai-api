@@ -9,6 +9,7 @@ import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
 import {registerReview} from './review.js';
+import {reviewedSource,approveReviewed,verifyHistory} from './autonomy.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   // Await initialization once at startup. Errors disable marketing, never the main server.
@@ -20,8 +21,16 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
-    const processProduct=async id=>{
-      try{const raw=await fetchProduct(graphql,id);return await ingestion.process(raw,await extras(id,raw));}
+    const processProduct=async (id,scheduled=false)=>{
+      try{
+        if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
+        const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
+        if(scheduled && !reviewedSource(inputs)) {
+          await store.saveProduct(snapshot(raw,inputs,cfg.feeRate),'pending_marketing',['SOURCE_REVIEW_REQUIRED']);
+          return {processed:1,status:'pending_marketing'};
+        }
+        return await ingestion.process(raw,inputs);
+      }
       catch(e){
         // Archived/deleted products are invalidated and disappear from the feed.
         if(codeOf(e)==='PRODUCT_NOT_FOUND'){
@@ -41,8 +50,9 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         locked=(await client.query('SELECT pg_try_advisory_lock(73341002) AS locked')).rows[0].locked;
         if(!locked)return {busy:true};
         // Refresh previously ready items too: active catalog omits archived/deleted products.
-        for(const p of await store.feedRows())await processProduct(p.id);
-        const r=await syncCatalog(graphql,processProduct);log('CATALOG_SYNC',r);return r;
+        for(const p of await store.feedRows())await processProduct(p.id,cfg.autonomyEnabled);
+        const r=await syncCatalog(graphql,id=>processProduct(id,cfg.autonomyEnabled));
+        await approveReviewed(store,cfg);log('CATALOG_SYNC',r);return r;
       }catch(e){log(codeOf(e));return {error:codeOf(e)};}
       finally{if(locked)await client.query('SELECT pg_advisory_unlock(73341002)').catch(()=>{});client?.release();syncBusy=false;}
     };
@@ -97,6 +107,14 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       }
       res.set('Cache-Control','no-store').type('application/xml').send(generateFeed(products,cfg));
     }));
+    if(cfg.autonomyEnabled){
+      await verifyHistory(store,meta,cfg);
+      await sync(); // Rebuild any missing assets before enabling the publication timer.
+      const posts=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_posts GROUP BY status')).rows;
+      const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
+      log('AUTONOMY_READY',{policy:'homestro-reviewed-organic-v1',posts,products,maxDailyPosts:cfg.maxDailyPosts,
+        maxDailyPerChannel:1,timezone:'Europe/Berlin',hours:'09:00-22:00',adSpendEUR:0});
+    }
     worker.start();
     if(cfg.syncOnce){
       log('SYNC_ONCE_START',{publishingEnabled:cfg.publishingEnabled,workerEnabled:cfg.workerEnabled});
@@ -108,7 +126,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         log('SYNC_ONCE_COMPLETE',{processed:r?.processed||0,carouselCount:carousels.length,carousels,pendingReasons});
       } catch(e) { log('SYNC_ONCE_FAILED',{reason:codeOf(e)}); }
     }
-    if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();void sync();}
+    if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();if(!cfg.autonomyEnabled)void sync();}
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
     return {enabled:true,processProduct,sync,store,worker,
       stop(){worker.stop();clearInterval(syncTimer);}};

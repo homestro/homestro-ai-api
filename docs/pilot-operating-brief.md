@@ -8,7 +8,21 @@ Rozpočet placených kampaní zůstává 0 EUR. Požadavek „dokud budou peníz
 
 Obsah veřejně v němčině, komunikace s Mirkem česky. Pro MS používat skutečné realizace a potvrzené služby. Nepřidávat vymyšlené ceny, akce, dostupnost termínů ani reference. Homestro: vynechat Lickmat z prvního testu, nepoužít elektrický masážní přístroj z posledního návrhu. Dříve vybraný první kandidát: https://homestro.de/products/quadratische-haarklammern-4er-set — před použitím znovu načíst aktuální cenu/varianty/dostupnost.
 
-## Co je dnes doložené
+## Aktuální zadání a ověřené změny 6. 10. 2026 večer
+Tato část má přednost před historickým auditem níže.
+
+- Homestro prodává pouze do Německa (DE) a Rakouska (AT). Majitel změnil hlavní Merchant zdroj na DE + AT. Shopify API změny a následná kontrola potvrzují: aktivní trhy DEUTSCHLAND jen DE a ÖSTERREICH jen AT; International, england a big 3 jsou DRAFT. General shipping profile má jen Deutschland/DE a Österreich/AT. Zendrop profil nemá žádné doručovací skupiny.
+- Existující ceny dopravy jsou DE 6,99 EUR, DE bezplatná metoda od 50 EUR; AT 14,99 EUR. Změna zemí nepřepsala sazby ani dodací lhůty. Veřejné texty dopravy a checkout je ještě třeba ověřit.
+- MS Service nemá Facebook ani Instagram a nesmí používat Homestro účty. MS řešit odděleně přes vlastní Google Business Profile a web. Historický požadavek připojit Meta MS níže je zrušen.
+- Meta OAuth je nasazen z PR 68, majitel zadal secret do Railway a dokončil souhlas. Produkční startup po restartu ověřil Page 187533961115946 / Homestro a IG 17841463937458002 / homestrooo. Přístup je šifrovaně uložen v PostgreSQL; neposílat znovu tokeny.
+- Facebook skutečně publikoval 8 fotografií produktu gid://shopify/Product/16104467562878 dne 6.10.2026 16:29 UTC: remote 187533961115946_122263627112172038, https://www.facebook.com/122263627130172038/posts/122263627112172038 . Nový Instagram výsledek musí být ověřen samostatně.
+- Railway canonical service nyní má 1024 MB trvalý volume homestro-marketing-media, ID 24c8e696-5799-4e5d-9277-276752f0cc05, mount /data.
+- Automatizační policy homestro-reviewed-organic-v1 přijímá pouze zdroje s ověřenými právy, obsahem a cenou, které projdou aktuální ingestion kontrolou. Připravuje existující německé texty bez nových placených AI požadavků. Nejasné položky zůstanou pending, není automatické schválení celého katalogu.
+- Rozvrh organických postů: 09–22 Europe/Berlin, kontrola minutu, synchronizace 15 minut, nejvýše 2 posty/24h celkem a 1/platformu. Produkt se na stejný kanál znovu nepoužije ani při změně ceny. Nejasná publikace zastaví automatické opakování; ověření historie je pouze čtení platformy. Zakázané produkty Lickmat gid://shopify/Product/16025694142846 a masážní přístroj gid://shopify/Product/16025694175614.
+- Google Merchant 5447184929 je blokován pro Falschdarstellung. Majitelův screenshot uvádí po zamítnuté kontrole 4.12.2025 zákaz další běžné žádosti o kontrolu. Omezení zemí samo tuto blokaci neřeší. Je potřeba opravit konkrétní údaje webu a využít podporu/odvolání existujícího účtu; neslibovat schválení ani obcházet blokaci jiným účtem.
+- Nová policy a zapnutí mají být prohlášeny za živé až po ověření produkčních logů. Platný přístup a zdravý server nejsou důkaz nové publikace. Při vyčerpání schválených podkladů Pilot čeká na obsah.
+
+## Historický audit před odpoledními opravami
 - Railway Homestro AI Control: obě API služby a PostgreSQL Online, žádná služba s aktuálně hlášeným problémem.
 - Produkční fixed-current deployment: 0bace761-fc09-40aa-b257-77ddeea632fa, SUCCESS z 5. 10. 2026 21:04 UTC.
 - Jeho startup log: Pilot enabled=true, workerEnabled=false, publishingEnabled=false, syncOnce=false. Nejde o běžící automatickou publikaci.
