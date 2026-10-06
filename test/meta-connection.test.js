@@ -77,3 +77,26 @@ test('Pilot v2 resolves stored access and stops after revocation',async()=>{
   let calls=0;const meta=new MetaOrganic(cfg,async(_u,opts)=>{calls++;assert.equal(opts.headers.Authorization,'Bearer page-secret');return response({error:{code:190}},false);});
   await assert.rejects(meta.verifyConnection(),{code:'META_REAUTH_REQUIRED'});await assert.rejects(meta.verifyConnection(),{code:'META_REAUTH_REQUIRED'});assert.equal(calls,1);
 });
+test('connect routes protect setup, bind the callback cookie, and emit valid browser code',async()=>{
+  const Module=require('node:module'),vm=require('node:vm'),{registerMetaConnection}=require('../meta-connection'),f=fixture(),routes=new Map();
+  const app={get:(path,...handlers)=>routes.set('GET '+path,handlers),post:(path,...handlers)=>routes.set('POST '+path,handlers)};
+  const auth=(req,res,next)=>req.get('authorization')==='Bearer admin'?next():res.status(401).json({error:'Unauthorized'});
+  // Only the registration-time body-parser dependency is stubbed. Route handlers and OAuth flow are real.
+  const old=Module._load;let connection;
+  try{Module._load=function(id,...args){if(id==='express')return {urlencoded:()=> (_q,_r,next)=>next()};return old.call(this,id,...args);};
+    connection=registerMetaConnection(app,auth,{env,pool:f.pool,fetchImpl:f.connection.fetch});}finally{Module._load=old;}
+  async function run(method,path,{headers={},query={}}={}){
+    const res={code:200,headers:{},cookieValue:null,status(n){this.code=n;return this;},set(h){Object.assign(this.headers,h);return this;},type(){return this;},json(b){this.body=b;return this;},send(b){this.body=b;return this;},cookie(name,value,options){this.cookieValue={name,value,options};return this;},clearCookie(){return this;}};
+    const req={get:k=>headers[k],query};const handlers=routes.get(method+' '+path);let n=0;
+    async function next(){if(n<handlers.length)await handlers[n++](req,res,next);}await next();return res;
+  }
+  try{
+    assert.equal((await run('POST','/api/connections/meta/start')).code,401);
+    const start=await run('POST','/api/connections/meta/start',{headers:{authorization:'Bearer admin'}});
+    assert.equal(start.cookieValue.options.secure,true);assert.equal(start.cookieValue.options.httpOnly,true);assert.equal(start.cookieValue.options.sameSite,'lax');
+    const callback=await run('GET','/auth/meta/callback',{headers:{cookie:start.cookieValue.name+'='+start.cookieValue.value},query:{code:'code',state:new URL(start.body.authorizationUrl).searchParams.get('state')}});
+    assert.equal(callback.code,200);assert.equal(f.pool.row.status,'connected');assert(!callback.body.includes('page-secret'));
+    const ui=await run('GET','/connect/meta');assert(ui.headers['Content-Security-Policy'].includes('nonce-'));const script=ui.body.match(/<script nonce="[^"]+">([\s\S]+)<\/script>/)[1];new vm.Script(script);
+    assert(!script.includes('localStorage'));assert(!script.includes('sessionStorage'));
+  }finally{await connection.stop();}
+});
