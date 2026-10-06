@@ -1,6 +1,7 @@
 import {mkdir,mkdtemp,writeFile,rename,rm,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
+import {isDeepStrictEqual} from 'node:util';
 import {hash,log} from './core.js';
 
 // Original Homestro editorial copy. No supplier photos, invented products or prices.
@@ -36,7 +37,7 @@ export function validEditorial(job,stored,cfg){
  if(!editorialEnabled()||stored?.status!=='ready')return false;
  const p=editorialDocuments().find(p=>p.id===job.product_id);
  return Boolean(p && stored.document?.revision===p.revision &&
-  hash(stored.document)===hash(p) && hash(job.payload)===hash(editorialPayload(p,cfg)));
+  isDeepStrictEqual(stored.document,p) && isDeepStrictEqual(job.payload,editorialPayload(p,cfg)));
 }
 export async function renderEditorial(p,cfg){
  const dir=join(cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
