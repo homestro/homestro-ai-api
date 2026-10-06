@@ -1,8 +1,7 @@
 'use strict';
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));}
 const QUERY='query GoogleOrganicFeed { products(first:100,query:"status:active"){nodes{id title handle description productType tags onlineStoreUrl vendor featuredMedia{... on MediaImage{image{url}}} variants(first:100){nodes{id title price availableForSale sku}}}}}';
-const EU_COUNTRIES=['AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES','SE'];
-function shippingXml(){return `<g:shipping><g:country>DE</g:country><g:service>Standard Shipping (5-10 days)</g:service><g:price>6.99 EUR</g:price></g:shipping>`+EU_COUNTRIES.map(country=>`<g:shipping><g:country>${country}</g:country><g:service>EU Standard Shipping</g:service><g:price>14.99 EUR</g:price></g:shipping>`).join('');}
+function shippingXml(){return `<g:shipping><g:country>DE</g:country><g:service>Standard Shipping (5-10 days)</g:service><g:price>6.99 EUR</g:price></g:shipping>`+['AT'].map(country=>`<g:shipping><g:country>${country}</g:country><g:service>EU Standard Shipping</g:service><g:price>14.99 EUR</g:price></g:shipping>`).join('');}
 function productType(p){
  const direct=String(p.productType||'').trim();if(direct)return direct;
  const tags=Array.isArray(p.tags)?p.tags:[];
