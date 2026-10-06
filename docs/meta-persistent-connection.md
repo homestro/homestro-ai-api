@@ -33,7 +33,7 @@ After deployment, verify OAuth against the actual app, confirm `/api/connections
 
 ## Validation
 
-15 new mocked flow tests cover token exchange and derivation, encrypted persistence/restart, browser-bound single-use state, cancellation, app/permission/account mismatch, expiry, revocation, network failures, encryption tampering, partial setup and both publisher integrations. The broader run has 51/52 passing; the existing `missing supplier reference counts as processed and persists pending` test fails unchanged on the original baseline because ingestion now attempts preview rendering. No ingestion code is modified here. Syntax checks passed for all changed JavaScript files. The setup page has not yet been exercised against a live Meta app.
+16 new mocked flow and route tests cover token exchange and derivation, encrypted persistence/restart, browser-bound single-use state, cancellation, app/permission/account mismatch, expiry, revocation, network failures, encryption tampering, partial setup and both publisher integrations. The broader run before the additional route test had 51/52 passing; the existing `missing supplier reference counts as processed and persists pending` test fails unchanged on the original baseline because ingestion now attempts preview rendering. No ingestion code is modified here. Syntax checks passed for all changed JavaScript files. The setup page has not yet been exercised against a live Meta app.
 
 Official implementation references (retrieval returned HTTP 429 during this task):
 
