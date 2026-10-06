@@ -1,4 +1,5 @@
 import {codeOf,log} from './core.js';
+import {validEditorial} from './editorial.js';
 import {publicationWindow} from './autonomy.js';
 
 export class Worker {
@@ -35,11 +36,17 @@ export class Worker {
           if(prior>0)return;
         }
         await this.meta.verifyConnection();
-        const current=await this.freshSnapshot(job.product_id);
         const stored=await this.store.product(job.product_id);
-        if(!current || stored?.status!=='ready' || current.revision!==job.payload.productRevision ||
-          current.status!=='ACTIVE' || !current.variants.some(v=>v.available && v.price>0)){
-          await this.store.setStatus(job.id,'superseded','PRODUCT_CHANGED');return;
+        if(job.product_id.startsWith('editorial:') || job.payload.kind==='brand_editorial') {
+          if(!validEditorial(job,stored,this.cfg)) {
+            await this.store.setStatus(job.id,'superseded','EDITORIAL_CHANGED');return;
+          }
+        } else {
+          const current=await this.freshSnapshot(job.product_id);
+          if(!current || stored?.status!=='ready' || current.revision!==job.payload.productRevision ||
+            current.status!=='ACTIVE' || !current.variants.some(v=>v.available && v.price>0)){
+            await this.store.setStatus(job.id,'superseded','PRODUCT_CHANGED');return;
+          }
         }
         // Persist all prerequisites before Meta mutations.
         await this.store.setStatus(job.id,'publishing');job.status='publishing';
