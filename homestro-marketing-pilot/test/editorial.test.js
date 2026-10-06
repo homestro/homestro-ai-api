@@ -8,6 +8,8 @@ test('editorial accepts only original manifest and never substitutes for product
  for(const p of editorialDocuments()) {
   const stored={status:'ready',document:p},job={product_id:p.id,payload:editorialPayload(p,cfg)};
   assert.equal(validEditorial(job,stored,cfg),true);
+  const reorder=o=>Object.fromEntries(Object.entries(o).reverse());
+  assert.equal(validEditorial({...job,payload:reorder(job.payload)},{...stored,document:reorder(p)},cfg),true);
   assert.equal(validEditorial({...job,payload:{...job.payload,caption:'Changed claim'}},stored,cfg),false);
   assert.equal(validEditorial({...job,product_id:'gid://shopify/Product/1'},stored,cfg),false);
   assert.equal(validEditorial(job,{...stored,document:{...p,text:'Changed source'}},cfg),false);
