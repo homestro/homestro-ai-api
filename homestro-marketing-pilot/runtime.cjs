@@ -1,6 +1,6 @@
 'use strict';
 // Existing server adapter. Primary Shopify pipeline never depends on marketing initialization.
-function registerMarketingPilot(app,{graphql,apiKey,env=process.env}={}) {
+function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentials,onCredentialError}={}) {
   let instance=null,state={enabled:false,reason:'initializing'};
   app.get('/api/marketing/v2/runtime',apiKey,(_req,res)=>res.json({...state,adSpendEUR:0}));
   const ready=(async()=>{
@@ -11,6 +11,7 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env}={}) {
       const pool=new pg.Pool({connectionString:env.DATABASE_URL,max:5,connectionTimeoutMillis:10000,query_timeout:15000});
       pool.on('error',()=>console.warn('[organic-pilot-v2] DATABASE_CONNECTION_ERROR'));
       const cfg=config({...env,PILOT_ADMIN_KEY:env.PILOT_ADMIN_KEY||env.HOMESTRO_API_KEY});
+      cfg.getCredentials=getCredentials;cfg.onCredentialError=onCredentialError;
       const boundedGraphql=(query,variables)=>{
         if(!String(query).trim().startsWith('query '))throw new Error('Marketing Shopify reads only');
         let timer;
@@ -52,3 +53,4 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env}={}) {
   }};
 }
 module.exports={registerMarketingPilot};
+
