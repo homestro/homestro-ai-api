@@ -17,7 +17,7 @@ const inputs={supplierReference:'supplier-1',landedCost:15,priceReviewed:true,ri
 const raw={id:'gid://shopify/Product/1',title:'Organizer',description:'Organizer',status:'ACTIVE',
   onlineStoreUrl:'https://homestro.de/products/organizer',variants:[{id:'gid://shopify/ProductVariant/2',price:'39.00',inventoryQuantity:2,inventoryPolicy:'DENY'}],
   media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/a.jpg'}}]};
-const cfg=config({PILOT_PUBLIC_ORIGIN:'https://pilot.example',PILOT_PUBLISH_ENABLED:'true'});
+const cfg=config({PILOT_PUBLIC_ORIGIN:'https://pilot.example',PILOT_PUBLISH_ENABLED:'true',META_PAGE_ACCESS_TOKEN:'test-page-token'});
 const img=i=>`https://pilot.example/marketing-assets/${String(i).repeat(64)}.jpg`;
 const asset={format:'carousel',videoURL:null,imageURLs:[img(1),img(2)]};
 function product(){const p=snapshot(raw,inputs);p.localized=germanCopy;return p;}
