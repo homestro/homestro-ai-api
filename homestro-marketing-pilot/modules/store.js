@@ -40,7 +40,7 @@ export class Store {
     await this.pool.query('INSERT INTO marketing_events(post_id,code) VALUES($1,$2)',[id,errorCode||status]);
   }
   async feedRows() {
-    return (await this.pool.query("SELECT document FROM marketing_products WHERE status='ready' ORDER BY id")).rows.map(x=>x.document);
+    return (await this.pool.query("SELECT document FROM marketing_products WHERE status='ready' AND COALESCE(document->>'kind','product')<>'brand_editorial' ORDER BY id")).rows.map(x=>x.document);
   }
   async withWorkerLock(fn) {
     const c=await this.pool.connect(); let locked=false;
@@ -54,3 +54,4 @@ export class Store {
     } finally { if(locked) await c.query('SELECT pg_advisory_unlock(73341001)').catch(()=>{}); c.release(); }
   }
 }
+
