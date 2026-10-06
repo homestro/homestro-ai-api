@@ -8,6 +8,7 @@ import {Ingestion,snapshot} from './ingestion.js';
 import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
+import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {reviewedSource,approveReviewed,verifyHistory} from './autonomy.js';
 
@@ -49,6 +50,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         client=await pool.connect();
         locked=(await client.query('SELECT pg_try_advisory_lock(73341002) AS locked')).rows[0].locked;
         if(!locked)return {busy:true};
+        await queueEditorial(store,cfg);
+        await approveReviewed(store,cfg);
         // Refresh previously ready items too: active catalog omits archived/deleted products.
         for(const p of await store.feedRows())await processProduct(p.id,cfg.autonomyEnabled);
         const r=await syncCatalog(graphql,id=>processProduct(id,cfg.autonomyEnabled));
