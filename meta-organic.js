@@ -1,36 +1,38 @@
 'use strict';
 
-function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = process.env } = {}) {
-  const config = () => ({
+function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = process.env, getCredentials, onCredentialError } = {}) {
+  const config = async () => getCredentials ? getCredentials() : ({
     token: String(env.META_PAGE_ACCESS_TOKEN || '').trim(),
     pageId: String(env.META_PAGE_ID || '').trim(),
     instagramId: String(env.META_INSTAGRAM_ACCOUNT_ID || '').trim()
   });
   const configured = ({token,pageId,instagramId}) => Boolean(token && /^\d+$/.test(pageId) && /^\d+$/.test(instagramId));
-  async function read(token, path, fields) {
+  async function read(credentials, path, fields) {
     const url = new URL(`https://graph.facebook.com/v26.0/${path}`);
     if (fields) url.searchParams.set('fields', fields);
+    if (credentials.appsecretProof) url.searchParams.set('appsecret_proof',credentials.appsecretProof);
     const response = await fetchImpl(url, {
-      headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000)
+      headers: { Authorization: `Bearer ${credentials.token}` }, signal: AbortSignal.timeout(15000)
     });
     const data = await response.json();
     if (!response.ok || data.error) {
       const error = new Error('Meta rejected request');
       error.metaCode = data?.error?.code;
       error.metaSubcode = data?.error?.error_subcode;
+      if(error.metaCode===190)await onCredentialError?.(error,credentials);
       throw error;
     }
     return data;
   }
   async function connectionState() {
-    const cfg = config();
-    if (!configured(cfg)) return {status:503, body:{ok:false,error:'Meta connection configuration is incomplete',published:false}};
     try {
-      const page = await read(cfg.token, cfg.pageId, 'id,name,instagram_business_account');
+      const cfg = await config();
+      if (!configured(cfg)) return {status:503, body:{ok:false,error:'Meta connection configuration is incomplete',published:false}};
+      const page = await read(cfg, cfg.pageId, 'id,name,instagram_business_account');
       if (page.id !== cfg.pageId || page.instagram_business_account?.id !== cfg.instagramId) {
         return {status:409, body:{ok:false,error:'Meta account does not match configured Homestro accounts',published:false}};
       }
-      const instagram = await read(cfg.token, cfg.instagramId, 'id,username,media_count');
+      const instagram = await read(cfg, cfg.instagramId, 'id,username,media_count');
       if (instagram.id !== cfg.instagramId) throw new Error('Instagram account mismatch');
       return {status:200, body:{ok:true,page:{id:page.id,name:page.name},
         instagram:{id:instagram.id,username:instagram.username,mediaCount:instagram.media_count},
@@ -51,8 +53,8 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
     let instagramReady = false;
     let instagramLimit = null;
     try {
-      const cfg = config();
-      const limit = await read(cfg.token, `${cfg.instagramId}/content_publishing_limit`, 'config,quota_usage');
+      const cfg = await config();
+      const limit = await read(cfg, `${cfg.instagramId}/content_publishing_limit`, 'config,quota_usage');
       instagramLimit = limit?.data?.[0] || null;
       instagramReady = true;
     } catch (_) {
@@ -77,15 +79,14 @@ function registerMetaOrganic(app, apiKey, { fetchImpl = global.fetch, env = proc
 }
 
 
-async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = process.env } = {}) {
-  const token=String(env.META_PAGE_ACCESS_TOKEN||'').trim();
-  const pageId=String(env.META_PAGE_ID||'').trim();
-  const instagramId=String(env.META_INSTAGRAM_ACCOUNT_ID||'').trim();
+async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = process.env, getCredentials, onCredentialError } = {}) {
+  const credentials=getCredentials?await getCredentials():{token:String(env.META_PAGE_ACCESS_TOKEN||'').trim(),pageId:String(env.META_PAGE_ID||'').trim(),instagramId:String(env.META_INSTAGRAM_ACCOUNT_ID||'').trim()};
+  const {token,pageId,instagramId}=credentials;
   if(!token||!pageId||!instagramId) throw new Error('Meta publishing configuration incomplete');
   async function post(path, params) {
-    const body=new URLSearchParams(params); const response=await fetchImpl(`https://graph.facebook.com/v26.0/${path}`,{
-      method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/x-www-form-urlencoded'},body,signal:AbortSignal.timeout(30000)
-    }); const data=await response.json(); if(!response.ok||data.error){const e=new Error(data?.error?.message||'Meta publish rejected');e.meta=data?.error||null;throw e;} return data;
+    const body=new URLSearchParams({...params,...(credentials.appsecretProof?{appsecret_proof:credentials.appsecretProof}:{})}); const response=await fetchImpl(`https://graph.facebook.com/v26.0/${path}`,{
+      method:'POST',headers:{Authorization:`Bearer ${credentials.token}`,'Content-Type':'application/x-www-form-urlencoded'},body,signal:AbortSignal.timeout(30000)
+    }); const data=await response.json(); if(!response.ok||data.error){const e=new Error('Meta publish rejected');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;} return data;
   }
   if(draft.channel==='facebook'){
     const result=await post(`${pageId}/photos`,{url:draft.imageUrl,caption:draft.caption,published:'true'});
@@ -104,9 +105,10 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
       await new Promise(resolve=>setTimeout(resolve,5000));
       const url=new URL(`https://graph.facebook.com/v26.0/${container.id}`);
       url.searchParams.set('fields','status_code,status');
+      if(credentials.appsecretProof)url.searchParams.set('appsecret_proof',credentials.appsecretProof);
       const response=await fetchImpl(url,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
       const data=await response.json();
-      if(!response.ok||data.error){const e=new Error(data?.error?.message||'Instagram container status failed');e.meta=data?.error||null;throw e;}
+      if(!response.ok||data.error){const e=new Error('Instagram container status failed');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;}
       status=data;
       if(data.status_code==='FINISHED')break;
       if(data.status_code==='ERROR'||data.status_code==='EXPIRED')throw new Error(`Instagram media processing failed: ${data.status||data.status_code}`);
@@ -119,3 +121,4 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
 }
 
 module.exports = { registerMetaOrganic, publishOrganicDraft };
+

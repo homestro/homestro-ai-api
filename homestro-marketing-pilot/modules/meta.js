@@ -2,19 +2,30 @@ import {fail,sleep,log} from './core.js';
 
 export class MetaOrganic {
   constructor(cfg,fetchImpl=fetch) {this.cfg=cfg;this.fetch=fetchImpl;}
+  async credentials() {
+    let c;
+    try{c=this.cfg.getCredentials?await this.cfg.getCredentials():{token:this.cfg.token,pageId:this.cfg.pageId,instagramId:this.cfg.instagramId};}
+    catch(e){fail(e.code==='META_REAUTH_REQUIRED'?'META_REAUTH_REQUIRED':'META_CREDENTIALS_UNAVAILABLE');}
+    if(!c.token)fail('META_CREDENTIALS_UNAVAILABLE');
+    if(c.pageId!==this.cfg.pageId||c.instagramId!==this.cfg.instagramId)fail('META_ACCOUNT_MISMATCH');
+    return c;
+  }
   async request(path,{method='GET',fields,body}={}) {
     // Positive allowlist. Ads, campaigns, adsets and creatives cannot be addressed.
     if(!/^(?:me|\d+(?:_\d+)?)(?:\/(?:media|media_publish|video_reels|photos|feed))?$/.test(path)) fail('NON_ORGANIC_ENDPOINT_BLOCKED');
+    const credentials=await this.credentials();
     const u=new URL(`https://graph.facebook.com/${this.cfg.graphVersion}/${path}`);
+    if(credentials.appsecretProof)u.searchParams.set('appsecret_proof',credentials.appsecretProof);
     if(fields)u.searchParams.set('fields',fields);
-    const r=await this.fetch(u,{method,headers:{Authorization:`Bearer ${this.cfg.token}`,
+    const r=await this.fetch(u,{method,headers:{Authorization:`Bearer ${credentials.token}`,
       ...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},
       body:body?new URLSearchParams(body):undefined,signal:AbortSignal.timeout(30000),redirect:'error'});
     let b;try{b=await r.json();}catch{fail('META_INVALID_RESPONSE');}
     if(!r.ok || b.error) {
       const message=String(b.error?.message||'').replace(/https?:\/\/\S+/g,'[URL]').replace(/[A-Za-z0-9_-]{40,}/g,'[REDACTED]').slice(0,240);
       log('META_API_ERROR',{httpStatus:r.status,apiCode:b.error?.code||null,apiSubcode:b.error?.error_subcode||null,message});
-      fail(b.error?.code===190?'META_TOKEN_EXPIRED':'META_REQUEST_FAILED');
+      if(b.error?.code===190)await this.cfg.onCredentialError?.({metaCode:190},credentials);
+      fail(b.error?.code===190?'META_REAUTH_REQUIRED':'META_REQUEST_FAILED');
     }
     return b;
   }
@@ -68,9 +79,12 @@ export class MetaOrganic {
     if(upload.origin!=='https://rupload.facebook.com' ||
        !new RegExp(`^/video-upload/v\\d+\\.\\d+/${s.video_id}$`).test(upload.pathname))fail('UNTRUSTED_UPLOAD_URL');
     await checkpoint({phase:'fb_upload_intent',videoId:s.video_id});
-    const r=await this.fetch(upload,{method:'POST',headers:{Authorization:`OAuth ${this.cfg.token}`,
+    const uploadCredentials=await this.credentials();
+    const r=await this.fetch(upload,{method:'POST',headers:{Authorization:`OAuth ${uploadCredentials.token}`,
       file_url:p.videoURL},signal:AbortSignal.timeout(60000),redirect:'error'});
-    const uploaded=await r.json();if(!r.ok || !uploaded.success)fail('FB_UPLOAD_FAILED');
+    const uploaded=await r.json();
+    if(uploaded.error?.code===190){await this.cfg.onCredentialError?.({metaCode:190},uploadCredentials);fail('META_REAUTH_REQUIRED');}
+    if(!r.ok || !uploaded.success)fail('FB_UPLOAD_FAILED');
     await checkpoint({phase:'fb_uploaded',videoId:s.video_id});
     await this.poll(()=>this.request(s.video_id,{fields:'status'}),s=>{
       if(s.status?.uploading_phase?.status==='error')fail('FB_UPLOAD_FAILED');

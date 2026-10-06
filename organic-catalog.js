@@ -34,10 +34,10 @@ async function organicPreview(graphql,fetchImpl=global.fetch){
   }
   return {ok:false,error:'No eligible product in the first 30 active products',skipped,published:false};
 }
-function registerOrganicCatalog(app,apiKey,graphql){
+function registerOrganicCatalog(app,apiKey,graphql,metaAccess={}){
   app.get('/api/marketing/organic/drafts',apiKey,(_req,res)=>res.json({ok:true,drafts:listDrafts()}));
   app.post('/api/marketing/organic/drafts/:id/approve',apiKey,(req,res)=>{try{const d=approveDraft(req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});res.json({ok:true,draft:d});}catch(e){res.status(409).json({ok:false,error:e.message});}});
-  app.post('/api/marketing/organic/drafts/:id/publish',apiKey,async(req,res)=>{try{const d=listDrafts().find(x=>x.id===req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});if(d.status!=='approved')return res.status(409).json({ok:false,error:'Draft must be approved first'});const result=await publishOrganicDraft(d);
+  app.post('/api/marketing/organic/drafts/:id/publish',apiKey,async(req,res)=>{try{const d=listDrafts().find(x=>x.id===req.params.id);if(!d)return res.status(404).json({ok:false,error:'Draft not found'});if(d.status!=='approved')return res.status(409).json({ok:false,error:'Draft must be approved first'});const result=await publishOrganicDraft(d,metaAccess);
       const key=result.channel==='facebook'?'organic_facebook_post_id':'organic_instagram_post_id';
       const saved=await graphql('mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){userErrors{field message code}}}',{metafields:[{ownerId:d.productId,namespace:'homestro',key,type:'single_line_text_field',value:String(result.id)}]});
       const errs=saved.metafieldsSet?.userErrors||[];if(errs.length)throw Error('Published but Shopify history save failed: '+errs.map(e=>e.message).join('; '));
@@ -54,7 +54,7 @@ function registerOrganicCatalog(app,apiKey,graphql){
       if(!preview.ok)throw new Error(preview.error||'No organic preview');
       const results=[];
       for(const draft of preview.drafts.filter(d=>process.env.META_ORGANIC_PUBLISH_CHANNEL?d.channel===process.env.META_ORGANIC_PUBLISH_CHANNEL:true)){
-        try{results.push(await publishOrganicDraft(draft));}
+        try{results.push(await publishOrganicDraft(draft,metaAccess));}
         catch(error){results.push({channel:draft.channel,published:false,error:error.message,metaCode:error.meta?.code||null,metaSubcode:error.meta?.error_subcode||null});}
       }
       console.log('[organic-marketing-publish-once] '+JSON.stringify({results,paidAds:false}));
@@ -62,3 +62,4 @@ function registerOrganicCatalog(app,apiKey,graphql){
   }
 }
 module.exports={organicPreview,registerOrganicCatalog};
+
