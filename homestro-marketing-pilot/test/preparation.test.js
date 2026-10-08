@@ -47,11 +47,12 @@ test('OpenAI localizer translates English supplier copy into validated German wi
 test('OpenAI failures log only sanitized status and error code, never provider messages',async()=>{
   const oldLog=console.log,lines=[];console.log=(line)=>lines.push(String(line));
   try {
-    const localizer=createSourceLocalizer({apiKey:'secret-test-key',fetchImpl:async()=>new Response(JSON.stringify({error:{type:'insufficient_quota',code:'insufficient_quota',message:'private provider message'}}),{status:429})});
+    const localizer=createSourceLocalizer({apiKey:'secret-test-key',fetchImpl:async()=>new Response(JSON.stringify({error:{type:'insufficient_quota',code:'insufficient_quota',param:'temperature',message:'private provider message'}}),{status:429})});
     await assert.rejects(localizer({title:'Storage boxes',description:'Two boxes',facts:[{id:'1',text:'Two boxes'}]}),{code:'LOCALIZATION_PROVIDER_FAILED'});
   } finally {console.log=oldLog;}
   const text=lines.join('\n');
   assert.match(text,/"status":429/);assert.match(text,/"providerCode":"insufficient_quota"/);
+  assert.match(text,/"providerParam":"temperature"/);
   assert.doesNotMatch(text,/private provider message|secret-test-key/);
 });
 test('catalog sync includes new Shopify drafts as well as active products',()=>{

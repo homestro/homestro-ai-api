@@ -33,7 +33,7 @@ export function createSourceLocalizer({apiKey,model='gpt-4o-mini',fetchImpl=fetc
     });
     if(!response.ok){
       let providerError={};try{providerError=(await response.json())?.error||{};}catch{}
-      log('LOCALIZATION_PROVIDER_ERROR',{status:response.status,type:safeCode(providerError.type),providerCode:safeCode(providerError.code)});
+      log('LOCALIZATION_PROVIDER_ERROR',{status:response.status,type:safeCode(providerError.type),providerCode:safeCode(providerError.code),providerParam:safeCode(providerError.param)});
       fail('LOCALIZATION_PROVIDER_FAILED');
     }
     let body;
