@@ -20,7 +20,7 @@ export const PRODUCT_QUERY=`query PilotProduct($id:ID!, $mediaAfter:String, $var
   }
 }`;
 export const CATALOG_QUERY=`query PilotCatalog($after:String) {
-  products(first:30,after:$after,query:"status:active") {
+  products(first:30,after:$after,query:"status:active OR status:draft") {
     nodes { id } pageInfo { hasNextPage endCursor }
   }
 }`;

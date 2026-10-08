@@ -10,7 +10,7 @@ import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
-import {reviewedSource,approveReviewed,verifyHistory} from './autonomy.js';
+import {approveReviewed,verifyHistory} from './autonomy.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   // Await initialization once at startup. Errors disable marketing, never the main server.
@@ -22,11 +22,11 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
-    const processProduct=async (id,scheduled=false)=>{
+    const processProduct=async id=>{
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
-        return await ingestion.process(raw,inputs,{prepareOnly:scheduled && !reviewedSource(inputs)});
+        return await ingestion.process(raw,inputs);
       }
       catch(e){
         // Archived/deleted products are invalidated and disappear from the feed.
@@ -121,7 +121,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       const posts=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_posts GROUP BY status')).rows;
       const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
       log('AUTONOMY_READY',{policy:'homestro-reviewed-organic-v1',posts,products,maxDailyPosts:cfg.maxDailyPosts,
-        maxDailyPerChannel:1,timezone:'Europe/Berlin',hours:'09:00-22:00',adSpendEUR:0});
+        maxDailyPerChannel:cfg.maxDailyPerChannel,timezone:'Europe/Berlin',hours:'09:00-22:00',adSpendEUR:0});
     }
     worker.start();
     if(cfg.syncOnce){

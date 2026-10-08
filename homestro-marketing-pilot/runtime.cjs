@@ -19,7 +19,9 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
           timer=setTimeout(()=>reject(new Error('SHOPIFY_TIMEOUT')),20000);
         })]).finally(()=>clearTimeout(timer));
       };
-      instance=await attachMarketing(app,{pool,graphql:boundedGraphql,cfg,localizer:createSourceLocalizer(),prepareInputs:prepareExistingInputs,apiKeyMiddleware:apiKey});
+      instance=await attachMarketing(app,{pool,graphql:boundedGraphql,cfg,
+        localizer:createSourceLocalizer({apiKey:env.OPENAI_API_KEY,model:env.OPENAI_MODEL}),
+        prepareInputs:prepareExistingInputs,apiKeyMiddleware:apiKey});
       state={enabled:instance.enabled,workerEnabled:cfg.workerEnabled,publishingEnabled:cfg.publishingEnabled,syncOnce:cfg.syncOnce};
       console.log('[organic-pilot-v2] '+JSON.stringify(state));
       process.once('SIGTERM',()=>{instance?.stop();void pool.end().catch(()=>{});});

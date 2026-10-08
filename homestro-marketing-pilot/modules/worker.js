@@ -3,10 +3,10 @@ import {editorialEnabled,validEditorial} from './editorial.js';
 import {publicationWindow} from './autonomy.js';
 
 export class Worker {
-  constructor({store,meta,cfg,freshSnapshot}) {Object.assign(this,{store,meta,cfg,freshSnapshot});this.busy=false;}
+  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow});this.busy=false;}
   async tick(postId=null) {
     if(this.busy || !this.cfg.workerEnabled || !this.cfg.publishingEnabled)return;
-    if(this.cfg.autonomyEnabled && !publicationWindow())return;
+    if(this.cfg.autonomyEnabled && !this.isPublishingWindow())return;
     this.busy=true;
     try {
       await this.store.withWorkerLock(async client=>{
@@ -19,10 +19,12 @@ export class Worker {
           : this.cfg.autonomyEnabled
             ? await client.query(`SELECT s.* FROM marketing_posts s WHERE s.status='approved'
               AND NOT (s.product_id=ANY($1::text[]))
+              AND (SELECT count(*) FROM marketing_posts recent WHERE recent.channel=s.channel
+                AND ((recent.status='published' AND recent.published_at>now()-interval '24 hours')
+                  OR recent.status='recovery_required')) < $2::int
               AND NOT EXISTS (SELECT 1 FROM marketing_posts old WHERE old.channel=s.channel
-                AND ((old.status='published' AND old.published_at>now()-interval '24 hours')
-                  OR (old.product_id=s.product_id AND old.id<>s.id AND old.status IN ('published','publishing','recovery_required'))))
-              ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[]])
+                AND old.product_id=s.product_id AND old.id<>s.id AND old.status IN ('published','publishing','recovery_required'))
+              ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job)return;
         if(job.payload.previewOnly===true) {

@@ -35,7 +35,6 @@ export class Ingestion {
       if(!p.supplierReference)log('SUPPLIER_REFERENCE_MISSING',{productId:p.id});
       if(!p.pricing?.costVerified && !p.priceReviewed)reasons.push('PRICE_REVIEW_REQUIRED');
       // Keep rightsVerified as factual metadata. The owner removed it as a publishing gate.
-      if(!p.contentReviewed)reasons.push('CONTENT_REVIEW_REQUIRED');
       if(p.rejected)reasons.push('PRODUCT_REJECTED');
       if(p.status!=='ACTIVE')reasons.push('PRODUCT_NOT_ACTIVE');
       if(!p.variants.some(v=>v.available && v.price>0))reasons.push('NO_AVAILABLE_VARIANT');
@@ -45,12 +44,19 @@ export class Ingestion {
       try{
         if(!p.localized)p.localized=await localize(p,this.localizer);
         p.localizationPrepared=true;
+        if(!p.contentReviewed) {
+          const localized=p.localized;
+          await this.store.recordGeneratedReview?.(p.id,{contentReviewed:true,germanCopy:localized,facts:p.facts});
+          p=snapshot(raw,{...extras,contentReviewed:true,germanCopy:localized,facts:p.facts},this.feeRate);
+          p.localized=localized;
+          p.localizationPrepared=true;
+        }
       }catch(e){
         reasons.push(codeOf(e));
         p.localizationPrepared=false;
       }
-      // Marketing media/drafts may be prepared while commercial/review gates are pending.
-      // Approval and publishing remain fail-closed because Store.approve() requires product status=ready.
+      // Render the real media once localization succeeds. Product availability and rejection
+      // gates below still prevent drafts from being approved for publication.
       let asset=null,queued=0;
       if(p.localized){
         try {

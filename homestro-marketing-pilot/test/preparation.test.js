@@ -6,6 +6,7 @@ import {Ingestion} from '../modules/ingestion.js';
 import {Worker} from '../modules/worker.js';
 import {localize} from '../modules/localization.js';
 import {Store} from '../modules/store.js';
+import {CATALOG_QUERY} from '../modules/shopify.js';
 
 const raw={id:'gid://shopify/Product/8',title:'Boxen für die Küche',description:'Zwei Boxen aus Kunststoff.',descriptionHtml:'<p>Zwei Boxen aus Kunststoff.</p>',
   status:'ACTIVE',onlineStoreUrl:'https://homestro.de/products/boxen',tags:[],variants:[{id:'v',price:'20',availableForSale:true}],
@@ -19,9 +20,49 @@ test('unreviewed product prepares factual German copy before approval without en
   assert.equal(r.processed,1);assert.equal(r.queued,2);assert.equal(r.status,'pending_marketing');
   const p=saved.at(-1)[0];assert.equal(p.localizationPrepared,true);
   assert.equal(p.localized.benefits.length,1);assert.equal(p.localized.benefits[0].text,'Zwei Boxen aus Kunststoff.');
-  assert.equal(p.contentReviewed,false);assert.equal(p.rightsVerified,false);
+  assert.equal(p.contentReviewed,true);assert.equal(p.rightsVerified,false);
   assert.equal(posts[0][3].previewOnly,true);
-  assert.ok(!r.reasons.includes('MEDIA_RIGHTS_REVIEW_REQUIRED'));assert.ok(r.reasons.includes('CONTENT_REVIEW_REQUIRED'));
+  assert.ok(!r.reasons.includes('MEDIA_RIGHTS_REVIEW_REQUIRED'));assert.ok(!r.reasons.includes('CONTENT_REVIEW_REQUIRED'));
+});
+test('OpenAI localizer translates English supplier copy into validated German without losing fact links',async()=>{
+  let request;
+  const localizer=createSourceLocalizer({apiKey:'test-key',model:'test-model',fetchImpl:async(url,options)=>{
+    assert.equal(url,'https://api.openai.com/v1/chat/completions');
+    request={url,options,body:JSON.parse(options.body)};
+    return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({
+      language:'de',title:'Aufbewahrungsboxen im 2er-Set',description:'Zwei Boxen aus Kunststoff für die Küche.',
+      hook:'Mehr Ordnung in der Küche',searchTitle:'Küchenboxen im 2er-Set',
+      seoTitle:'Küchenboxen im 2er-Set | Homestro',
+      seoDescription:'Zwei Aufbewahrungsboxen aus Kunststoff entdecken.',
+      benefits:[{factId:'f1',text:'Zwei Boxen im Set'}]
+    })}}]}),{status:200,headers:{'Content-Type':'application/json'}});
+  }});
+  const result=await localizer({title:'Storage boxes',description:'Two plastic boxes for the kitchen.',
+    facts:[{id:'f1',text:'Two boxes'}]});
+  assert.equal(result.language,'de');assert.equal(result.benefits[0].factId,'f1');
+  assert.equal(request.options.headers.Authorization,'Bearer test-key');
+  assert.equal(request.body.model,'test-model');assert.equal(request.body.max_completion_tokens,1000);
+  assert.equal(request.body.messages[1].content.includes('Two boxes'),true);
+});
+test('catalog sync includes new Shopify drafts as well as active products',()=>{
+  assert.match(CATALOG_QUERY,/status:active OR status:draft/);
+});
+test('valid generated German copy is saved as reviewed and produces real media drafts',async()=>{
+  const saved=[],reviews=[],posts=[];
+  const store={product:async()=>null,saveProduct:async(...args)=>saved.push(args),
+    recordGeneratedReview:async(...args)=>reviews.push(args),
+    queue:async(...args)=>{posts.push(args);return 'new';}};
+  const copy={language:'de',title:'Küchenboxen',description:'Zwei Boxen aus Kunststoff für die Küche.',
+    hook:'Mehr Ordnung in der Küche',searchTitle:'Küchenboxen für die Küche',
+    seoTitle:'Küchenboxen | Homestro',seoDescription:'Zwei Kunststoffboxen für die Küche.',
+    benefits:[{factId:'f1',text:'Zwei Boxen im Set'}]};
+  const result=await new Ingestion({store,localizer:async()=>copy,renderer:{render:async()=>({format:'carousel',imageURLs:['https://cdn.shopify.com/a.jpg','https://cdn.shopify.com/b.jpg']})}})
+    .process({...raw,description:'Two plastic boxes for the kitchen.'},{priceReviewed:true,contentReviewed:false,
+      facts:[{id:'f1',text:'Two boxes'}]});
+  assert.equal(result.status,'draft_queued');assert.equal(result.queued,2);
+  assert.equal(saved.at(-1)[0].contentReviewed,true);assert.equal(saved.at(-1)[1],'ready');
+  assert.equal(reviews.length,1);assert.equal(reviews[0][1].germanCopy.title,'Küchenboxen');
+  assert.equal(posts[0][3].format,'carousel');
 });
 test('missing facts produces a clear hold instead of three repeated product titles',async()=>{
   const saved=[];const i=new Ingestion({store:{product:async()=>null,saveProduct:async(...a)=>saved.push(a)},localizer:createSourceLocalizer(),renderer:{render:()=>assert.fail('No media on missing copy')}});

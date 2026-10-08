@@ -9,15 +9,15 @@ This package is written and locally tested. It has NOT been deployed, connected 
 3. Use reviewed German copy, or an injected localization engine. Cache localized copy per product revision. Generated titles, descriptions and SEO metadata stay in this database; writing them back to Shopify is deliberately not part of this package.
 4. If Shopify has a READY MP4 video, normalize it to a 720×1280 Reel (maximum 30 seconds) with a German text hook for the first 3 seconds. Source audio is removed: do not assume supplier music has licensed publishing rights.
 5. If no MP4 exists, prepare 2–10 JPEG images for an Instagram carousel and Facebook organic multi-photo post. One image produces a single-image post. There is NO video slideshow fallback. JPEGs are fitted, not cropped, into a common 1080×1350 frame and cached on disk.
-6. Save the final caption, UTM link, format and public asset URLs as `draft_queued`. Publishing needs explicit approval of each final payload, plus enabled worker and publishing switches.
-7. A minute scheduler processes one approved post at a time, at most 2 posts total across both channels per rolling 24 hours by default. Database advisory locks prevent normal overlapping workers. Periodic catalog scans cover ALL active products, not only the first 30.
+6. Save the German caption, UTM link, format and public asset URLs as `draft_queued`. In the enabled Homestro autonomy policy, a structurally validated German copy and a reviewed selling price are approved automatically; rejected, unavailable, incomplete or changed products stay blocked.
+7. A minute scheduler publishes one approved post at a time, at most 6 posts total and 3 per channel per rolling 24 hours by default. Set both caps lower if desired. Database advisory locks prevent normal overlapping workers. Periodic catalog scans cover ALL active products, not only the first 30.
 8. Serve a fresh XML feed (default 50 variant offers), validating current Shopify price/stock at request time. Google must fetch it; it does not instantly update Merchant Center. This package does not fix account Misrepresentation, claim a domain, guarantee indexing or create ads.
 
 ## State machine
 
 Product: `pending_marketing` → `ready` after missing information/reviews are resolved.
 
-Post: `draft_queued` → **approved** → `publishing` → **published**.
+Post: `draft_queued` → **approved under the configured owner policy** → `publishing` → **published**.
 
 `published` is a result, NEVER a trigger. Only the worker can set it after Meta confirms publication. A changed product invalidates an old approval (`superseded`). An uncertain upload/publication or interrupted worker enters `recovery_required`, with remote container/video/photo IDs saved. It is never blindly auto-republished. Inspect those IDs on Meta before any manual recovery. This sacrifices unattended retries to avoid duplicate public posts.
 
@@ -134,7 +134,7 @@ All `/api/marketing/v2/*` endpoints require `Authorization: Bearer <PILOT_ADMIN_
 
 Example non-publishing test: enable `PILOT_WORKER_ENABLED=true`, keep `PILOT_PUBLISH_ENABLED=false`, populate one product's reviewed inputs, inspect the two drafts and open their image/video URLs. Only then approve one post and deliberately enable publishing. **No live post was sent while generating/testing this package.**
 
-An approval is effectively a request to publish once the enabled worker runs. Do not approve an item you only want to preview. There is no public/admin shortcut to mark a draft published.
+An automatic approval is a request to publish once the enabled worker runs. Do not enable autonomy if a draft should remain a preview. There is no public/admin shortcut to mark a draft published.
 
 ## Google feed / delivery
 

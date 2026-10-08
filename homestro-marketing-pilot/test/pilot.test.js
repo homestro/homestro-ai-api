@@ -35,7 +35,15 @@ test('UTM preserves variant and uses carousel format',()=>{
   const u=new URL(trackingLink('https://homestro.de/products/a?variant=2','facebook','carousel'));
   assert.equal(u.searchParams.get('variant'),'2');assert.equal(u.searchParams.get('utm_content'),'carousel');
 });
-test('bad daily limits cannot disable the cap',()=>assert.throws(()=>config({PILOT_MAX_DAILY_POSTS:'NaN'})));
+test('organic defaults allow three posts per channel while keeping a six-post total cap',()=>{
+  const c=config({});
+  assert.equal(c.maxDailyPosts,6);
+  assert.equal(c.maxDailyPerChannel,3);
+});
+test('bad daily limits cannot disable the cap',()=>{
+  assert.throws(()=>config({PILOT_MAX_DAILY_POSTS:'NaN'}));
+  assert.throws(()=>config({PILOT_MAX_DAILY_PER_CHANNEL:'6'}));
+});
 test('highest-resolution MP4 wins; external and processing videos ignored',()=>{
   const m=extractMedia([{mediaContentType:'VIDEO',status:'READY',sources:[{url:'low',format:'mp4',width:540,height:960},{url:'high',mimeType:'video/mp4',width:1080,height:1920}]},{mediaContentType:'EXTERNAL_VIDEO',status:'READY',originUrl:'youtube'}]);
   assert.equal(m.videoURL,'high');
