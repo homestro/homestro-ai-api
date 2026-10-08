@@ -14,6 +14,19 @@ function setup({metaError=false,changed=false,tokenError=false}={}) {
   const freshSnapshot=async()=>({revision:changed?'new':'rev',status:'ACTIVE',variants:[{available:true,price:39}]});
   return {worker:new Worker({store,meta,cfg,freshSnapshot}),statuses,writes:()=>writes};
 }
+test('autonomy enforces the configured per-channel daily cap',async()=>{
+  let selectionQuery,selectionParams;
+  const client={query:async(sql,params)=>{
+    if(String(sql).includes("SELECT count(*) FROM marketing_posts WHERE"))return {rows:[{count:0}]};
+    selectionQuery=String(sql);selectionParams=params;return {rows:[]};
+  }};
+  const store={withWorkerLock:fn=>fn(client)};
+  const worker=new Worker({store,cfg:{...cfg,autonomyEnabled:true,maxDailyPerChannel:3,excludedProductIds:[]},
+    meta:{},freshSnapshot:async()=>null,isPublishingWindow:()=>true});
+  await worker.tick();
+  assert.match(selectionQuery,/SELECT count\(\*\) FROM marketing_posts recent WHERE recent.channel=s.channel/);
+  assert.deepEqual(selectionParams,[[],3]);
+});
 test('worker records published only after publisher confirms',async()=>{
   const s=setup();await s.worker.tick();assert.deepEqual(s.statuses,['publishing','published']);
 });
