@@ -23,7 +23,7 @@ export async function approveReviewed(store,cfg) {
   const result=await store.pool.query(`UPDATE marketing_posts s
     SET status='approved',approved_by='Mirko: homestro-reviewed-organic-v1',approved_at=now(),updated_at=now()
     FROM marketing_products p WHERE s.product_id=p.id AND s.status='draft_queued'
-    AND p.status='ready' AND s.channel IN ('facebook','instagram')
+    AND p.status='ready' AND p.document->>'status'='ACTIVE' AND s.channel IN ('facebook','instagram')
     AND COALESCE(p.document->>'rejected','false')<>'true'
     AND p.document->>'contentReviewed'='true'
     AND p.document->>'priceReviewed'='true'
