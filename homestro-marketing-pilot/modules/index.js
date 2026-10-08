@@ -10,7 +10,7 @@ import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
-import {reviewedSource,sourceReviewReasons,approveReviewed,verifyHistory} from './autonomy.js';
+import {reviewedSource,approveReviewed,verifyHistory} from './autonomy.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   // Await initialization once at startup. Errors disable marketing, never the main server.
@@ -26,12 +26,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
-        if(scheduled && !reviewedSource(inputs)) {
-          const reasons=sourceReviewReasons(inputs);
-          await store.saveProduct(snapshot(raw,inputs,cfg.feeRate),'pending_marketing',reasons);
-          return {processed:1,status:'pending_marketing',reasons};
-        }
-        return await ingestion.process(raw,inputs);
+        return await ingestion.process(raw,inputs,{prepareOnly:scheduled && !reviewedSource(inputs)});
       }
       catch(e){
         // Archived/deleted products are invalidated and disappear from the feed.

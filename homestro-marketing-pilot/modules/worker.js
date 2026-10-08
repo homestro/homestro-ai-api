@@ -25,6 +25,9 @@ export class Worker {
               ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[]])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job)return;
+        if(job.payload.previewOnly===true) {
+          await this.store.setStatus(job.id,'superseded','PREVIEW_NOT_PUBLISHABLE');return;
+        }
         if(this.cfg.excludedProductIds?.includes(job.product_id)) {
           await this.store.setStatus(job.id,'superseded','PRODUCT_EXCLUDED');return;
         }

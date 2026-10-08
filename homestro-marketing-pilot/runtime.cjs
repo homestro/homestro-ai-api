@@ -6,8 +6,8 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
   const ready=(async()=>{
     if(!env.DATABASE_URL){state={enabled:false,reason:'DATABASE_URL_MISSING'};console.log('[organic-pilot-v2] '+JSON.stringify(state));return null;}
     try {
-      const [{default:pg},{attachMarketing},{config},{prepareExistingInputs}]=await Promise.all([
-        import('pg'),import('./modules/index.js'),import('./modules/core.js'),import('./modules/bridge.js')]);
+      const [{default:pg},{attachMarketing},{config},{prepareExistingInputs},{createSourceLocalizer}]=await Promise.all([
+        import('pg'),import('./modules/index.js'),import('./modules/core.js'),import('./modules/bridge.js'),import('./modules/source-localizer.js')]);
       const pool=new pg.Pool({connectionString:env.DATABASE_URL,max:5,connectionTimeoutMillis:10000,query_timeout:15000});
       pool.on('error',()=>console.warn('[organic-pilot-v2] DATABASE_CONNECTION_ERROR'));
       const cfg=config({...env,PILOT_ADMIN_KEY:env.PILOT_ADMIN_KEY||env.HOMESTRO_API_KEY});
@@ -19,7 +19,7 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
           timer=setTimeout(()=>reject(new Error('SHOPIFY_TIMEOUT')),20000);
         })]).finally(()=>clearTimeout(timer));
       };
-      instance=await attachMarketing(app,{pool,graphql:boundedGraphql,cfg,prepareInputs:prepareExistingInputs,apiKeyMiddleware:apiKey});
+      instance=await attachMarketing(app,{pool,graphql:boundedGraphql,cfg,localizer:createSourceLocalizer(),prepareInputs:prepareExistingInputs,apiKeyMiddleware:apiKey});
       state={enabled:instance.enabled,workerEnabled:cfg.workerEnabled,publishingEnabled:cfg.publishingEnabled,syncOnce:cfg.syncOnce};
       console.log('[organic-pilot-v2] '+JSON.stringify(state));
       process.once('SIGTERM',()=>{instance?.stop();void pool.end().catch(()=>{});});
@@ -53,4 +53,3 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
   }};
 }
 module.exports={registerMarketingPilot};
-

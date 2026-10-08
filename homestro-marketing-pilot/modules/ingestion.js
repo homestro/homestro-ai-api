@@ -1,11 +1,12 @@
 import {hash,pricing,codeOf,log,productURL,fail} from './core.js';
 import {localize,compilePost} from './localization.js';
+import {extractMedia} from './media.js';
 
 export function snapshot(raw,extras={},feeRate=0) {
   const variants=(raw.variants||[]).map(v=>({id:v.id,title:v.title,price:Number(v.price),
     available:typeof v.availableForSale==='boolean'?v.availableForSale:
       Number(v.inventoryQuantity)>0 || v.inventoryPolicy==='CONTINUE',barcode:v.barcode||null}));
-  const p={id:raw.id,title:raw.title,description:raw.description,status:raw.status,
+  const p={preparationVersion:2,id:raw.id,title:raw.title,description:raw.description,status:raw.status,
     url:raw.onlineStoreUrl,variants,media:raw.media||[],currency:'EUR',
     supplierReference:extras.supplierReference||null,landedCost:extras.landedCost??null,
     priceReviewed:extras.priceReviewed===true,rightsVerified:extras.rightsVerified===true,
@@ -21,12 +22,14 @@ export function snapshot(raw,extras={},feeRate=0) {
 }
 export class Ingestion {
   constructor({store,renderer,localizer,feeRate=0}) {Object.assign(this,{store,renderer,localizer,feeRate});}
-  async process(raw,extras={}) {
+  async process(raw,extras={}, {prepareOnly=false}={}) {
     let p;
     try {
       p=snapshot(raw,extras,this.feeRate); const reasons=[];
       const previous=await this.store.product(p.id);
-      if(previous?.document?.revision===p.revision)p.localized=previous.document.localized;
+      if(previous?.document?.revision===p.revision && previous.document.localizationPrepared===true){
+        p.localized=previous.document.localized;p.localizationPrepared=true;
+      }
       // Supplier reference is provenance metadata. Missing provenance must not block organic marketing.
       // Keep it visible for review/audit, but do not falsely invent a supplier ID.
       if(!p.supplierReference)log('SUPPLIER_REFERENCE_MISSING',{productId:p.id});
@@ -39,26 +42,25 @@ export class Ingestion {
       try{productURL(p.url);}catch{reasons.push('NO_PUBLIC_PRODUCT_URL');}
       // Persist BEFORE localization/media: supplier misses never terminate ingestion.
       await this.store.saveProduct(p,'pending_marketing',reasons);
-      try{if(!p.localized)p.localized=await localize(p,this.localizer);}catch(e){
+      try{
+        if(!p.localized)p.localized=await localize(p,this.localizer);
+        p.localizationPrepared=true;
+      }catch(e){
         reasons.push(codeOf(e));
-        // Preview-only fallback: use existing Shopify German copy to render a review draft.
-        // This does NOT clear CONTENT_REVIEW_REQUIRED and therefore cannot become publishable.
-        const clean=s=>String(s||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
-        const title=clean(p.title).slice(0,150);
-        const description=clean(p.description)||title;
-        const fallbackFacts=(p.facts||[]).slice(0,3);
-        while(fallbackFacts.length<3)fallbackFacts.push({id:`preview-${fallbackFacts.length+1}`,text:title});
-        p.facts=fallbackFacts;
-        p.localized={language:'de',title,description,hook:title.slice(0,100),searchTitle:title,
-          seoTitle:title.slice(0,70),seoDescription:description.slice(0,160),
-          benefits:fallbackFacts.map(x=>({factId:x.id,text:clean(x.text).slice(0,200)||title}))};
+        p.localizationPrepared=false;
       }
       // Marketing media/drafts may be prepared while commercial/review gates are pending.
       // Approval and publishing remain fail-closed because Store.approve() requires product status=ready.
       let asset=null,queued=0;
       if(p.localized){
         try {
-          asset=await this.renderer.render(p);
+          if(prepareOnly){
+            const m=extractMedia(p.media);
+            if(!m.images.length && !m.videoURL)fail('NO_MARKETING_MEDIA');
+            asset={previewOnly:true,format:m.videoURL?'reels':m.images.length>1?'carousel':'image',
+              videoURL:m.videoURL,imageURLs:m.videoURL?[]:m.images.slice(0,10)};
+            reasons.push('MEDIA_PREPARATION_PENDING');
+          }else asset=await this.renderer.render(p);
           p.asset=asset;
           for(const channel of ['facebook','instagram']){
             if(p.previouslyPublished[channel])continue;
@@ -69,6 +71,7 @@ export class Ingestion {
       }
       if(reasons.length){
         await this.store.saveProduct(p,'pending_marketing',reasons);
+        log('CONTENT_PREPARED',{productId:p.id,prepared:p.localizationPrepared===true,queued,publishable:false});
         return {processed:1,status:'pending_marketing',reasons,queued,assetFormat:asset?.format||null};
       }
       await this.store.saveProduct(p,'ready',[]);

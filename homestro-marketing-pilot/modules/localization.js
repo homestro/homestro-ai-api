@@ -17,7 +17,7 @@ export function validateLocalized(copy,facts) {
     typeof copy.searchTitle!=='string' || copy.searchTitle.length>150 ||
     typeof copy.seoTitle!=='string' || copy.seoTitle.length>70 ||
     typeof copy.seoDescription!=='string' || copy.seoDescription.length>160 ||
-    !Array.isArray(copy.benefits) || copy.benefits.length!==3) fail('LOCALIZATION_REVIEW_REQUIRED');
+    !Array.isArray(copy.benefits) || copy.benefits.length<1 || copy.benefits.length>3) fail('LOCALIZATION_REVIEW_REQUIRED');
   const ids=new Set(facts.map(x=>x.id));
   if(copy.benefits.some(x=>!x.text || x.text.length>200 || !ids.has(x.factId))) fail('UNGROUNDED_BENEFITS');
   return copy;
@@ -38,7 +38,7 @@ export function compilePost(product,channel,asset) {
   const cta=channel==='instagram'
     ? 'Entdecke das Produkt bei Homestro – über den Link in unserem Profil.'
     : 'Jetzt bei Homestro entdecken:';
-  const price=Number(product.variants.find(v=>v.available)?.price).toLocaleString('de-DE',{style:'currency',currency:'EUR'});
+  const price=Math.min(...product.variants.filter(v=>v.available && v.price>0).map(v=>Number(v.price))).toLocaleString('de-DE',{style:'currency',currency:'EUR'});
   const caption=[c.hook,...c.benefits.map(b=>'• '+b.text),`Ab ${price} zzgl. Versand.`,cta,link,hashtags.join(' ')].join('\n\n');
   if(caption.length>2200)fail('CAPTION_TOO_LONG');
   return {productRevision:product.revision,channel,...asset,
