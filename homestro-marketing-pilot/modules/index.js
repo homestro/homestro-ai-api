@@ -10,7 +10,7 @@ import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
-import {reviewedSource,approveReviewed,verifyHistory} from './autonomy.js';
+import {approveReviewed,verifyHistory} from './autonomy.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   // Await initialization once at startup. Errors disable marketing, never the main server.
@@ -22,11 +22,11 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
-    const processProduct=async (id,scheduled=false)=>{
+    const processProduct=async id=>{
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
-        return await ingestion.process(raw,inputs,{prepareOnly:scheduled && !reviewedSource(inputs)});
+        return await ingestion.process(raw,inputs);
       }
       catch(e){
         // Archived/deleted products are invalidated and disappear from the feed.
