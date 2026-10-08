@@ -10,6 +10,23 @@ const categories={
   electronics:['#TechnikImAlltag','#ElektronikGadgets','#TechnikTipps'],
   baby:['#Familienalltag','#Babyzubehör','#Elternalltag']
 };
+const cleanText=value=>String(value||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&')
+  .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/\s+/g,' ').trim();
+export function repairLocalized(copy) {
+  if(!copy || typeof copy!=='object')return copy;
+  const result={...copy};
+  for(const [field,max] of Object.entries({title:150,description:Infinity,hook:100,searchTitle:150,seoTitle:70,seoDescription:160})){
+    if(typeof copy[field]==='string')result[field]=cleanText(copy[field]).slice(0,max);
+  }
+  if(Array.isArray(copy.benefits)){
+    const seen=new Set();result.benefits=[];
+    for(const b of copy.benefits){
+      const text=cleanText(b?.text);if(!text || seen.has(text))continue;
+      seen.add(text);result.benefits.push({...b,text});
+    }
+  }
+  return result;
+}
 export function validateLocalized(copy,facts) {
   if(!copy || copy.language!=='de' || typeof copy.title!=='string' || !copy.title.trim() ||
     copy.title.length>150 || typeof copy.description!=='string' || !copy.description.trim() ||
@@ -25,11 +42,11 @@ export function validateLocalized(copy,facts) {
 // Default costs 0 in AI fees: accept reviewed native German copy, not guessed translations.
 // Inject your existing localization engine or an explicitly budgeted model adapter.
 export async function localize(product,adapter) {
-  if(product.germanCopy) return validateLocalized(product.germanCopy,product.facts||[]);
+  if(product.germanCopy) return validateLocalized(repairLocalized(product.germanCopy),product.facts||[]);
   if(!adapter) fail('LOCALIZATION_ENGINE_NOT_CONFIGURED');
   const copy=await adapter({language:'de',title:product.title,description:product.description,
     facts:product.facts||[],instructions:'Native German. Only verified facts. No invented specs, health claims, ratings, scarcity or guarantees. Return title, description, hook, three benefits with factId, searchTitle, seoTitle, seoDescription, language.'});
-  return validateLocalized(copy,product.facts||[]);
+  return validateLocalized(repairLocalized(copy),product.facts||[]);
 }
 export function compilePost(product,channel,asset) {
   const c=product.localized;

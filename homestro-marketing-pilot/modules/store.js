@@ -8,6 +8,11 @@ export class Store {
   async saveProduct(p,status,reasons) {
     await this.pool.query(`INSERT INTO marketing_products(id,document,status,reasons) VALUES($1,$2,$3,$4)
       ON CONFLICT(id) DO UPDATE SET document=$2,status=$3,reasons=$4,updated_at=now()`,[p.id,p,status,JSON.stringify(reasons)]);
+    // Retire stale drafts even when the replacement cannot yet be prepared.
+    // Otherwise failed preparation leaves an obsolete caption visible in review.
+    await this.pool.query(`UPDATE marketing_posts SET status='superseded',error_code='PRODUCT_CHANGED',updated_at=now()
+      WHERE product_id=$1 AND status IN ('draft_queued','approved')
+      AND payload->>'productRevision' IS DISTINCT FROM $2`,[p.id,p.revision]);
   }
   async product(id) { return (await this.pool.query('SELECT * FROM marketing_products WHERE id=$1',[id])).rows[0]; }
   async pending() { return (await this.pool.query("SELECT * FROM marketing_products WHERE status='pending_marketing' ORDER BY updated_at LIMIT 250")).rows; }

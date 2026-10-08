@@ -4,6 +4,8 @@ import {createSourceLocalizer} from '../modules/source-localizer.js';
 import {prepareExistingInputs} from '../modules/bridge.js';
 import {Ingestion} from '../modules/ingestion.js';
 import {Worker} from '../modules/worker.js';
+import {localize} from '../modules/localization.js';
+import {Store} from '../modules/store.js';
 
 const raw={id:'gid://shopify/Product/8',title:'Boxen für die Küche',description:'Zwei Boxen aus Kunststoff.',descriptionHtml:'<p>Zwei Boxen aus Kunststoff.</p>',
   status:'ACTIVE',onlineStoreUrl:'https://homestro.de/products/boxen',tags:[],variants:[{id:'v',price:'20',availableForSale:true}],
@@ -40,4 +42,19 @@ test('draft preparation cannot publish even if its preview was incorrectly appro
   const worker=new Worker({store,cfg:{workerEnabled:true,publishingEnabled:true,maxDailyPosts:2},
     meta:{verifyConnection:()=>assert.fail('No Meta call for review preview')}});
   await worker.tick();assert.deepEqual(statuses,[['preview','superseded','PREVIEW_NOT_PUBLISHABLE']]);
+});
+test('automatic text repair removes markup, emoji and duplicate benefits then validates',async()=>{
+  const facts=[{id:'1',text:'Zwei Boxen'}];
+  const copy={language:'de',title:'<b>Boxen</b> ✨',description:'Zwei&nbsp;Boxen.',hook:' Boxen  ✨ ',
+    searchTitle:'Boxen',seoTitle:'B'.repeat(90),seoDescription:'D'.repeat(180),
+    benefits:[{factId:'1',text:'Zwei Boxen ✨'},{factId:'1',text:'Zwei Boxen'}]};
+  const p=await localize({germanCopy:copy,facts});
+  assert.equal(p.title,'Boxen');assert.equal(p.description,'Zwei Boxen.');assert.equal(p.benefits.length,1);
+  assert.equal(p.seoTitle.length,70);assert.equal(p.seoDescription.length,160);
+});
+test('changed products retire obsolete drafts even when no replacement can be prepared',async()=>{
+  const q=[];await new Store({query:async(sql,args)=>{q.push({sql,args});return {rows:[]};}})
+    .saveProduct({id:'p',revision:'new'},'pending_marketing',['SOURCE_COPY_REQUIRED']);
+  assert.match(q[1].sql,/status IN \('draft_queued','approved'\)/);
+  assert.match(q[1].sql,/IS DISTINCT FROM/);assert.deepEqual(q[1].args,['p','new']);
 });
