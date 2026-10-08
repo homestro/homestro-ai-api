@@ -6,7 +6,7 @@ export function prepareExistingInputs(raw) {
   const productType=raw.productType||null;
   const tags=raw.tags||[];
   const reviewed=tags.some(t=>/^homestro-ai-(?:processed(?:-existing)?|content-complete|complete)$/.test(t)) &&
-    !tags.some(t=>/manual-review|qa-rejected|content-review|content-pending|image-pending|ai-ai-pending/i.test(t)) &&
+    !tags.some(t=>/manual-review|ai-rejected|qa-rejected|content-review|content-pending|image-pending|ai-ai-pending/i.test(t)) &&
     (!tags.includes('homestro-ai-qa-pending') || tags.includes('homestro-ai-content-complete'));
   let benefits=[...String(raw.descriptionHtml||'').matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
     .map(m=>text(m[1])).filter(s=>s.length>5 && s.length<=200).slice(0,3);

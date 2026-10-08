@@ -24,6 +24,7 @@ export async function approveReviewed(store,cfg) {
     SET status='approved',approved_by='Mirko: homestro-reviewed-organic-v1',approved_at=now(),updated_at=now()
     FROM marketing_products p WHERE s.product_id=p.id AND s.status='draft_queued'
     AND p.status='ready' AND s.channel IN ('facebook','instagram')
+    AND COALESCE(p.document->>'rejected','false')<>'true'
     AND p.document->>'contentReviewed'='true'
     AND p.document->>'priceReviewed'='true'
     AND s.payload->>'adSpendEUR'='0'

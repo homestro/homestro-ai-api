@@ -50,7 +50,7 @@ export class Worker {
         } else {
           const current=await this.freshSnapshot(job.product_id);
           if(!current || stored?.status!=='ready' || current.revision!==job.payload.productRevision ||
-            current.status!=='ACTIVE' || !current.variants.some(v=>v.available && v.price>0)){
+            current.rejected===true || current.status!=='ACTIVE' || !current.variants.some(v=>v.available && v.price>0)){
             await this.store.setStatus(job.id,'superseded','PRODUCT_CHANGED');return;
           }
         }
