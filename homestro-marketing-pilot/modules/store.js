@@ -15,6 +15,11 @@ export class Store {
       AND payload->>'productRevision' IS DISTINCT FROM $2`,[p.id,p.revision]);
   }
   async product(id) { return (await this.pool.query('SELECT * FROM marketing_products WHERE id=$1',[id])).rows[0]; }
+  async recordGeneratedReview(id,inputs) {
+    await this.pool.query(`INSERT INTO marketing_inputs(product_id,inputs) VALUES($1,$2)
+      ON CONFLICT(product_id) DO UPDATE SET inputs=COALESCE(marketing_inputs.inputs,'{}'::jsonb) || EXCLUDED.inputs,updated_at=now()`,
+      [id,inputs]);
+  }
   async pending() { return (await this.pool.query("SELECT * FROM marketing_products WHERE status='pending_marketing' ORDER BY updated_at LIMIT 250")).rows; }
   async queue(productId,channel,revision,payload) {
     const c=await this.pool.connect();
