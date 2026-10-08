@@ -23,3 +23,9 @@ CREATE TABLE IF NOT EXISTS marketing_events (
 CREATE TABLE IF NOT EXISTS marketing_inputs (
   product_id text PRIMARY KEY, inputs jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE marketing_posts ADD COLUMN IF NOT EXISTS published_at timestamptz;
+-- Preserve the oldest recorded publication event; later link checks cannot reset quotas.
+UPDATE marketing_posts s SET published_at=COALESCE(
+  (SELECT min(e.created_at) FROM marketing_events e WHERE e.post_id=s.id AND e.code='published'),s.updated_at)
+WHERE s.status='published' AND s.published_at IS NULL;

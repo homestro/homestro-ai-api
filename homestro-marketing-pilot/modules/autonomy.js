@@ -3,6 +3,14 @@ import {log} from './core.js';
 export const reviewedSource = inputs => inputs?.rightsVerified===true &&
   inputs?.contentReviewed===true && inputs?.priceReviewed===true && Boolean(inputs?.germanCopy);
 
+export function sourceReviewReasons(inputs={}) {
+  const reasons=[];
+  if(inputs.rightsVerified!==true)reasons.push('MEDIA_RIGHTS_REVIEW_REQUIRED');
+  if(inputs.contentReviewed!==true || !inputs.germanCopy)reasons.push('CONTENT_REVIEW_REQUIRED');
+  if(inputs.priceReviewed!==true)reasons.push('PRICE_REVIEW_REQUIRED');
+  return reasons;
+}
+
 export function publicationWindow(now=new Date()) {
   const hour=Number(new Intl.DateTimeFormat('en',{timeZone:'Europe/Berlin',hour:'2-digit',hourCycle:'h23'}).format(now));
   return hour>=9 && hour<22;

@@ -10,7 +10,7 @@ export class Store {
       ON CONFLICT(id) DO UPDATE SET document=$2,status=$3,reasons=$4,updated_at=now()`,[p.id,p,status,JSON.stringify(reasons)]);
   }
   async product(id) { return (await this.pool.query('SELECT * FROM marketing_products WHERE id=$1',[id])).rows[0]; }
-  async pending() { return (await this.pool.query("SELECT * FROM marketing_products WHERE status='pending_marketing' ORDER BY updated_at LIMIT 10")).rows; }
+  async pending() { return (await this.pool.query("SELECT * FROM marketing_products WHERE status='pending_marketing' ORDER BY updated_at LIMIT 250")).rows; }
   async queue(productId,channel,revision,payload) {
     const c=await this.pool.connect();
     try {
@@ -24,7 +24,7 @@ export class Store {
     } catch(e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
   async list(status='draft_queued') {
-    return (await this.pool.query('SELECT * FROM marketing_posts WHERE status=$1 ORDER BY created_at LIMIT 100',[status])).rows;
+    return (await this.pool.query('SELECT * FROM marketing_posts WHERE status=$1 ORDER BY created_at LIMIT 2500',[status])).rows;
   }
   async approve(id,reviewer) {
     const r=await this.pool.query(`UPDATE marketing_posts AS s SET status='approved',approved_by=$2,approved_at=now(),updated_at=now()
@@ -36,7 +36,7 @@ export class Store {
     await this.pool.query('UPDATE marketing_posts SET remote=$2,updated_at=now() WHERE id=$1',[id,remote]);
   }
   async setStatus(id,status,errorCode=null) {
-    await this.pool.query('UPDATE marketing_posts SET status=$2,error_code=$3,updated_at=now() WHERE id=$1',[id,status,errorCode]);
+    await this.pool.query(`UPDATE marketing_posts SET status=$2,error_code=$3,updated_at=now(),published_at=CASE WHEN $2='published' THEN COALESCE(published_at,now()) ELSE published_at END WHERE id=$1`,[id,status,errorCode]);
     await this.pool.query('INSERT INTO marketing_events(post_id,code) VALUES($1,$2)',[id,errorCode||status]);
   }
   async feedRows() {
@@ -54,4 +54,3 @@ export class Store {
     } finally { if(locked) await c.query('SELECT pg_advisory_unlock(73341001)').catch(()=>{}); c.release(); }
   }
 }
-

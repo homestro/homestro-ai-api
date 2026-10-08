@@ -63,7 +63,14 @@ export async function renderEditorial(p,cfg){
  }finally{await rm(tmp,{recursive:true,force:true});}
 }
 export async function queueEditorial(store,cfg){
- if(!cfg.autonomyEnabled||!editorialEnabled())return;
+ if(!editorialEnabled()) {
+  const r=await store.pool.query(`UPDATE marketing_posts SET status='superseded',error_code='EDITORIAL_DISABLED',updated_at=now()
+    WHERE (product_id LIKE 'editorial:%' OR payload->>'kind'='brand_editorial')
+    AND status IN ('draft_queued','approved') RETURNING id`);
+  if(r.rowCount)log('EDITORIAL_DISABLED',{retired:r.rowCount});
+  return;
+ }
+ if(!cfg.autonomyEnabled)return;
  let queued=0;
  for(const p of editorialDocuments()){
   await renderEditorial(p,cfg);await store.saveProduct(p,'ready',[]);

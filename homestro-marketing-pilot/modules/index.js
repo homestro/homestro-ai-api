@@ -10,7 +10,7 @@ import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
-import {reviewedSource,approveReviewed,verifyHistory} from './autonomy.js';
+import {reviewedSource,sourceReviewReasons,approveReviewed,verifyHistory} from './autonomy.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   // Await initialization once at startup. Errors disable marketing, never the main server.
@@ -27,8 +27,9 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
         if(scheduled && !reviewedSource(inputs)) {
-          await store.saveProduct(snapshot(raw,inputs,cfg.feeRate),'pending_marketing',['SOURCE_REVIEW_REQUIRED']);
-          return {processed:1,status:'pending_marketing'};
+          const reasons=sourceReviewReasons(inputs);
+          await store.saveProduct(snapshot(raw,inputs,cfg.feeRate),'pending_marketing',reasons);
+          return {processed:1,status:'pending_marketing',reasons};
         }
         return await ingestion.process(raw,inputs);
       }
@@ -55,7 +56,11 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         // Refresh previously ready items too: active catalog omits archived/deleted products.
         for(const p of await store.feedRows())await processProduct(p.id,cfg.autonomyEnabled);
         const r=await syncCatalog(graphql,id=>processProduct(id,cfg.autonomyEnabled));
-        await approveReviewed(store,cfg);log('CATALOG_SYNC',r);return r;
+        await approveReviewed(store,cfg);
+        const pendingReasons=(await pool.query(`SELECT reason,count(*)::int AS count FROM marketing_products p
+          CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason
+          WHERE p.status='pending_marketing' GROUP BY reason ORDER BY count DESC,reason`)).rows;
+        log('CATALOG_SYNC',{...r,pendingReasons});return {...r,pendingReasons};
       }catch(e){log(codeOf(e));return {error:codeOf(e)};}
       finally{if(locked)await client.query('SELECT pg_advisory_unlock(73341002)').catch(()=>{});client?.release();syncBusy=false;}
     };
@@ -71,8 +76,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.get('/status',route(async(req,res)=>{
       const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
       const posts=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_posts GROUP BY status')).rows;
+      const pendingReasons=(await pool.query(`SELECT reason,count(*)::int AS count FROM marketing_products p
+        CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason
+        WHERE p.status='pending_marketing' GROUP BY reason ORDER BY count DESC,reason`)).rows;
+      const publications=(await pool.query(`SELECT id,channel,payload->>'title' AS title,remote->>'permalink' AS permalink,
+        published_at FROM marketing_posts WHERE status='published' ORDER BY published_at DESC NULLS LAST LIMIT 20`)).rows;
       res.json({enabled:true,workerEnabled:cfg.workerEnabled,publishingEnabled:cfg.publishingEnabled,
-        feedEnabled:cfg.feedEnabled,products,posts,adSpendEUR:0});
+        feedEnabled:cfg.feedEnabled,products,posts,pendingReasons,publications,adSpendEUR:0});
     }));
     router.get('/connection',route(async(req,res)=>{await meta.verifyConnection();res.json({ok:true,publishingEnabled:cfg.publishingEnabled,adSpendEUR:0});}));
     router.post('/posts/:id/approve',route(async(req,res)=>{

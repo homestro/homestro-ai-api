@@ -47,10 +47,10 @@ test('no video routes directly to image carousel, no slideshow',async()=>{
 test('SSRF host rejected before fetch',async()=>{
   let called=false;await assert.rejects(downloadMedia('https://127.0.0.1/a','/tmp/a',['cdn.shopify.com'],async()=>{called=true;}));assert.equal(called,false);
 });
-test('missing supplier reference counts as processed and persists pending',async()=>{
-  const saved=[];const store={product:async()=>null,saveProduct:async(...a)=>saved.push(a)};
-  const i=new Ingestion({store,renderer:{render:()=>assert.fail('Should not render pending product')}});
-  const r=await i.process(raw,{...inputs,supplierReference:null});assert.equal(r.processed,1);assert.equal(r.status,'pending_marketing');assert.ok(r.reasons.includes('SUPPLIER_REFERENCE_MISSING'));assert.equal(saved.at(-1)[1],'pending_marketing');
+test('missing supplier reference preserves reviewed organic preparation without inventing provenance',async()=>{
+  const saved=[];const store={product:async()=>null,saveProduct:async(...a)=>saved.push(a),queue:async()=> 'new'};
+  const i=new Ingestion({store,renderer:{render:async()=>asset}});
+  const r=await i.process(raw,{...inputs,supplierReference:null});assert.equal(r.processed,1);assert.equal(r.status,'draft_queued');assert.equal(r.queued,2);assert.equal(saved.at(-1)[1],'ready');assert.equal(saved.at(-1)[0].supplierReference,null);
 });
 test('complete product creates two drafts and never calls Meta',async()=>{
   const queued=[];const store={product:async()=>null,saveProduct:async()=>{},queue:async(...a)=>{queued.push(a);return 'new';}};
