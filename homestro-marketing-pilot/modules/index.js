@@ -121,7 +121,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       const posts=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_posts GROUP BY status')).rows;
       const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
       log('AUTONOMY_READY',{policy:'homestro-reviewed-organic-v1',posts,products,maxDailyPosts:cfg.maxDailyPosts,
-        maxDailyPerChannel:1,timezone:'Europe/Berlin',hours:'09:00-22:00',adSpendEUR:0});
+        maxDailyPerChannel:cfg.maxDailyPerChannel,timezone:'Europe/Berlin',hours:'09:00-22:00',adSpendEUR:0});
     }
     worker.start();
     if(cfg.syncOnce){
