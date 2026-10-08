@@ -1,4 +1,4 @@
-import {fail} from './core.js';
+import {fail,log} from './core.js';
 import {validateLocalized} from './localization.js';
 
 const clean=value=>String(value||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&')
@@ -7,6 +7,7 @@ const clean=value=>String(value||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,
 // Zero API spend: assemble a German marketing draft from the shop's source facts.
 // This prepares copy; it does not certify supplier facts or grant media rights.
 export const sourceLooksGerman=source=>/\b(?:der|die|das|für|mit|und|aus|zum|zur|ein|eine|im|auf|oder|dein|deine|vier|zwei)\b/i.test(source);
+const safeCode=value=>typeof value==='string' && /^[A-Za-z0-9_.-]{1,60}$/.test(value)?value:undefined;
 export function createSourceLocalizer({apiKey,model='gpt-4o-mini',fetchImpl=fetch}={}) {
   return async ({title,description,facts=[]})=>{
     const t=clean(title),d=clean(description);
@@ -30,11 +31,15 @@ export function createSourceLocalizer({apiKey,model='gpt-4o-mini',fetchImpl=fetc
         ]}),
       signal:AbortSignal.timeout(30000)
     });
-    if(!response.ok)fail('LOCALIZATION_PROVIDER_FAILED');
+    if(!response.ok){
+      let providerError={};try{providerError=(await response.json())?.error||{};}catch{}
+      log('LOCALIZATION_PROVIDER_ERROR',{status:response.status,type:safeCode(providerError.type),providerCode:safeCode(providerError.code)});
+      fail('LOCALIZATION_PROVIDER_FAILED');
+    }
     let body;
-    try{body=await response.json();}catch{fail('LOCALIZATION_PROVIDER_FAILED');}
+    try{body=await response.json();}catch{log('LOCALIZATION_PROVIDER_ERROR',{status:response.status,stage:'INVALID_JSON'});fail('LOCALIZATION_PROVIDER_FAILED');}
     let copy;
-    try{copy=JSON.parse(body.choices?.[0]?.message?.content||'');}catch{fail('LOCALIZATION_PROVIDER_FAILED');}
+    try{copy=JSON.parse(body.choices?.[0]?.message?.content||'');}catch{log('LOCALIZATION_PROVIDER_ERROR',{status:response.status,stage:'INVALID_COMPLETION_JSON'});fail('LOCALIZATION_PROVIDER_FAILED');}
     return validateLocalized(copy,facts);
   };
 }
