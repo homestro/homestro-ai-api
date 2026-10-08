@@ -1,13 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reviewedSource,publicationWindow,verifyHistory} from '../modules/autonomy.js';
+import {reviewedSource,publicationWindow,verifyHistory,approveReviewed} from '../modules/autonomy.js';
 
-test('automatic preparation rejects each missing source review',()=>{
+test('automatic preparation requires validated German content but not a separate price review',()=>{
   const good={rightsVerified:true,contentReviewed:true,priceReviewed:true,germanCopy:{language:'de'}};
   assert.equal(reviewedSource(good),true);
   assert.equal(reviewedSource({...good,rightsVerified:false}),true);
-  for(const field of ['contentReviewed','priceReviewed','germanCopy'])
+  assert.equal(reviewedSource({...good,priceReviewed:false}),true);
+  for(const field of ['contentReviewed','germanCopy'])
     assert.equal(reviewedSource({...good,[field]:false}),false);
+});
+test('automatic approval uses an available current Shopify price and does not require supplier-cost review',async()=>{
+  let sql,params;await approveReviewed({pool:{query:async(q,p)=>{sql=q;params=p;return {rowCount:0};}}},{autonomyEnabled:true,excludedProductIds:['excluded']});
+  assert.doesNotMatch(sql,/priceReviewed/);
+  assert.match(sql,/p\.document->>'contentReviewed'='true'/);
+  assert.match(sql,/jsonb_array_elements\(p\.document->'variants'\)/);
+  assert.match(sql,/COALESCE\(\(v->>'price'\)::numeric,0\)>0/);
+  assert.deepEqual(params,[['excluded']]);
 });
 test('publication uses Berlin local time in summer and winter',()=>{
   assert.equal(publicationWindow(new Date('2026-10-06T07:00:00Z')),true);

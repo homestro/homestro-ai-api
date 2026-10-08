@@ -2,13 +2,11 @@ import {log} from './core.js';
 
 // Owner instruction 2026-10-08: media-rights evidence is audit metadata,
 // not a required receipt or Shopify tag for organic publication.
-export const reviewedSource = inputs => inputs?.contentReviewed===true &&
-  inputs?.priceReviewed===true && Boolean(inputs?.germanCopy);
+export const reviewedSource = inputs => inputs?.contentReviewed===true && Boolean(inputs?.germanCopy);
 
 export function sourceReviewReasons(inputs={}) {
   const reasons=[];
   if(inputs.contentReviewed!==true || !inputs.germanCopy)reasons.push('CONTENT_REVIEW_REQUIRED');
-  if(inputs.priceReviewed!==true)reasons.push('PRICE_REVIEW_REQUIRED');
   return reasons;
 }
 
@@ -26,7 +24,10 @@ export async function approveReviewed(store,cfg) {
     AND p.status='ready' AND p.document->>'status'='ACTIVE' AND s.channel IN ('facebook','instagram')
     AND COALESCE(p.document->>'rejected','false')<>'true'
     AND p.document->>'contentReviewed'='true'
-    AND p.document->>'priceReviewed'='true'
+    AND jsonb_typeof(p.document->'variants')='array'
+    AND EXISTS (SELECT 1 FROM jsonb_array_elements(p.document->'variants') v
+      WHERE COALESCE((v->>'available')::boolean,false)=true
+      AND COALESCE((v->>'price')::numeric,0)>0)
     AND s.payload->>'adSpendEUR'='0'
     AND s.payload->>'productRevision'=p.document->>'revision'
     AND NOT (s.product_id=ANY($1::text[]))

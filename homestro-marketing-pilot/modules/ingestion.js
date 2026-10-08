@@ -33,7 +33,6 @@ export class Ingestion {
       // Supplier reference is provenance metadata. Missing provenance must not block organic marketing.
       // Keep it visible for review/audit, but do not falsely invent a supplier ID.
       if(!p.supplierReference)log('SUPPLIER_REFERENCE_MISSING',{productId:p.id});
-      if(!p.pricing?.costVerified && !p.priceReviewed)reasons.push('PRICE_REVIEW_REQUIRED');
       // Keep rightsVerified as factual metadata. The owner removed it as a publishing gate.
       if(p.rejected)reasons.push('PRODUCT_REJECTED');
       if(p.status!=='ACTIVE')reasons.push('PRODUCT_NOT_ACTIVE');
