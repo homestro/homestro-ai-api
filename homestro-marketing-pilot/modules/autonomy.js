@@ -1,11 +1,12 @@
 import {log} from './core.js';
 
-export const reviewedSource = inputs => inputs?.rightsVerified===true &&
-  inputs?.contentReviewed===true && inputs?.priceReviewed===true && Boolean(inputs?.germanCopy);
+// Owner instruction 2026-10-08: media-rights evidence is audit metadata,
+// not a required receipt or Shopify tag for organic publication.
+export const reviewedSource = inputs => inputs?.contentReviewed===true &&
+  inputs?.priceReviewed===true && Boolean(inputs?.germanCopy);
 
 export function sourceReviewReasons(inputs={}) {
   const reasons=[];
-  if(inputs.rightsVerified!==true)reasons.push('MEDIA_RIGHTS_REVIEW_REQUIRED');
   if(inputs.contentReviewed!==true || !inputs.germanCopy)reasons.push('CONTENT_REVIEW_REQUIRED');
   if(inputs.priceReviewed!==true)reasons.push('PRICE_REVIEW_REQUIRED');
   return reasons;
@@ -23,7 +24,7 @@ export async function approveReviewed(store,cfg) {
     SET status='approved',approved_by='Mirko: homestro-reviewed-organic-v1',approved_at=now(),updated_at=now()
     FROM marketing_products p WHERE s.product_id=p.id AND s.status='draft_queued'
     AND p.status='ready' AND s.channel IN ('facebook','instagram')
-    AND p.document->>'rightsVerified'='true' AND p.document->>'contentReviewed'='true'
+    AND p.document->>'contentReviewed'='true'
     AND p.document->>'priceReviewed'='true'
     AND s.payload->>'adSpendEUR'='0'
     AND s.payload->>'productRevision'=p.document->>'revision'

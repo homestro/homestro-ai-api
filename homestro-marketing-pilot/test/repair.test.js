@@ -6,7 +6,7 @@ import {Worker} from '../modules/worker.js';
 import {Store} from '../modules/store.js';
 
 test('review diagnostics name missing evidence without requiring supplier reference',()=>{
-  assert.deepEqual(sourceReviewReasons({priceReviewed:true}),['MEDIA_RIGHTS_REVIEW_REQUIRED','CONTENT_REVIEW_REQUIRED']);
+  assert.deepEqual(sourceReviewReasons({priceReviewed:true}),['CONTENT_REVIEW_REQUIRED']);
   assert.deepEqual(sourceReviewReasons({rightsVerified:true,contentReviewed:true,priceReviewed:true,germanCopy:{}}),[]);
 });
 test('disabled editorial retires queued approvals while preserving published history',async()=>{

@@ -9,8 +9,8 @@ export function validateOneShot(request) {
     typeof request.reviewer!=='string' || !request.reviewer.trim() || request.reviewer.length>100)
     fail('INVALID_ONE_SHOT_REQUEST');
   const x=request.inputs;
-  if(!x || x.rightsVerified!==true || x.contentReviewed!==true || x.priceReviewed!==true ||
-    !Array.isArray(x.facts) || x.facts.length!==3 || x.facts.some(f=>!f.id || !f.text) ||
+  if(!x || x.contentReviewed!==true || x.priceReviewed!==true ||
+    !Array.isArray(x.facts) || x.facts.length<1 || x.facts.length>3 || x.facts.some(f=>!f.id || !f.text) ||
     !x.germanCopy || !x.reviewEvidence) fail('ONE_SHOT_REVIEW_REQUIRED');
   return request;
 }

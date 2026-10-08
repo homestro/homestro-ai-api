@@ -21,7 +21,7 @@ test('unreviewed product prepares factual German copy before approval without en
   assert.equal(p.localized.benefits.length,1);assert.equal(p.localized.benefits[0].text,'Zwei Boxen aus Kunststoff.');
   assert.equal(p.contentReviewed,false);assert.equal(p.rightsVerified,false);
   assert.equal(posts[0][3].previewOnly,true);
-  assert.ok(r.reasons.includes('MEDIA_RIGHTS_REVIEW_REQUIRED'));assert.ok(r.reasons.includes('CONTENT_REVIEW_REQUIRED'));
+  assert.ok(!r.reasons.includes('MEDIA_RIGHTS_REVIEW_REQUIRED'));assert.ok(r.reasons.includes('CONTENT_REVIEW_REQUIRED'));
 });
 test('missing facts produces a clear hold instead of three repeated product titles',async()=>{
   const saved=[];const i=new Ingestion({store:{product:async()=>null,saveProduct:async(...a)=>saved.push(a)},localizer:createSourceLocalizer(),renderer:{render:()=>assert.fail('No media on missing copy')}});

@@ -55,7 +55,7 @@ test('changed product is superseded without publication',async()=>{
   assert.equal(result.status,'superseded');assert.equal(f.publishes,0);
 });
 test('missing reviewed inputs is rejected before database access',async()=>{
-  const f=fixture();f.args.request={...request,inputs:{...request.inputs,rightsVerified:false}};
+  const f=fixture();f.args.request={...request,inputs:{...request.inputs,contentReviewed:false}};
   await assert.rejects(runOneShot(f.args),/ONE_SHOT_REVIEW_REQUIRED/);assert.equal(f.calls.length,0);
 });
 

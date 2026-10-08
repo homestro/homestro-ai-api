@@ -57,6 +57,13 @@ test('complete product creates two drafts and never calls Meta',async()=>{
   const i=new Ingestion({store,renderer:{render:async()=>asset}});const r=await i.process(raw,inputs);
   assert.equal(r.queued,2);assert.deepEqual(queued.map(x=>x[1]),['facebook','instagram']);assert.equal(queued[0][3].format,'carousel');
 });
+test('reviewed product is ready without media permission tag and keeps provenance truthful',async()=>{
+  const saved=[],queued=[];const store={product:async()=>null,saveProduct:async(...a)=>saved.push(a),queue:async(...a)=>{queued.push(a);return 'new';}};
+  const r=await new Ingestion({store,renderer:{render:async()=>asset}}).process(raw,{...inputs,rightsVerified:false});
+  assert.equal(r.status,'draft_queued');assert.equal(r.queued,2);
+  assert.equal(saved.at(-1)[1],'ready');assert.equal(saved.at(-1)[0].rightsVerified,false);
+  assert.deepEqual(saved.at(-1)[2],[]);assert.equal(queued.length,2);
+});
 test('organic transport blocks all ads endpoints',async()=>{
   const api=new MetaOrganic(cfg,()=>assert.fail('Network must not be called'));
   for(const path of ['act_123/campaigns','123/adsets','123/ads','123/adcreatives'])await assert.rejects(api.request(path));

@@ -6,7 +6,7 @@ export function snapshot(raw,extras={},feeRate=0) {
   const variants=(raw.variants||[]).map(v=>({id:v.id,title:v.title,price:Number(v.price),
     available:typeof v.availableForSale==='boolean'?v.availableForSale:
       Number(v.inventoryQuantity)>0 || v.inventoryPolicy==='CONTINUE',barcode:v.barcode||null}));
-  const p={preparationVersion:3,id:raw.id,title:raw.title,description:raw.description,status:raw.status,
+  const p={preparationVersion:4,id:raw.id,title:raw.title,description:raw.description,status:raw.status,
     url:raw.onlineStoreUrl,variants,media:raw.media||[],currency:'EUR',
     supplierReference:extras.supplierReference||null,landedCost:extras.landedCost??null,
     priceReviewed:extras.priceReviewed===true,rightsVerified:extras.rightsVerified===true,
@@ -34,8 +34,7 @@ export class Ingestion {
       // Keep it visible for review/audit, but do not falsely invent a supplier ID.
       if(!p.supplierReference)log('SUPPLIER_REFERENCE_MISSING',{productId:p.id});
       if(!p.pricing?.costVerified && !p.priceReviewed)reasons.push('PRICE_REVIEW_REQUIRED');
-      // Unverified supplier media may be rendered for internal review only; publishing remains fail-closed.
-      if(!p.rightsVerified)reasons.push('MEDIA_RIGHTS_REVIEW_REQUIRED');
+      // Keep rightsVerified as factual metadata. The owner removed it as a publishing gate.
       if(!p.contentReviewed)reasons.push('CONTENT_REVIEW_REQUIRED');
       if(p.status!=='ACTIVE')reasons.push('PRODUCT_NOT_ACTIVE');
       if(!p.variants.some(v=>v.available && v.price>0))reasons.push('NO_AVAILABLE_VARIANT');

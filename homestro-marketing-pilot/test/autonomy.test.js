@@ -5,7 +5,8 @@ import {reviewedSource,publicationWindow,verifyHistory} from '../modules/autonom
 test('automatic preparation rejects each missing source review',()=>{
   const good={rightsVerified:true,contentReviewed:true,priceReviewed:true,germanCopy:{language:'de'}};
   assert.equal(reviewedSource(good),true);
-  for(const field of ['rightsVerified','contentReviewed','priceReviewed','germanCopy'])
+  assert.equal(reviewedSource({...good,rightsVerified:false}),true);
+  for(const field of ['contentReviewed','priceReviewed','germanCopy'])
     assert.equal(reviewedSource({...good,[field]:false}),false);
 });
 test('publication uses Berlin local time in summer and winter',()=>{
