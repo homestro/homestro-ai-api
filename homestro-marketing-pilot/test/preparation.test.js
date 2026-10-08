@@ -44,6 +44,16 @@ test('OpenAI localizer translates English supplier copy into validated German wi
   assert.equal(request.body.model,'test-model');assert.equal(request.body.max_completion_tokens,1000);
   assert.equal(request.body.messages[1].content.includes('Two boxes'),true);
 });
+test('OpenAI failures log only sanitized status and error code, never provider messages',async()=>{
+  const oldLog=console.log,lines=[];console.log=(line)=>lines.push(String(line));
+  try {
+    const localizer=createSourceLocalizer({apiKey:'secret-test-key',fetchImpl:async()=>new Response(JSON.stringify({error:{type:'insufficient_quota',code:'insufficient_quota',message:'private provider message'}}),{status:429})});
+    await assert.rejects(localizer({title:'Storage boxes',description:'Two boxes',facts:[{id:'1',text:'Two boxes'}]}),{code:'LOCALIZATION_PROVIDER_FAILED'});
+  } finally {console.log=oldLog;}
+  const text=lines.join('\n');
+  assert.match(text,/"status":429/);assert.match(text,/"providerCode":"insufficient_quota"/);
+  assert.doesNotMatch(text,/private provider message|secret-test-key/);
+});
 test('catalog sync includes new Shopify drafts as well as active products',()=>{
   assert.match(CATALOG_QUERY,/status:active OR status:draft/);
 });
@@ -63,6 +73,14 @@ test('valid generated German copy is saved as reviewed and produces real media d
   assert.equal(saved.at(-1)[0].contentReviewed,true);assert.equal(saved.at(-1)[1],'ready');
   assert.equal(reviews.length,1);assert.equal(reviews[0][1].germanCopy.title,'Küchenboxen');
   assert.equal(posts[0][3].format,'carousel');
+});
+test('active product with a current Shopify price does not require supplier-cost or price-review input to queue organic posts',async()=>{
+  const saved=[],posts=[];const store={product:async()=>null,saveProduct:async(...a)=>saved.push(a),queue:async(...a)=>{posts.push(a);return 'new';}};
+  const result=await new Ingestion({store,localizer:async()=>({language:'de',title:'Küchenboxen',description:'Zwei Boxen.',hook:'Mehr Ordnung',searchTitle:'Küchenboxen',seoTitle:'Küchenboxen',seoDescription:'Zwei Boxen.',benefits:[{factId:'f1',text:'Zwei Boxen'}]}),renderer:{render:async()=>({format:'carousel',imageURLs:['https://cdn.shopify.com/a.jpg','https://cdn.shopify.com/b.jpg']})}})
+    .process({...raw,description:'Two boxes.'},{facts:[{id:'f1',text:'Two boxes'}],contentReviewed:false,priceReviewed:false});
+  assert.equal(result.status,'draft_queued');assert.equal(result.queued,2);
+  assert.equal(saved.at(-1)[1],'ready');assert.equal(posts.length,2);
+  assert.equal(saved.at(-1)[0].variants[0].price,20);
 });
 test('missing facts produces a clear hold instead of three repeated product titles',async()=>{
   const saved=[];const i=new Ingestion({store:{product:async()=>null,saveProduct:async(...a)=>saved.push(a)},localizer:createSourceLocalizer(),renderer:{render:()=>assert.fail('No media on missing copy')}});
