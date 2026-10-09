@@ -83,6 +83,21 @@ test('active product with a current Shopify price does not require supplier-cost
   assert.equal(saved.at(-1)[1],'ready');assert.equal(posts.length,2);
   assert.equal(saved.at(-1)[0].variants[0].price,20);
 });
+test('product without a public product URL stays pending without a misleading render error or queued post',async()=>{
+  const saved=[],posts=[],lines=[];const oldLog=console.log;console.log=line=>lines.push(String(line));
+  const store={product:async()=>null,saveProduct:async(...a)=>saved.push(a),queue:async(...a)=>{posts.push(a);return 'new';}};
+  const renderer={render:async()=>assert.fail('Must not render media for a product without a purchase URL')};
+  const copy={language:'de',title:'Küchenboxen',description:'Zwei Boxen.',hook:'Mehr Ordnung',searchTitle:'Küchenboxen',seoTitle:'Küchenboxen',seoDescription:'Zwei Boxen.',benefits:[{factId:'f1',text:'Zwei Boxen'}]};
+  try {
+    const result=await new Ingestion({store,localizer:async()=>copy,renderer})
+      .process({...raw,onlineStoreUrl:'not a URL'},{facts:[{id:'f1',text:'Two boxes'}]});
+    assert.equal(result.status,'pending_marketing');assert.equal(result.queued,0);
+    assert.ok(result.reasons.includes('NO_PUBLIC_PRODUCT_URL'));
+    assert.ok(!result.reasons.includes('INTERNAL_ERROR'));
+    assert.equal(posts.length,0);assert.equal(saved.at(-1)[1],'pending_marketing');
+  } finally {console.log=oldLog;}
+  assert.doesNotMatch(lines.join('\n'),/RENDER_INTERNAL_ERROR/);
+});
 test('missing facts produces a clear hold instead of three repeated product titles',async()=>{
   const saved=[];const i=new Ingestion({store:{product:async()=>null,saveProduct:async(...a)=>saved.push(a)},localizer:createSourceLocalizer(),renderer:{render:()=>assert.fail('No media on missing copy')}});
   const r=await i.process({...raw,description:'',descriptionHtml:''},prepareExistingInputs({...raw,description:'',descriptionHtml:''}),{prepareOnly:true});
