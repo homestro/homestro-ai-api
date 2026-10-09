@@ -54,10 +54,13 @@ export class Ingestion {
         reasons.push(codeOf(e));
         p.localizationPrepared=false;
       }
-      // Render the real media once localization succeeds. Product availability and rejection
-      // gates below still prevent drafts from being approved for publication.
+      // Do not build post payloads unless the product itself can be published. In
+      // particular, compilePost validates the purchase URL; trying it after recording
+      // NO_PUBLIC_PRODUCT_URL turns a known product-data issue into INTERNAL_ERROR.
+      const canPublishProduct=!p.rejected && p.status==='ACTIVE' &&
+        p.variants.some(v=>v.available && v.price>0) && !reasons.includes('NO_PUBLIC_PRODUCT_URL');
       let asset=null,queued=0;
-      if(p.localized){
+      if(p.localized && canPublishProduct){
         try {
           if(prepareOnly){
             const m=extractMedia(p.media);
