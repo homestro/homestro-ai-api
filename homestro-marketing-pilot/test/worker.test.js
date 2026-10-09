@@ -27,6 +27,17 @@ test('autonomy enforces the configured per-channel daily cap',async()=>{
   assert.match(selectionQuery,/SELECT count\(\*\) FROM marketing_posts recent WHERE recent.channel=s.channel/);
   assert.deepEqual(selectionParams,[[],3]);
 });
+test('worker explains when the rolling daily publication cap blocks the queue',async()=>{
+  const entries=[],original=console.log;
+  console.log=line=>entries.push(JSON.parse(line));
+  try {
+    const worker=new Worker({store:{withWorkerLock:fn=>fn({query:async()=>({rows:[{count:6}]})})},
+      cfg:{...cfg,autonomyEnabled:true,maxDailyPosts:6},meta:{},freshSnapshot:async()=>null,isPublishingWindow:()=>true});
+    await worker.tick();
+  } finally {console.log=original;}
+  assert.ok(entries.some(x=>x.code==='PUBLISH_BLOCKED' && x.reason==='DAILY_TOTAL_LIMIT' &&
+    x.publishedOrUncertainLast24h===6 && x.limit===6));
+});
 test('worker records published only after publisher confirms',async()=>{
   const s=setup();await s.worker.tick();assert.deepEqual(s.statuses,['publishing','published']);
 });
