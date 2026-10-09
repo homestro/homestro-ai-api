@@ -43,10 +43,10 @@ export class Worker {
           log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,reason:'PRODUCT_EXCLUDED'});return;
         }
         if(this.cfg.autonomyEnabled) {
-          const prior=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE channel=$1
-            AND ((status='published' AND published_at>now()-interval '24 hours')
-              OR (product_id=$2 AND id<>$3 AND status IN ('published','publishing','recovery_required')))`,
-            [job.channel,job.product_id,job.id])).rows[0].count);
+          const prior=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE product_id=$1 AND id<>$2
+            AND (status IN ('publishing','recovery_required') OR
+              (status='published' AND published_at>now()-interval '24 hours'))`,
+            [job.product_id,job.id])).rows[0].count);
           if(prior>0){log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,channel:job.channel,reason:'CHANNEL_OR_PRODUCT_RECENTLY_PUBLISHED',count:prior});return;}
         }
         if((job.product_id.startsWith('editorial:') || job.payload.kind==='brand_editorial') && !editorialEnabled()) {
