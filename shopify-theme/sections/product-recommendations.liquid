@@ -6,7 +6,8 @@
   elsif section_heading == blank
     assign section_heading = 'Das könnte Ihnen auch gefallen'
   endif
-  assign generic_collections = '|all|alle-produkte|bestseller|best-seller|neuheiten|new|new-arrivals|featured|frontpage|haushalt-wohnen|haustiere-tierpflege|garten-heimwerken|'
+  assign specific_collections = '|kuche-essen|hunde-katzen|zahnpflege|fellpflege|ohrenpflege|werkzeug|kinder-spielzeug|auto-pflege|reisen-unterwegs|sport-fitness|gesundheit-pflege|outdoor-freizeit|kinder-baby|'
+  assign generic_collections = '|all|alle-produkte|bestseller|best-seller|neuheiten|new|new-arrivals|featured|frontpage|bestseller-homestro-favoriten|haushalt-wohnen|haustiere-tierpflege|garten-heimwerken|'
   assign generic_types = '|haushalt|haushalt & wohnen|haustiere|haustiere & tierpflege|garten|garten & heimwerken|accessories|accessoires|general|other|sonstiges|'
 %}
 
@@ -14,37 +15,44 @@
   {% for recommendation in recommendations.products %}
     {% liquid
       assign is_relevant = false
-      if recommendation_intent == 'complementary'
-        assign is_relevant = true
-      else
         for category in product.collections
           assign category_key = category.handle | prepend: '|' | append: '|'
-          unless generic_collections contains category_key
+          if specific_collections contains category_key
             for recommended_category in recommendation.collections
               if category.id == recommended_category.id
                 assign is_relevant = true
                 break
               endif
             endfor
-          endunless
+          endif
           if is_relevant
             break
           endif
         endfor
-        assign source_type = product.type | strip | downcase
-        assign recommended_type = recommendation.type | strip | downcase
-        assign type_key = source_type | prepend: '|' | append: '|'
-        if source_type != blank and source_type == recommended_type
-          unless generic_types contains type_key
-            assign is_relevant = true
-          endunless
-        endif
-      endif
     %}
     {% if is_relevant %}{% render 'product-card', product: recommendation %}{% endif %}
   {% endfor %}
 {% endcapture %}
 {% assign recommendation_cards = recommendation_cards | strip %}
+{% if recommendation_cards == blank and recommendation_intent == 'related' %}
+  {% capture recommendation_cards %}
+    {% assign fallback_count = 0 %}
+    {% for category in product.collections %}
+      {% assign category_key = category.handle | prepend: '|' | append: '|' %}
+      {% if specific_collections contains category_key %}
+        {% for recommendation in category.products %}
+          {% if recommendation.id != product.id and recommendation.available %}
+            {% render 'product-card', product: recommendation %}
+            {% assign fallback_count = fallback_count | plus: 1 %}
+            {% if fallback_count >= section.settings.products_to_show %}{% break %}{% endif %}
+          {% endif %}
+        {% endfor %}
+        {% if fallback_count > 0 %}{% break %}{% endif %}
+      {% endif %}
+    {% endfor %}
+  {% endcapture %}
+  {% assign recommendation_cards = recommendation_cards | strip %}
+{% endif %}
 
 <section
   class="section product-recommendations"
@@ -61,7 +69,7 @@
             <h2 class="section-title">{{ section_heading }}</h2>
           </div>
         </div>
-        <div class="grid grid--4">
+        <div class="recommendations-row" tabindex="0" role="region" aria-label="{{ section_heading | escape }}">
           {{ recommendation_cards }}
         </div>
       </div>
