@@ -58,3 +58,21 @@ test('expired token in preflight does not reach mutation or throw into main pipe
 test('changed product invalidates old approval without publishing',async()=>{
   const s=setup({changed:true});await s.worker.tick();assert.equal(s.writes(),0);assert.deepEqual(s.statuses,['superseded']);
 });
+test('a different product posted on the same channel does not block this product',async()=>{
+  const statuses=[];let writes=0;
+  const job={id:'target',product_id:'p2',channel:'instagram',status:'approved',approved_at:new Date(),
+    payload:{productRevision:'rev',title:'Product 2'},remote:{}};
+  const client={query:async sql=>{
+    const q=String(sql);
+    if(q.includes('SELECT s.* FROM marketing_posts'))return {rows:[job]};
+    if(q.includes('WHERE channel=$1'))return {rows:[{count:1}]}; // A recent post for another product.
+    return {rows:[{count:0}]};
+  }};
+  const store={withWorkerLock:fn=>fn(client),product:async()=>({status:'ready'}),
+    setStatus:async(_id,status)=>statuses.push(status),checkpoint:async()=>{}};
+  const worker=new Worker({store,cfg:{...cfg,autonomyEnabled:true,maxDailyPosts:6,maxDailyPerChannel:3,excludedProductIds:[]},
+    meta:{verifyConnection:async()=>{},publish:async()=>{writes++;}},
+    freshSnapshot:async()=>({revision:'rev',status:'ACTIVE',variants:[{available:true,price:39}]}),isPublishingWindow:()=>true});
+  await worker.tick();
+  assert.equal(writes,1);assert.deepEqual(statuses,['publishing','published']);
+});
