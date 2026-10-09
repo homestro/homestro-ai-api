@@ -38,6 +38,14 @@ test('worker explains when the rolling daily publication cap blocks the queue',a
   assert.ok(entries.some(x=>x.code==='PUBLISH_BLOCKED' && x.reason==='DAILY_TOTAL_LIMIT' &&
     x.publishedOrUncertainLast24h===6 && x.limit===6));
 });
+test('worker explains when the database advisory lock is held elsewhere',async()=>{
+  const entries=[],original=console.log;console.log=line=>entries.push(JSON.parse(line));
+  try {
+    const worker=new Worker({store:{withWorkerLock:async()=>false},cfg:{...cfg},meta:{},freshSnapshot:async()=>null});
+    await worker.tick();
+  } finally {console.log=original;}
+  assert.ok(entries.some(x=>x.code==='PUBLISH_BLOCKED' && x.reason==='WORKER_DATABASE_LOCK_BUSY'));
+});
 test('worker records published only after publisher confirms',async()=>{
   const s=setup();await s.worker.tick();assert.deepEqual(s.statuses,['publishing','published']);
 });

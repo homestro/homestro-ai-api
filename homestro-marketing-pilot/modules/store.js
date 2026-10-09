@@ -56,7 +56,7 @@ export class Store {
     const c=await this.pool.connect(); let locked=false;
     try {
       locked=(await c.query('SELECT pg_try_advisory_lock(73341001) AS locked')).rows[0].locked;
-      if (!locked) return;
+      if (!locked) return false;
       // A process died after a side effect. Never auto-repeat uncertain publication.
       await c.query(`UPDATE marketing_posts SET status='recovery_required',error_code='INTERRUPTED_PUBLISH',updated_at=now()
         WHERE status='publishing'`);

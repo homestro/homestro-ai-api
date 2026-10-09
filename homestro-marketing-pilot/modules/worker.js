@@ -5,11 +5,12 @@ import {publicationWindow} from './autonomy.js';
 export class Worker {
   constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow});this.busy=false;}
   async tick(postId=null) {
-    if(this.busy || !this.cfg.workerEnabled || !this.cfg.publishingEnabled)return;
-    if(this.cfg.autonomyEnabled && !this.isPublishingWindow())return;
+    if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return;}
+    if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return;}
+    if(this.cfg.autonomyEnabled && !this.isPublishingWindow()){log('PUBLISH_BLOCKED',{reason:'OUTSIDE_PUBLISHING_WINDOW'});return;}
     this.busy=true;
     try {
-      await this.store.withWorkerLock(async client=>{
+      const acquired=await this.store.withWorkerLock(async client=>{
         const count=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE
           (status='published' AND published_at>now()-interval '24 hours') OR status='recovery_required'`)).rows[0].count);
         // Uncertain jobs consume quota until reconciled; never trigger a retry storm.
@@ -46,7 +47,7 @@ export class Worker {
             AND ((status='published' AND published_at>now()-interval '24 hours')
               OR (product_id=$2 AND id<>$3 AND status IN ('published','publishing','recovery_required')))`,
             [job.channel,job.product_id,job.id])).rows[0].count);
-          if(prior>0)return;
+          if(prior>0){log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,channel:job.channel,reason:'CHANNEL_OR_PRODUCT_RECENTLY_PUBLISHED',count:prior});return;}
         }
         if((job.product_id.startsWith('editorial:') || job.payload.kind==='brand_editorial') && !editorialEnabled()) {
           await this.store.setStatus(job.id,'superseded','EDITORIAL_DISABLED');
@@ -89,8 +90,9 @@ export class Worker {
           log('RECOVERY_REQUIRED',{postId:job.id,productId:job.product_id,channel:job.channel,phase:remote?.phase||'preflight',reason:codeOf(e)});
         }
       });
+      if(acquired===false)log('PUBLISH_BLOCKED',{reason:'WORKER_DATABASE_LOCK_BUSY'});
     }catch(e){log('PUBLISH_TICK_ERROR',{reason:codeOf(e)});}finally{this.busy=false;}
   }
-  start(){if(this.timer)return;this.timer=setInterval(()=>void this.tick(),this.cfg.intervalMs);this.timer.unref();void this.tick();}
+  start(){if(this.timer)return;log('PUBLISH_WORKER_STARTED',{workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled,intervalMs:this.cfg.intervalMs});this.timer=setInterval(()=>void this.tick(),this.cfg.intervalMs);this.timer.unref();void this.tick();}
   stop(){clearInterval(this.timer);this.timer=null;}
 }
