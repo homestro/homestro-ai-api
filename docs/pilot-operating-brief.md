@@ -257,3 +257,8 @@ Sessions may include testing/owner traffic; not proof of unique customers or sal
 Review UI now displays confirmed publication links separately from approvals and
 pending results, without taking approval/publishing actions on page load.
 114/114 tests pass including generated UI harness for that distinction.
+
+
+## Google Merchant repair — 2026-10-10
+Live account 5447184929 still has the CRITICAL Misrepresentation account issue; all 50 loaded products are disapproved. Current Shopify delivery pages already describe Germany and Austria correctly; cached search excerpts were stale. Existing 30-day return page gid://shopify/Page/700011872638 (ruckgaberecht) was unpublished while the shipping/FAQ/terms/withdrawal pages linked to it. Published the existing page without changing its policy text; independent rendered audit now returns HTTP 200 and canonical https://homestro.de/pages/ruckgaberecht.
+Legacy Google organic feed incorrectly charged DE EUR6.99 for every item even when one item costs EUR50 or more and qualifies for the advertised free shipping. Corrected the per-item DE shipping cost to EUR0.00 at >=EUR50, preserving EUR6.99 below and Austria EUR14.99. Regression covers EUR49.99, EUR50 and EUR79.99 and unchanged product prices. No brand or identifier claims were invented. Opera was not connected during the audit; no Merchant review has been submitted and no Google approval is claimed. Ad spend remains EUR0.
