@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {hash,fail,codeOf,log,productURL} from './core.js';
 import {compilePost} from './localization.js';
 import {ZernioOrganic} from './zernio.js';
+import {channelPolicy,repeatedMedia} from './publishing-policy.js';
 
 export function socialConfig(env,base) {
   const enabled=String(env.PILOT_SOCIAL_ENABLED).toLowerCase()==='true';
@@ -150,10 +151,9 @@ export class SocialCoordinator {
         const used=(await client.query(`SELECT count(*)::int AS n FROM marketing_social_posts
           WHERE channel=$1 AND (status IN ('publishing','remote_pending','recovery_required')
             OR published_at>now()-interval '24 hours' OR attempted_at>now()-interval '24 hours')`,[job.channel])).rows[0].n;
-        const spacing=this.cfg.publishEveryHours||24;
-        const dailyLimit=this.cfg.publishEveryHours?Math.min(6,Math.ceil(24/spacing)):1;
+        const policy=channelPolicy(this.cfg,job.channel),spacing=policy.hours,dailyLimit=policy.daily;
         if(used>=dailyLimit)continue;
-        if(this.cfg.publishEveryHours) {
+        if(this.cfg.publishEveryHours||this.cfg.organicPolicy==='balanced-v1') {
           const recent=(await client.query(`SELECT count(*)::int AS recent FROM marketing_social_posts
             WHERE channel=$1 AND COALESCE(attempted_at,published_at)>now()-$2::int*interval '1 hour'`,[job.channel,spacing])).rows[0].recent;
           if(recent>0)continue;
@@ -163,6 +163,10 @@ export class SocialCoordinator {
           [job.product_id,job.channel,job.id])).rows.length;
         let claimed=false;
         try{
+          if(await repeatedMedia(client,'marketing_social_posts',job,this.cfg)){
+            await client.query("UPDATE marketing_social_posts SET status='superseded',error_code='REPEATED_MEDIA' WHERE id=$1",[job.id]);
+            log('SOCIAL_PUBLISH_SKIPPED',{postId:job.id,channel:job.channel,reason:'REPEATED_MEDIA'});continue;
+          }
           const p=await this.freshSnapshot(job.product_id);
           if(duplicate||!eligible(p,this.cfg)||p.revision!==job.payload.productRevision){
             await client.query("UPDATE marketing_social_posts SET status='superseded',error_code='SOCIAL_SOURCE_CHANGED' WHERE id=$1",[job.id]);continue;

@@ -194,3 +194,21 @@ changes. It never gives consent for later unseen drafts. Tests: 101/101 pass,
 including four-hour/overnight/cap scenarios, stale draft consent and the actual
 generated UI script exercised in a DOM harness for successful/partial batches.
 
+
+
+## Owner-authorized balanced organic publishing — 10 October 2026, 20:56 Berlin
+Mirko explicitly delegated the best publishing settings after official-policy
+research. Implemented balanced-v1: Facebook/Instagram maximum two each per rolling
+24 hours, eight-hour minimum; TikTok maximum four with four-hour minimum; Pinterest
+maximum six with two-hour minimum. New submissions run 09:00–22:00 Berlin only.
+No overnight or catch-up flood. Exact-media references on one channel within 30
+days are suppressed across product IDs. This is not a visual similarity classifier
+or guarantee of original content. Existing stock/revision/product guards, recovery
+holds, commercial TikTok disclosure and authentic preview/batch consent remain.
+Pinterest descriptions no longer duplicate the long URL; links remain in the
+provider destination field. Only complete trailing benefit sentences are omitted
+when required to meet 800 characters. No new AI/Ads/paid video service added.
+107/107 marketing tests passed, including real FFmpeg and batch-review harness.
+Startup ORGANIC_PUBLISH_POLICY logs and authenticated status expose per-channel
+limits. Deployment verification must use the actual new commit and Railway logs;
+this record does not itself prove a new live TikTok/Pinterest post.

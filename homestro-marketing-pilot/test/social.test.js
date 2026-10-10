@@ -47,8 +47,9 @@ test('Berlin window observes daylight saving boundaries',()=>{
   assert.equal(berlinWindow(new Date('2026-12-10T08:00:00Z')),true);
 });
 
-function fixture({current=source(),used=0,recent=0,duplicate=false,pending=[],submitError,enabled=true}={}){
+function fixture({current=source(),used=0,recent=0,duplicate=false,repeated=false,channel='pinterest',pending=[],submitError,enabled=true}={}){
   const queries=[],j=job();let submits=0,reconciles=0;
+  j.channel=channel;
   const client={release(){},async query(sql,args=[]){
     queries.push({sql,args});
     if(sql.includes('pg_try_advisory_lock'))return {rows:[{locked:true}]};
@@ -56,6 +57,7 @@ function fixture({current=source(),used=0,recent=0,duplicate=false,pending=[],su
     if(sql.includes("status='approved' ORDER BY"))return {rows:[j]};
     if(sql.includes('count(*)::int AS n'))return {rows:[{n:used}]};
     if(sql.includes('count(*)::int AS recent'))return {rows:[{recent}]};
+    if(sql.includes("interval '30 days'"))return {rows:repeated?[{id:'other-product'}]:[]};
     if(sql.includes('AND id<>$3'))return {rows:duplicate?[{id:'other'}]:[]};
     return {rows:[],rowCount:1};
   }};
@@ -68,7 +70,7 @@ function fixture({current=source(),used=0,recent=0,duplicate=false,pending=[],su
     await checkpoint({providerPostId:'b'.repeat(24)});
     return {status:'verification_pending',permalink:null};
   },async reconcile(){reconciles++;return {status:'published',permalink:'https://www.pinterest.com/pin/123/'};}};
-  const c=new SocialCoordinator({pool,cfg:{...base,publishingEnabled:enabled},providerCfg,freshSnapshot:async()=>current,provider});
+  const c=new SocialCoordinator({pool,cfg:{...base,publishingEnabled:enabled},providerCfg:{...providerCfg,accounts:{[channel]:'a'.repeat(24)}},freshSnapshot:async()=>current,provider});
   return {c,queries,get submits(){return submits;},get reconciles(){return reconciles;}};
 }
 const midday=new Date('2026-10-10T12:00:00Z');
@@ -120,4 +122,29 @@ test('batch consent cannot approve a changed draft revision',()=>{
   const j={...job(),revision:'draft-new',status:'draft_queued'};
   assert.throws(()=>approvePayload(j,{reviewer:'owner',expectedRevision:'draft-old'},'rev'),{code:'SOCIAL_REVIEW_STALE'});
   assert.equal(approvePayload(j,{reviewer:'owner',expectedRevision:'draft-new'},'rev').reviewer,'owner');
+});
+
+test('balanced social limits and gaps differ by platform',async()=>{
+  for(const [channel,daily,hours] of [['pinterest',6,2],['tiktok',4,4]]){
+    const below=fixture({channel,used:daily-1});below.c.cfg.organicPolicy='balanced-v1';below.c.cfg.publishEveryHours=8;
+    await below.c.tick(midday);assert.equal(below.submits,1);
+    assert.ok(below.queries.some(q=>q.sql.includes('AS recent')&&q.args[1]===hours));
+    const capped=fixture({channel,used:daily});capped.c.cfg.organicPolicy='balanced-v1';
+    await capped.c.tick(midday);assert.equal(capped.submits,0);
+    const spaced=fixture({channel,recent:1});spaced.c.cfg.organicPolicy='balanced-v1';
+    await spaced.c.tick(midday);assert.equal(spaced.submits,0);
+  }
+});
+test('balanced social publishing stops overnight and rejects reused media from another product',async()=>{
+  const night=fixture();night.c.cfg.organicPolicy='balanced-v1';await night.c.tick(new Date('2026-10-10T23:00:00Z'));assert.equal(night.submits,0);
+  const f=fixture({repeated:true});f.c.cfg.organicPolicy='balanced-v1';await f.c.tick(midday);assert.equal(f.submits,0);
+  assert.ok(f.queries.some(q=>q.sql.includes("error_code='REPEATED_MEDIA'")));
+});
+test('long Pinterest copy retains destination link and price without exceeding description limit',()=>{
+  const p=source();p.localized.hook='H'.repeat(100);p.localized.benefits=Array.from({length:3},(_,i)=>({text:String(i).repeat(200)}));
+  p.url='https://homestro.de/products/'+ 'x'.repeat(200);
+  const pin=prepareSocial(p,'pinterest',providerCfg);
+  assert.ok(pin.caption.length<=800);assert.match(pin.caption,/20,00/);
+  assert.equal(pin.caption.includes('https://'),false);assert.match(pin.productURL,/utm_source=pinterest/);
+  assert.equal(p.localized.benefits.length,3);
 });

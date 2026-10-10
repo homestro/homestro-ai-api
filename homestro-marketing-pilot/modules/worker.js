@@ -1,6 +1,7 @@
 import {codeOf,log} from './core.js';
 import {editorialEnabled,validEditorial} from './editorial.js';
 import {publicationWindow} from './autonomy.js';
+import {repeatedMedia} from './publishing-policy.js';
 
 export class Worker {
   constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow});this.busy=false;}
@@ -37,6 +38,12 @@ export class Worker {
           log('PUBLISH_BLOCKED',{reason:'NO_ELIGIBLE_APPROVED_POST',publishedOrUncertainLast24h:count,limit:this.cfg.maxDailyPosts});
           return;
         }
+        if(this.cfg.organicPolicy==='balanced-v1'){
+          const used=Number((await client.query(`SELECT count(*) AS channel_used FROM marketing_posts
+            WHERE channel=$1 AND (status IN ('publishing','recovery_required') OR
+              (status='published' AND published_at>now()-interval '24 hours'))`,[job.channel])).rows[0].channel_used);
+          if(used>=this.cfg.maxDailyPerChannel){log('PUBLISH_BLOCKED',{reason:'DAILY_CHANNEL_LIMIT',channel:job.channel});return;}
+        }
         if(this.cfg.publishEveryHours) {
           const recent=Number((await client.query(`SELECT count(*) AS recent FROM marketing_posts WHERE channel=$1
             AND status IN ('published','publishing','recovery_required')
@@ -61,6 +68,10 @@ export class Worker {
         if((job.product_id.startsWith('editorial:') || job.payload.kind==='brand_editorial') && !editorialEnabled()) {
           await this.store.setStatus(job.id,'superseded','EDITORIAL_DISABLED');
           log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,reason:'EDITORIAL_DISABLED'});return;
+        }
+        if(await repeatedMedia(client,'marketing_posts',job,this.cfg)){
+          await this.store.setStatus(job.id,'superseded','REPEATED_MEDIA');
+          log('PUBLISH_SKIPPED',{postId:job.id,channel:job.channel,reason:'REPEATED_MEDIA'});return;
         }
         await this.meta.verifyConnection();
         const stored=await this.store.product(job.product_id);

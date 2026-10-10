@@ -15,8 +15,12 @@ import {approveReviewed,verifyHistory} from './autonomy.js';
 import {SocialCoordinator,socialConfig} from './social.js';
 import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
+import {channelPolicy} from './publishing-policy.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
+  log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
+    channelPolicies:Object.fromEntries(['facebook','instagram','tiktok','pinterest'].map(c=>[c,channelPolicy(cfg,c)])),
+    publishAroundClock:cfg.publishAroundClock,adSpendEUR:0});
   if(String(process.env.PILOT_SOCIAL_CHECK_CONNECTION).toLowerCase()==='true') {
     inspectSocialConnection(process.env).then(result=>log('SOCIAL_CONNECTION_CHECK',result))
       .catch(e=>log('SOCIAL_CONNECTION_CHECK_FAILED',{reason:codeOf(e)}));
@@ -89,8 +93,9 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       const counts=(await pool.query('SELECT channel,status,count(*)::int AS count FROM marketing_social_posts GROUP BY channel,status')).rows;
       res.json({configured:true,channels:Object.keys(social.providerCfg.accounts),counts,
         publishingEnabled:cfg.workerEnabled&&cfg.publishingEnabled&&social.providerCfg.publishingEnabled,
-        maximumDailyPerChannel:cfg.publishEveryHours?Math.min(6,Math.ceil(24/cfg.publishEveryHours)):1,
+        maximumDailyPerChannel:Math.max(...['tiktok','pinterest'].map(c=>channelPolicy(cfg,c).daily)),
         publishEveryHours:cfg.publishEveryHours||24,publishAroundClock:cfg.publishAroundClock,
+        channelPolicies:Object.fromEntries(['facebook','instagram','tiktok','pinterest'].map(c=>[c,channelPolicy(cfg,c)])),
         tiktokRequiresPreviewConsent:true,adSpendEUR:0});
     }));
     router.get('/social/posts',route(async(req,res)=>res.json(await socialRequired().list(req.query.status||'draft_queued'))));

@@ -29,7 +29,9 @@ el('load').onclick=async()=>{
   if(!status.configured)throw new Error('SOCIAL_NOT_CONFIGURED');
   const jobs=await api('posts');let creator;
   if(jobs.some(j=>j.channel==='tiktok'))creator=await api('tiktok-settings');
-  el('schedule').textContent='Pilot odesílá nejdříve každých '+status.publishEveryHours+' hodin na každé síti, nejvýše '+status.maximumDailyPerChannel+' za 24 hodin'+(status.publishAroundClock?' (i v noci).':' mezi 9:00 a 22:00 berlínského času.');
+  el('schedule').textContent=status.channelPolicies
+    ? Object.entries(status.channelPolicies).map(([channel,p])=>channel+': nejvýše '+p.daily+' za 24 hodin, odstup alespoň '+p.hours+' h').join('; ')+(status.publishAroundClock?' (i v noci).':' mezi 9:00 a 22:00 berlínského času. Schválení nezaručuje zveřejnění ani dosah.')
+    : 'Pilot odesílá nejdříve každých '+status.publishEveryHours+' hodin na každé síti, nejvýše '+status.maximumDailyPerChannel+' za 24 hodin'+(status.publishAroundClock?' (i v noci).':' mezi 9:00 a 22:00 berlínského času.');
   el('posts').replaceChildren();el('bulk').replaceChildren();el('bulk').hidden=!creator;let approved=0,busy=false;
   const records=[];
   const progress=()=>{el('message').textContent=(jobs.length-approved)+' příspěvků ke kontrole; '+approved+' schváleno v tomto přehledu.';};

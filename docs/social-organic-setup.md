@@ -52,7 +52,7 @@ otherwise approve each Pinterest draft in the same page.
 
 Once the two accounts and drafts are verified, set PILOT_SOCIAL_PUBLISH_ENABLED=true.
 The legacy default remains one product per social channel in a rolling 24-hour
-window, inside 09:00–22:00 Europe/Berlin. Owner requested four-hour cadence on
+window, inside 09:00–22:00 Europe/Berlin. Historical owner request: four-hour cadence on
 10 October 2026. Configure PILOT_PUBLISH_EVERY_HOURS=4,
 PILOT_PUBLISH_AROUND_CLOCK=true, PILOT_MAX_DAILY_PER_CHANNEL=6,
 PILOT_MAX_DAILY_POSTS=12 and PILOT_PUBLISH_ONCE=false. Meta has its separate
@@ -90,3 +90,44 @@ Official references:
 - https://docs.zernio.com/platforms/tiktok
 - https://docs.zernio.com/platforms/pinterest
 - https://docs.zernio.com/posts/create-post
+
+
+## Current owner policy — 10 October 2026, after official-policy research
+
+PILOT_ORGANIC_POLICY=balanced-v1 supersedes the historical all-channel four-hour
+configuration above. It normalizes Meta configuration to an eight-hour minimum,
+two posts per channel per rolling 24 hours and four total Meta posts. TikTok uses
+four-hour spacing with four attempts per rolling 24 hours; Pinterest uses two-hour
+spacing with six attempts. All new publishing runs only 09:00–22:00 Europe/Berlin
+(DST-aware). These are maximums, not promised delivery counts or platform limits;
+missing approvals, stock changes, old quota entries and unresolved writes reduce
+actual publishing. There is no catch-up burst. Use PILOT_PUBLISH_EVERY_HOURS=8,
+PILOT_PUBLISH_AROUND_CLOCK=false, PILOT_MAX_DAILY_PER_CHANNEL=2,
+PILOT_MAX_DAILY_POSTS=4 alongside the policy for explicit operational clarity.
+
+Before remote submission, both queues reject exactly repeated media references
+on the same channel within 30 days, including across different product IDs, using
+REPEATED_MEDIA. Images are compared as sorted sets; a matching video URL also
+counts. This is not perceptual duplicate detection: visually similar files at
+other URLs or re-rendered videos can differ. Existing product/history guards and
+uncertain-write holds remain. TikTok per-post/batch preview and consent are unchanged.
+The review status returns channelPolicies and the UI shows these distinct caps.
+
+Pinterest descriptions retain full factual sentences, price and shipping note;
+the product URL is in its dedicated destination field rather than repeated in the
+description. If necessary, trailing benefit sentences are omitted to fit 800
+characters; claims are never truncated into new meanings. Newly changed drafts
+receive new revisions; previously approved TikTok drafts are not altered by this
+Pinterest-only change. No AI, ads, paid music or additional account is added.
+
+Official policy references consulted:
+- https://about.fb.com/news/2026/03/rewarding-original-creators-on-facebook/
+- https://about.fb.com/news/2025/04/cracking-down-spammy-content-facebook/
+- https://about.fb.com/ltam/news/2024/05/ayudando-a-los-creadores-a-encontrar-nuevas-audiencias/
+- https://policy.pinterest.com/en/community-guidelines
+- https://support.tiktok.com/en/business-and-creator/creator-and-business-accounts/promoting-a-brand-product-or-service
+
+Validation: 107/107 marketing tests pass, including differentiated caps/gaps,
+night exclusion, exact-media suppression before Meta preflight, explicit-ID channel
+caps, Pinterest long-copy preservation and unchanged TikTok batch-consent tests.
+No guarantee of recommendation eligibility, reach or sales is implied.

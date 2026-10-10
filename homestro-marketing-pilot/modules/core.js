@@ -56,15 +56,19 @@ export function config(env=process.env) {
     maxDailyPerChannel:Number(env.PILOT_MAX_DAILY_PER_CHANNEL||3),
     publishEveryHours:Number(env.PILOT_PUBLISH_EVERY_HOURS||0),
     publishAroundClock:envBool(env.PILOT_PUBLISH_AROUND_CLOCK),
+    organicPolicy:env.PILOT_ORGANIC_POLICY||'',
     feedCap:Number(env.PILOT_FEED_MAX_OFFERS||50), intervalMs:60000};
   cfg.autonomyEnabled=env.PILOT_AUTONOMY_POLICY==='homestro-reviewed-organic-v1';
   cfg.excludedProductIds=(env.META_ORGANIC_EXCLUDED_PRODUCT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean);
   if(!/^v\d+\.\d+$/.test(cfg.graphVersion) || !/^\d+$/.test(cfg.pageId) || !/^\d+$/.test(cfg.instagramId))fail('INVALID_META_CONFIG');
   if(!Number.isInteger(cfg.publishEveryHours)||cfg.publishEveryHours<0||cfg.publishEveryHours>24)fail('INVALID_PUBLISH_INTERVAL');
+  if(!['','balanced-v1'].includes(cfg.organicPolicy))fail('INVALID_ORGANIC_POLICY');
   if(!Number.isInteger(cfg.maxDailyPosts) || cfg.maxDailyPosts<1 || cfg.maxDailyPosts>(cfg.publishEveryHours?24:10) ||
     !Number.isInteger(cfg.maxDailyPerChannel) || cfg.maxDailyPerChannel<1 || cfg.maxDailyPerChannel>(cfg.publishEveryHours?6:5))fail('INVALID_DAILY_LIMIT');
   if(!Number.isFinite(cfg.feeRate) || cfg.feeRate<0 || cfg.feeRate>=1)fail('INVALID_FEE_RATE');
   if(!Array.isArray(cfg.shipping) || !cfg.shipping.length)fail('INVALID_SHIPPING');
+  if(cfg.organicPolicy==='balanced-v1')Object.assign(cfg,{publishEveryHours:8,
+    publishAroundClock:false,maxDailyPosts:4,maxDailyPerChannel:2});
   return cfg;
 }
 

@@ -56,9 +56,19 @@ export function compilePost(product,channel,asset) {
     ? 'Entdecke das Produkt bei Homestro – über den Link in unserem Profil.'
     : 'Jetzt bei Homestro entdecken:';
   const price=Math.min(...product.variants.filter(v=>v.available && v.price>0).map(v=>Number(v.price))).toLocaleString('de-DE',{style:'currency',currency:'EUR'});
-  const caption=[c.hook,...c.benefits.map(b=>'• '+b.text),`Ab ${price} zzgl. Versand.`,cta,link,hashtags.join(' ')].join('\n\n');
+  // Pinterest has a dedicated destination link. Keep its description within 800
+  // characters without cutting claims mid-sentence or losing the product URL.
+  const benefits=c.benefits.map(b=>'• '+b.text);
+  const parts=channel==='pinterest'
+    ? [c.hook,...benefits,`Ab ${price} zzgl. Versand.`,cta,hashtags.join(' ')]
+    : [c.hook,...benefits,`Ab ${price} zzgl. Versand.`,cta,link,hashtags.join(' ')];
+  if(channel==='pinterest')while(parts.join('\n\n').length>800&&benefits.length){
+    parts.splice(benefits.length,1);benefits.pop();
+  }
+  const caption=parts.join('\n\n');
   if(caption.length>2200)fail('CAPTION_TOO_LONG');
   return {productRevision:product.revision,channel,...asset,
     title:c.title,caption,link,hashtags,adSpendEUR:0,locationId:null,
     instagramLinkNote:channel==='instagram'?'Caption links are not clickable. Maintain a matching link in bio.':null};
 }
+
