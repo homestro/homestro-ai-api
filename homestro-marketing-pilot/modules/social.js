@@ -153,17 +153,20 @@ export class SocialCoordinator {
         const duplicate=(await client.query(`SELECT id FROM marketing_social_posts WHERE product_id=$1 AND channel=$2
           AND id<>$3 AND status IN ('publishing','remote_pending','published','recovery_required') LIMIT 1`,
           [job.product_id,job.channel,job.id])).rows.length;
+        let claimed=false;
         try{
           const p=await this.freshSnapshot(job.product_id);
           if(duplicate||!eligible(p,this.cfg)||p.revision!==job.payload.productRevision){
             await client.query("UPDATE marketing_social_posts SET status='superseded',error_code='SOCIAL_SOURCE_CHANGED' WHERE id=$1",[job.id]);continue;
           }
           await client.query("UPDATE marketing_social_posts SET status='publishing',attempted_at=now(),updated_at=now() WHERE id=$1",[job.id]);
+          claimed=true;
           const state=await this.provider.submit({...job,status:'publishing'},remote=>this.checkpoint(job.id,remote));
           await this.settle(job.id,state);
         }catch(e){
-          await client.query(`UPDATE marketing_social_posts SET status='recovery_required',error_code=$2,updated_at=now() WHERE id=$1`,[job.id,codeOf(e)]);
-          log('SOCIAL_RECOVERY_REQUIRED',{postId:job.id,reason:codeOf(e)});
+          await client.query(`UPDATE marketing_social_posts SET status=$3,error_code=$2,updated_at=now() WHERE id=$1`,
+            [job.id,codeOf(e),claimed?'recovery_required':'approved']);
+          log(claimed?'SOCIAL_RECOVERY_REQUIRED':'SOCIAL_SOURCE_CHECK_PENDING',{postId:job.id,reason:codeOf(e)});
         }
       }
     }finally{

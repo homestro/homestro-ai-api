@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {SocialCoordinator,prepareSocial,approvePayload,eligible,socialConfig,berlinWindow} from '../modules/social.js';
+import {fail} from '../modules/core.js';
 
 const source=()=>({id:'gid://shopify/Product/1',status:'ACTIVE',contentReviewed:true,revision:'rev',
   url:'https://homestro.de/products/test',variants:[{available:true,price:20}],categoryKey:'home',
@@ -62,7 +63,7 @@ function fixture({current=source(),used=0,duplicate=false,pending=[],submitError
     submits++;
     assert.ok(queries.some(q=>q.sql.includes("SET status='publishing'")));
     await checkpoint({phase:'zernio_submit_intent'});
-    if(submitError)throw Object.assign(new Error(submitError),{code:submitError});
+    if(submitError)fail(submitError);
     await checkpoint({providerPostId:'b'.repeat(24)});
     return {status:'verification_pending',permalink:null};
   },async reconcile(){reconciles++;return {status:'published',permalink:'https://www.pinterest.com/pin/123/'};}};
@@ -91,7 +92,13 @@ test('reconciliation can settle a restart without publishing enabled',async()=>{
 });
 test('uncertain submission enters recovery and no second submit occurs in a tick',async()=>{
   const f=fixture({submitError:'ZERNIO_RESULT_UNCERTAIN'});await f.c.tick(midday);
-  assert.equal(f.submits,1);assert.ok(f.queries.some(q=>q.sql.includes("status='recovery_required',error_code=$2")));
+  assert.equal(f.submits,1);assert.ok(f.queries.some(q=>q.sql.includes("SET status=$3,error_code=$2")&&q.args[2]==='recovery_required'));
+});
+test('temporary Shopify read failure preserves approval without consuming publication quota',async()=>{
+  const f=fixture();f.c.freshSnapshot=async()=>{throw new Error('timeout');};
+  await f.c.tick(midday);assert.equal(f.submits,0);
+  assert.ok(f.queries.some(q=>q.sql.includes('SET status=$3,error_code=$2')&&q.args[2]==='approved'));
+  assert.equal(f.queries.some(q=>q.sql.includes("SET status='publishing'")),false);
 });
 test('pool failure releases local busy guard for the next worker tick',async()=>{
   const f=fixture();f.c.pool.connect=async()=>{throw new Error('pool unavailable');};

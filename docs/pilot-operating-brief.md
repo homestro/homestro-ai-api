@@ -156,6 +156,11 @@ Implementation tests are local verification only. Owner Zernio signup/OAuth,
 provider secrets, deployment, PostgreSQL migration and real public platform links
 are not yet verified. No claim of live TikTok/Pinterest operation is made.
 Setup and exact variables: docs/social-organic-setup.md.
+Reviewable GitHub change: https://github.com/homestro/homestro-ai-api/pull/79
+(draft, not merged/deployed). The initial commit is
+6d790e994ed1282965e474ee1eb07d67c404cd2e. Local marketing regression tests passed
+89/89, including real FFmpeg rendering; subsequent read-failure regression raises
+the suite to 90 tests. This PR is implementation evidence, not a live post link.
 Zernio currently advertises two connected accounts free; do not add a card or third
 account. Existing Railway/OpenAI running costs remain.
 
