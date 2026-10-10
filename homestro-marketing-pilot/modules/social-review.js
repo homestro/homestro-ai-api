@@ -13,7 +13,7 @@ button,input,select{font:inherit;padding:8px}pre{white-space:pre-wrap;overflow-w
 <p id="schedule">Načtěte příspěvky a aktuální nastavení publikování. Schválení zařadí obsah do fronty.</p>
 <label>Přístupový klíč pilota <input id="key" type="password" autocomplete="off"></label>
 <label>Vaše jméno <input id="reviewer" autocomplete="name"></label>
-<button id="load">Načíst příspěvky</button><p id="message" role="status"></p><section id="bulk" hidden></section><main id="posts"></main>
+<button id="load">Načíst příspěvky</button><section id="report"></section><p id="message" role="status"></p><section id="bulk" hidden></section><main id="posts"></main>
 <script nonce="${nonce}">
 const el=id=>document.getElementById(id);
 async function api(path,body){
@@ -27,6 +27,20 @@ el('load').onclick=async()=>{
  try{
   const status=await api('status');
   if(!status.configured)throw new Error('SOCIAL_NOT_CONFIGURED');
+  const report=el('report');report.replaceChildren();node('h2','Stav zveřejňování',report);
+  const names={facebook:'Facebook',instagram:'Instagram',tiktok:'TikTok',pinterest:'Pinterest'};
+  const labels={published:'zveřejněno',approved:'schváleno ve frontě',draft_queued:'ke schválení',
+    remote_pending:'čeká na potvrzení sítě',recovery_required:'vyžaduje kontrolu výsledku'};
+  for(const [channel,name] of Object.entries(names)){
+    const rows=(status.counts||[]).filter(r=>r.channel===channel&&labels[r.status]);
+    if(rows.length)node('p',name+': '+rows.map(r=>labels[r.status]+' '+Number(r.count)).join('; ')+'.',report);
+  }
+  node('p','Odeslaný nebo schválený návrh není potvrzená publikace. Rozpočet na placené reklamy: 0 €.',report);
+  for(const p of (status.publications||[]).slice(0,8)){
+    const line=node('p','',report),a=node('a','Otevřít zveřejněný příspěvek – '+(names[p.channel]||p.channel),line);
+    a.href=p.permalink;a.target='_blank';a.rel='noopener';
+  }
+  for(const f of status.failures||[])node('p',(names[f.channel]||f.channel)+': '+Number(f.count)+' příspěvků čeká na technickou kontrolu. Znovu je neschvalujte.',report);
   const jobs=await api('posts');let creator;
   if(jobs.some(j=>j.channel==='tiktok'))creator=await api('tiktok-settings');
   el('schedule').textContent=status.channelPolicies

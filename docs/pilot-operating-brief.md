@@ -241,3 +241,19 @@ DAILY_TOTAL_LIMIT (six historical posts/uncertain attempts versus new total cap4
 Merchant read-only audit: Homestro.de account5447184929 has 50/50 items disapproved
 for misrepresentation. Account-level CRITICAL issue also impacts FREE_LISTINGS.
 This change does not remove Google suspension or prove a new TikTok publication.
+
+Verified at 19:34 UTC: quality commit0ba2f786628fda2180270b43941d23555092aa2b
+reached Railway SUCCESS, deploymentd98419dc-1ab0-4709-b306-1d778028ddd7.
+Startup publication report: FB9published/103approved; IG9published/103approved;
+Pinterest2published/109approved; TikTok1published/104approved/6drafts. No active
+social error codes were present. Last TikTok publication recorded19:10UTC:
+https://www.tiktok.com/@homestroo/video/7695118040219782433
+Last Pinterest publication recorded18:53:45UTC:
+https://www.pinterest.com/pin/1094585884467476768/
+These are provider-confirmed DB records; search retrieval could not independently
+open those posts. Reports do not prove the new photo/template already appeared.
+Shopify analytics for homestro_pilot UTM campaign, last7days:52sessions (IG47,FB5).
+Sessions may include testing/owner traffic; not proof of unique customers or sales.
+Review UI now displays confirmed publication links separately from approvals and
+pending results, without taking approval/publishing actions on page load.
+114/114 tests pass including generated UI harness for that distinction.

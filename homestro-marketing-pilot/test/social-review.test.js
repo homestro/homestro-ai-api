@@ -11,12 +11,14 @@ class Element {
 }
 function descendants(root){return root.children.flatMap(n=>[n,...descendants(n)]);}
 async function fixture(partial=false){
- const nodes=Object.fromEntries(['key','reviewer','load','message','posts','bulk','schedule'].map(id=>[id,new Element(id==='load'?'button':'div')]));
+ const nodes=Object.fromEntries(['key','reviewer','load','message','posts','bulk','schedule','report'].map(id=>[id,new Element(id==='load'?'button':'div')]));
  nodes.key.value='not-a-real-key';nodes.reviewer.value='Mirko';const writes=[];
  const document={getElementById:id=>nodes[id],createElement:tag=>new Element(tag)};
  const fetch=async(path,opts)=>{
   let result;
-  if(path.endsWith('/status'))result={configured:true,publishEveryHours:4,maximumDailyPerChannel:6,publishAroundClock:true};
+  if(path.endsWith('/status'))result={configured:true,publishEveryHours:4,maximumDailyPerChannel:6,publishAroundClock:true,
+    counts:[{channel:'tiktok',status:'remote_pending',count:1},{channel:'pinterest',status:'published',count:2}],
+    publications:[{channel:'pinterest',permalink:'https://www.pinterest.com/pin/123/'}]};
   else if(path.endsWith('/posts'))result=[0,1].map(i=>({id:'job-'+i,revision:'draft-'+i,channel:'tiktok',payload:{title:'Produkt '+i,caption:'Preview',format:'carousel',imageURLs:[],productURL:'https://homestro.de/products/test'}}));
   else if(path.endsWith('/tiktok-settings'))result={privacyLevels:[{value:'PUBLIC_TO_EVERYONE'}],postingLimits:{interactionSettings:{allow_comment:{enabled:true}}}};
   else if(path.endsWith('/approve')){writes.push({path,body:JSON.parse(opts.body)});if(partial&&path.includes('job-1'))return {ok:false,json:async()=>({error:'SOCIAL_REVIEW_STALE'})};result={status:'approved'};}
@@ -49,4 +51,11 @@ test('batch failure preserves remaining unapproved item and never silently retri
 test('changing the selected manifest clears previous batch consent',async()=>{
  const f=await fixture();await consent(f);f.all.onclick();assert.equal(f.batch.disabled,true);
  f.all.onclick();assert.equal(f.batch.disabled,true);assert.equal(f.writes.length,0);
+});
+test('review screen shows published links separately from pending submissions without approving anything',async()=>{
+ const f=await fixture(),nodes=descendants(f.nodes.report);
+ assert.ok(nodes.some(n=>n.textContent?.includes('TikTok: čeká na potvrzení sítě 1')));
+ assert.ok(nodes.some(n=>n.textContent?.includes('Pinterest: zveřejněno 2')));
+ assert.equal(nodes.find(n=>n.tagName==='A').href,'https://www.pinterest.com/pin/123/');
+ assert.equal(f.writes.length,0);
 });
