@@ -54,13 +54,17 @@ export function config(env=process.env) {
     mediaHosts:(env.PILOT_MEDIA_HOSTS||'cdn.shopify.com').split(',').map(x=>x.trim()),
     maxDailyPosts:Number(env.PILOT_MAX_DAILY_POSTS||6),
     maxDailyPerChannel:Number(env.PILOT_MAX_DAILY_PER_CHANNEL||3),
+    publishEveryHours:Number(env.PILOT_PUBLISH_EVERY_HOURS||0),
+    publishAroundClock:envBool(env.PILOT_PUBLISH_AROUND_CLOCK),
     feedCap:Number(env.PILOT_FEED_MAX_OFFERS||50), intervalMs:60000};
   cfg.autonomyEnabled=env.PILOT_AUTONOMY_POLICY==='homestro-reviewed-organic-v1';
   cfg.excludedProductIds=(env.META_ORGANIC_EXCLUDED_PRODUCT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean);
   if(!/^v\d+\.\d+$/.test(cfg.graphVersion) || !/^\d+$/.test(cfg.pageId) || !/^\d+$/.test(cfg.instagramId))fail('INVALID_META_CONFIG');
-  if(!Number.isInteger(cfg.maxDailyPosts) || cfg.maxDailyPosts<1 || cfg.maxDailyPosts>10 ||
-    !Number.isInteger(cfg.maxDailyPerChannel) || cfg.maxDailyPerChannel<1 || cfg.maxDailyPerChannel>5)fail('INVALID_DAILY_LIMIT');
+  if(!Number.isInteger(cfg.publishEveryHours)||cfg.publishEveryHours<0||cfg.publishEveryHours>24)fail('INVALID_PUBLISH_INTERVAL');
+  if(!Number.isInteger(cfg.maxDailyPosts) || cfg.maxDailyPosts<1 || cfg.maxDailyPosts>(cfg.publishEveryHours?24:10) ||
+    !Number.isInteger(cfg.maxDailyPerChannel) || cfg.maxDailyPerChannel<1 || cfg.maxDailyPerChannel>(cfg.publishEveryHours?6:5))fail('INVALID_DAILY_LIMIT');
   if(!Number.isFinite(cfg.feeRate) || cfg.feeRate<0 || cfg.feeRate>=1)fail('INVALID_FEE_RATE');
   if(!Array.isArray(cfg.shipping) || !cfg.shipping.length)fail('INVALID_SHIPPING');
   return cfg;
 }
+

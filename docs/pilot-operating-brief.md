@@ -182,3 +182,15 @@ smaller linked photo previews, collapses successfully approved cards, scrolls to
 the next card and shows remaining approvals. Per-post consent is unchanged;
 generated browser script syntax checked. A queued approval is not a public link.
 
+10 October, 20:40 Berlin: owner explicitly requested every-four-hour publishing
+on all four connected networks and batch TikTok approval. Added validated
+PILOT_PUBLISH_EVERY_HOURS and PILOT_PUBLISH_AROUND_CLOCK configuration, persisted
+per-channel timestamp spacing, six-post rolling per-channel caps and a 12-post
+Meta total cap. Night publishing is opt-in; duplicate/recovery/stock guards remain.
+TikTok batch UI selects displayed drafts, requires an explicit common privacy and
+interaction choice plus actual preview/consent for the selected manifest, sends
+revision-bound approvals, shows partial errors and resets consent on selection
+changes. It never gives consent for later unseen drafts. Tests: 101/101 pass,
+including four-hour/overnight/cap scenarios, stale draft consent and the actual
+generated UI script exercised in a DOM harness for successful/partial batches.
+

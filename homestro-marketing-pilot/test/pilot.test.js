@@ -44,6 +44,12 @@ test('bad daily limits cannot disable the cap',()=>{
   assert.throws(()=>config({PILOT_MAX_DAILY_POSTS:'NaN'}));
   assert.throws(()=>config({PILOT_MAX_DAILY_PER_CHANNEL:'6'}));
 });
+test('explicit four-hour cadence supports six per channel and twelve total Meta posts',()=>{
+  const c=config({PILOT_PUBLISH_EVERY_HOURS:'4',PILOT_PUBLISH_AROUND_CLOCK:'true',PILOT_MAX_DAILY_PER_CHANNEL:'6',PILOT_MAX_DAILY_POSTS:'12'});
+  assert.equal(c.publishEveryHours,4);assert.equal(c.publishAroundClock,true);
+  assert.equal(c.maxDailyPerChannel,6);assert.equal(c.maxDailyPosts,12);
+  for(const value of ['NaN','-1','25','0.5'])assert.throws(()=>config({PILOT_PUBLISH_EVERY_HOURS:value}));
+});
 test('highest-resolution MP4 wins; external and processing videos ignored',()=>{
   const m=extractMedia([{mediaContentType:'VIDEO',status:'READY',sources:[{url:'low',format:'mp4',width:540,height:960},{url:'high',mimeType:'video/mp4',width:1080,height:1920}]},{mediaContentType:'EXTERNAL_VIDEO',status:'READY',originUrl:'youtube'}]);
   assert.equal(m.videoURL,'high');
@@ -121,3 +127,4 @@ test('catalog continues beyond first product and reports honest metrics',async()
   const r=await syncCatalog(async()=>({products:{nodes:[{id:'1'},{id:'2'}],pageInfo:{hasNextPage:false}}}),async id=>({processed:id==='1'?1:0,status:'pending_marketing'}));
   assert.deepEqual(r,{processed:1,errors:1,pending:2});
 });
+

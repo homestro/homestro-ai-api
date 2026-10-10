@@ -40,15 +40,26 @@ After deploying this change, use the existing pilot authentication for:
 
 Open /marketing-social-review and authenticate with the existing pilot key.
 Preview each TikTok draft and explicitly choose public visibility/interactions,
-confirm the displayed media/caption and consent to publication. There is no
+confirm the displayed media/caption and consent to publication. The batch composer
+can select all currently displayed TikTok drafts, apply explicitly chosen common
+settings and confirm preview/consent once for that exact selection. It sends
+individual revision-bound approval requests with progress and partial failures.
+Changing the selection clears the previous consent; future drafts are not included.
+There is no
 automatic TikTok consent. Approvals are tied to the Shopify product revision.
 Pinterest uses existing reviewed-organic autonomy if that policy is enabled;
 otherwise approve each Pinterest draft in the same page.
 
 Once the two accounts and drafts are verified, set PILOT_SOCIAL_PUBLISH_ENABLED=true.
-New publication is limited to one product per channel in a rolling 24-hour window,
-inside 09:00–22:00 Europe/Berlin. Both channels together add at most two daily
-posts, independently of existing Meta quotas. Already published products are not
+The legacy default remains one product per social channel in a rolling 24-hour
+window, inside 09:00–22:00 Europe/Berlin. Owner requested four-hour cadence on
+10 October 2026. Configure PILOT_PUBLISH_EVERY_HOURS=4,
+PILOT_PUBLISH_AROUND_CLOCK=true, PILOT_MAX_DAILY_PER_CHANNEL=6,
+PILOT_MAX_DAILY_POSTS=12 and PILOT_PUBLISH_ONCE=false. Meta has its separate
+12-post total cap across Facebook/Instagram. TikTok/Pinterest each have a six-post
+rolling daily cap. Database timestamps enforce a four-hour minimum per channel,
+including after restart. Eligible approved stock and provider acceptance are
+required; no missed slot produces a burst of catch-up posts. Already published products are not
 repeated automatically; schedule a new campaign explicitly if repetition is wanted.
 
 Do not declare success until a public TikTok/Pinterest permalink is present in
@@ -57,7 +68,7 @@ An accepted response with a missing URL stays remote_pending. A Creator Inbox
 draft, HTTP 207 platform failure, unknown POST result, or mismatch never counts as
 public publication. Restart recovery reconciles stored remote IDs by GET only;
 uncertain writes without a provider ID require investigation, not a blind retry.
-An unresolved job conservatively holds that channel's quota.
+An unresolved job conservatively consumes one quota entry until reconciled.
 
 Setting PILOT_SOCIAL_PUBLISH_ENABLED=false stops new writes while allowing read-only
 verification on worker ticks. Set PILOT_SOCIAL_ENABLED=false to disable the whole

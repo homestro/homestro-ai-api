@@ -40,6 +40,7 @@ export function prepareSocial(p,channel,cfg) {
 
 export function approvePayload(job,body,revision) {
   if(job.status!=='draft_queued'||job.payload.productRevision!==revision)fail('SOCIAL_REVIEW_STALE');
+  if(body.expectedRevision!==undefined && body.expectedRevision!==job.revision)fail('SOCIAL_REVIEW_STALE');
   const reviewer=String(body.reviewer||'').trim();
   if(!reviewer||reviewer.length>100)fail('REVIEWER_REQUIRED');
   const payload={...job.payload};
@@ -142,14 +143,21 @@ export class SocialCoordinator {
         try{await this.settle(job.id,await this.provider.reconcile(job.remote.providerPostId,job.channel));}
         catch(e){log('SOCIAL_VERIFICATION_PENDING',{postId:job.id,reason:codeOf(e)});}
       }
-      if(!this.cfg.workerEnabled||!this.cfg.publishingEnabled||!this.providerCfg.publishingEnabled||!berlinWindow(now))return;
+      if(!this.cfg.workerEnabled||!this.cfg.publishingEnabled||!this.providerCfg.publishingEnabled||(!this.cfg.publishAroundClock&&!berlinWindow(now)))return;
       const jobs=(await client.query("SELECT * FROM marketing_social_posts WHERE status='approved' ORDER BY approved_at LIMIT 20")).rows;
       for(const job of jobs){
         if(!this.providerCfg.accounts[job.channel])continue;
         const used=(await client.query(`SELECT count(*)::int AS n FROM marketing_social_posts
           WHERE channel=$1 AND (status IN ('publishing','remote_pending','recovery_required')
             OR published_at>now()-interval '24 hours' OR attempted_at>now()-interval '24 hours')`,[job.channel])).rows[0].n;
-        if(used>=1)continue; // At most one new product per channel in any rolling 24 hours.
+        const spacing=this.cfg.publishEveryHours||24;
+        const dailyLimit=this.cfg.publishEveryHours?Math.min(6,Math.ceil(24/spacing)):1;
+        if(used>=dailyLimit)continue;
+        if(this.cfg.publishEveryHours) {
+          const recent=(await client.query(`SELECT count(*)::int AS recent FROM marketing_social_posts
+            WHERE channel=$1 AND COALESCE(attempted_at,published_at)>now()-$2::int*interval '1 hour'`,[job.channel,spacing])).rows[0].recent;
+          if(recent>0)continue;
+        }
         const duplicate=(await client.query(`SELECT id FROM marketing_social_posts WHERE product_id=$1 AND channel=$2
           AND id<>$3 AND status IN ('publishing','remote_pending','published','recovery_required') LIMIT 1`,
           [job.product_id,job.channel,job.id])).rows.length;

@@ -47,7 +47,7 @@ test('Berlin window observes daylight saving boundaries',()=>{
   assert.equal(berlinWindow(new Date('2026-12-10T08:00:00Z')),true);
 });
 
-function fixture({current=source(),used=0,duplicate=false,pending=[],submitError,enabled=true}={}){
+function fixture({current=source(),used=0,recent=0,duplicate=false,pending=[],submitError,enabled=true}={}){
   const queries=[],j=job();let submits=0,reconciles=0;
   const client={release(){},async query(sql,args=[]){
     queries.push({sql,args});
@@ -55,6 +55,7 @@ function fixture({current=source(),used=0,duplicate=false,pending=[],submitError
     if(sql.includes("remote ? 'providerPostId'"))return {rows:pending};
     if(sql.includes("status='approved' ORDER BY"))return {rows:[j]};
     if(sql.includes('count(*)::int AS n'))return {rows:[{n:used}]};
+    if(sql.includes('count(*)::int AS recent'))return {rows:[{recent}]};
     if(sql.includes('AND id<>$3'))return {rows:duplicate?[{id:'other'}]:[]};
     return {rows:[],rowCount:1};
   }};
@@ -103,4 +104,20 @@ test('temporary Shopify read failure preserves approval without consuming public
 test('pool failure releases local busy guard for the next worker tick',async()=>{
   const f=fixture();f.c.pool.connect=async()=>{throw new Error('pool unavailable');};
   await assert.rejects(f.c.tick(midday));assert.equal(f.c.busy,false);
+});
+test('four-hour social cadence permits an older daily post but blocks a recent attempt',async()=>{
+  for(const [recent,expected] of [[0,1],[1,0]]){
+    const f=fixture({used:1,recent});f.c.cfg={...f.c.cfg,publishEveryHours:4,publishAroundClock:true};
+    await f.c.tick(new Date('2026-10-10T23:00:00Z'));assert.equal(f.submits,expected);
+    assert.ok(f.queries.some(q=>q.sql.includes('AS recent')&&q.args[1]===4));
+  }
+});
+test('six daily social attempts still exhaust four-hour cadence quota',async()=>{
+  const f=fixture({used:6});f.c.cfg={...f.c.cfg,publishEveryHours:4,publishAroundClock:true};
+  await f.c.tick(midday);assert.equal(f.submits,0);
+});
+test('batch consent cannot approve a changed draft revision',()=>{
+  const j={...job(),revision:'draft-new',status:'draft_queued'};
+  assert.throws(()=>approvePayload(j,{reviewer:'owner',expectedRevision:'draft-old'},'rev'),{code:'SOCIAL_REVIEW_STALE'});
+  assert.equal(approvePayload(j,{reviewer:'owner',expectedRevision:'draft-new'},'rev').reviewer,'owner');
 });

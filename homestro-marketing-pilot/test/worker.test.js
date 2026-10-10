@@ -25,7 +25,23 @@ test('autonomy enforces the configured per-channel daily cap',async()=>{
     meta:{},freshSnapshot:async()=>null,isPublishingWindow:()=>true});
   await worker.tick();
   assert.match(selectionQuery,/SELECT count\(\*\) FROM marketing_posts recent WHERE recent.channel=s.channel/);
-  assert.deepEqual(selectionParams,[[],3]);
+  assert.deepEqual(selectionParams,[[],3,0]);
+});
+test('four-hour spacing blocks even explicit post publication before any remote write',async()=>{
+  const s=setup();s.worker.cfg={...cfg,publishEveryHours:4};
+  const job={id:'1',channel:'instagram',product_id:'p1',payload:{productRevision:'rev'}};
+  s.worker.store.withWorkerLock=fn=>fn({query:async(sql,args)=>{
+    if(sql.includes('AS recent')){assert.deepEqual(args,['instagram',4]);assert.match(sql,/interval '1 hour'/);return {rows:[{recent:1}]};}
+    return {rows:sql.includes('count(*)')?[{count:0}]:[job]};
+  }});
+  await s.worker.tick('1');assert.equal(s.writes(),0);assert.deepEqual(s.statuses,[]);
+});
+test('four-hour publishing can run overnight when explicitly configured',async()=>{
+  const s=setup();s.worker.cfg={...cfg,autonomyEnabled:true,publishEveryHours:4,publishAroundClock:true,maxDailyPerChannel:6};
+  s.worker.isPublishingWindow=()=>false;
+  const job={id:'1',channel:'facebook',product_id:'p1',payload:{productRevision:'rev'}};
+  s.worker.store.withWorkerLock=fn=>fn({query:async(sql)=>({rows:sql.includes('SELECT s.*')?[job]:sql.includes('AS recent')?[{recent:0}]:sql.includes('count(*)')?[{count:0}]:[job]})});
+  await s.worker.tick();assert.equal(s.writes(),1);
 });
 test('worker explains when the rolling daily publication cap blocks the queue',async()=>{
   const entries=[],original=console.log;
@@ -76,3 +92,4 @@ test('a different product posted on the same channel does not block this product
   await worker.tick();
   assert.equal(writes,1);assert.deepEqual(statuses,['publishing','published']);
 });
+

@@ -89,7 +89,9 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       const counts=(await pool.query('SELECT channel,status,count(*)::int AS count FROM marketing_social_posts GROUP BY channel,status')).rows;
       res.json({configured:true,channels:Object.keys(social.providerCfg.accounts),counts,
         publishingEnabled:cfg.workerEnabled&&cfg.publishingEnabled&&social.providerCfg.publishingEnabled,
-        maximumDailyPerChannel:1,tiktokRequiresPreviewConsent:true,adSpendEUR:0});
+        maximumDailyPerChannel:cfg.publishEveryHours?Math.min(6,Math.ceil(24/cfg.publishEveryHours)):1,
+        publishEveryHours:cfg.publishEveryHours||24,publishAroundClock:cfg.publishAroundClock,
+        tiktokRequiresPreviewConsent:true,adSpendEUR:0});
     }));
     router.get('/social/posts',route(async(req,res)=>res.json(await socialRequired().list(req.query.status||'draft_queued'))));
     router.post('/social/prepare',route(async(req,res)=>res.json(await socialRequired().prepare())));

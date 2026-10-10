@@ -7,7 +7,7 @@ export class Worker {
   async tick(postId=null) {
     if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return;}
     if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return;}
-    if(this.cfg.autonomyEnabled && !this.isPublishingWindow()){log('PUBLISH_BLOCKED',{reason:'OUTSIDE_PUBLISHING_WINDOW'});return;}
+    if(this.cfg.autonomyEnabled && !this.cfg.publishAroundClock && !this.isPublishingWindow()){log('PUBLISH_BLOCKED',{reason:'OUTSIDE_PUBLISHING_WINDOW'});return;}
     this.busy=true;
     try {
       const acquired=await this.store.withWorkerLock(async client=>{
@@ -28,11 +28,20 @@ export class Worker {
                   OR recent.status='recovery_required')) < $2::int
               AND NOT EXISTS (SELECT 1 FROM marketing_posts old WHERE old.channel=s.channel
                 AND old.product_id=s.product_id AND old.id<>s.id AND old.status IN ('published','publishing','recovery_required'))
-              ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel])
+              AND ($3::int=0 OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
+                AND spaced.status IN ('published','publishing','recovery_required')
+                AND COALESCE(spaced.published_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
+              ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job){
           log('PUBLISH_BLOCKED',{reason:'NO_ELIGIBLE_APPROVED_POST',publishedOrUncertainLast24h:count,limit:this.cfg.maxDailyPosts});
           return;
+        }
+        if(this.cfg.publishEveryHours) {
+          const recent=Number((await client.query(`SELECT count(*) AS recent FROM marketing_posts WHERE channel=$1
+            AND status IN ('published','publishing','recovery_required')
+            AND COALESCE(published_at,updated_at)>now()-$2::int*interval '1 hour'`,[job.channel,this.cfg.publishEveryHours])).rows[0].recent);
+          if(recent>0){log('PUBLISH_BLOCKED',{reason:'CHANNEL_INTERVAL',channel:job.channel,hours:this.cfg.publishEveryHours});return;}
         }
         if(job.payload.previewOnly===true) {
           await this.store.setStatus(job.id,'superseded','PREVIEW_NOT_PUBLISHABLE');
@@ -43,10 +52,10 @@ export class Worker {
           log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,reason:'PRODUCT_EXCLUDED'});return;
         }
         if(this.cfg.autonomyEnabled) {
-          const prior=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE product_id=$1 AND id<>$2
+          const prior=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE product_id=$1 AND id<>$2 AND channel=$3
             AND (status IN ('publishing','recovery_required') OR
               (status='published' AND published_at>now()-interval '24 hours'))`,
-            [job.product_id,job.id])).rows[0].count);
+            [job.product_id,job.id,job.channel])).rows[0].count);
           if(prior>0){log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,channel:job.channel,reason:'CHANNEL_OR_PRODUCT_RECENTLY_PUBLISHED',count:prior});return;}
         }
         if((job.product_id.startsWith('editorial:') || job.payload.kind==='brand_editorial') && !editorialEnabled()) {
@@ -96,3 +105,4 @@ export class Worker {
   start(){if(this.timer)return;log('PUBLISH_WORKER_STARTED',{workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled,intervalMs:this.cfg.intervalMs});this.timer=setInterval(()=>void this.tick(),this.cfg.intervalMs);this.timer.unref();void this.tick();}
   stop(){clearInterval(this.timer);this.timer=null;}
 }
+
