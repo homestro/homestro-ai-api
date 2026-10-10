@@ -40,6 +40,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       if(providerCfg){
         social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh});
         await social.migrate();
+        await social.emitReport(true).catch(e=>log('SOCIAL_REPORT_PENDING',{reason:codeOf(e)}));
       }
     }catch(e){social=null;log('SOCIAL_DISABLED',{reason:codeOf(e)});}
     const processProduct=async id=>{
@@ -90,8 +91,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const socialRequired=()=>{if(!social)fail('SOCIAL_NOT_CONFIGURED');return social;};
     router.get('/social/status',route(async(req,res)=>{
       if(!social)return res.json({configured:false,adSpendEUR:0});
-      const counts=(await pool.query('SELECT channel,status,count(*)::int AS count FROM marketing_social_posts GROUP BY channel,status')).rows;
-      res.json({configured:true,channels:Object.keys(social.providerCfg.accounts),counts,
+      const report=await social.report();
+      res.json({...report,configured:true,channels:Object.keys(social.providerCfg.accounts),
         publishingEnabled:cfg.workerEnabled&&cfg.publishingEnabled&&social.providerCfg.publishingEnabled,
         maximumDailyPerChannel:Math.max(...['tiktok','pinterest'].map(c=>channelPolicy(cfg,c).daily)),
         publishEveryHours:cfg.publishEveryHours||24,publishAroundClock:cfg.publishAroundClock,

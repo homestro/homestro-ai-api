@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {pricing,trackingLink,config} from '../modules/core.js';
-import {extractMedia,MediaRenderer,downloadMedia} from '../modules/media.js';
+import {extractMedia,MediaRenderer,downloadMedia,selectPhotos} from '../modules/media.js';
 import {Ingestion,snapshot} from '../modules/ingestion.js';
-import {compilePost} from '../modules/localization.js';
+import {compilePost,shortPostTitle} from '../modules/localization.js';
 import {generateFeed,validGTIN} from '../modules/feed.js';
 import {MetaOrganic} from '../modules/meta.js';
 import {fetchProduct,syncCatalog} from '../modules/shopify.js';
@@ -128,3 +128,18 @@ test('catalog continues beyond first product and reports honest metrics',async()
   assert.deepEqual(r,{processed:1,errors:1,pending:2});
 });
 
+
+
+test('marketing photo selection prefers clean pictures, limits carousel and falls back without a gate',()=>{
+  const photos=Array.from({length:6},(_,i)=>({url:'photo'+i,words:i===0?30:0}));
+  assert.deepEqual(selectPhotos(photos),['photo1','photo2','photo3','photo4']);
+  assert.deepEqual(selectPhotos([{url:'text',words:35},{url:'less',words:15},{url:'most',words:50}]),['less','text']);
+  assert.deepEqual(selectPhotos([{url:'unknown',words:null}]),['unknown']);
+});
+test('social copy keeps two grounded benefits and a short title without changing product facts',()=>{
+  const p=product();p.localized={...p.localized,title:'Faltbarer Handyhalter – Tragbarer verstellbarer Multi-Winkel Desktop-Ständer aus Silikon für alle Smartphones'};
+  const c=compilePost(p,'facebook',asset);
+  assert.equal(c.title,'Faltbarer Handyhalter');assert.equal(c.caption.includes('• Für den Kühlschrank'),false);
+  assert.ok(c.caption.includes('• Vier Boxen im Set'));assert.ok(c.caption.includes('39,00'));
+  assert.equal(p.localized.benefits.length,3);assert.ok(shortPostTitle('Ein langer Titel '.repeat(8)).length<=70);
+});

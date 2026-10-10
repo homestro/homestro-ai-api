@@ -11,6 +11,15 @@ export function extractMedia(nodes=[]) {
   const images=[...new Set(nodes.filter(n=>n.mediaContentType==='IMAGE' && n.status==='READY').map(n=>n.image?.url).filter(Boolean))];
   return {videoURL:videos[0]?.url||null,images};
 }
+// Prefer product photographs with little embedded copy. OCR is a local heuristic,
+// not a language translation or a guarantee that a picture has no text.
+export function selectPhotos(photos,limit=4) {
+  const clean=photos.filter(p=>p.words!==null && p.words<=8);
+  const unknown=photos.filter(p=>p.words===null);
+  const ranked=clean.length?clean:unknown.length?unknown:
+    [...photos].sort((a,b)=>a.words-b.words).slice(0,2);
+  return ranked.slice(0,limit).map(p=>p.url);
+}
 function run(bin,args,timeout=120000) {
   return new Promise((resolve,reject)=>{
     const c=spawn(bin,args,{stdio:['ignore','pipe','pipe']});let out='',done=false;
@@ -71,8 +80,8 @@ export class MediaRenderer {
   }
   async carousel(images) {
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
-    const urls=[];
-    for(const image of [...new Set(images)].slice(0,10)) {
+    const balanced=this.cfg.organicPolicy==='balanced-v1',photos=[];
+    for(const image of [...new Set(images)].slice(0,balanced?6:10)) {
       const key=hash({image,imageRendererVersion:1});const dest=join(dir,key+'.jpg');
       try {await stat(dest);} catch {
         const tmp=await mkdtemp(join(dir,'photo-'));
@@ -86,10 +95,25 @@ export class MediaRenderer {
           await rename(join(tmp,'image.jpg'),dest);
         } finally {await rm(tmp,{recursive:true,force:true});}
       }
-      urls.push(`${this.cfg.publicOrigin}/marketing-assets/${key}.jpg`);
+      let words=null;
+      if(balanced){
+        const assessment=join(dir,key+'.ocr-v1.json');
+        try{words=JSON.parse(await readFile(assessment,'utf8')).words;}catch{
+          try{
+            const tsv=await run('/usr/bin/tesseract',[dest,'stdout','-l','eng','--psm','11','tsv'],15000);
+            words=tsv.split('\n').slice(1).filter(line=>{
+              const cells=line.split('\t');return cells[0]==='5' && Number(cells[10])>=40 && /[\p{L}\p{N}]/u.test(cells[11]||'');
+            }).length;
+            await writeFile(assessment,JSON.stringify({words}),'utf8');
+          }catch{ /* Missing OCR never blocks an otherwise usable product photograph. */ }
+        }
+      }
+      photos.push({url:`${this.cfg.publicOrigin}/marketing-assets/${key}.jpg`,words});
     }
+    const urls=balanced?selectPhotos(photos):photos.map(p=>p.url);
     if(!urls.length)fail('NO_MARKETING_MEDIA');
     return {format:urls.length>1?'carousel':'image',videoURL:null,imageURLs:urls};
   }
   url(key){return `${this.cfg.publicOrigin}/marketing-assets/${key}.mp4`;}
 }
+

@@ -81,6 +81,14 @@ export class SocialCoordinator {
     let queued=0;
     for(const {document:p} of products)for(const channel of Object.keys(this.providerCfg.accounts)){
       try{
+        // Preserve authentic consent for already approved TikTok content when
+        // only our presentation template changed. Source revisions still expire it.
+        if(channel==='tiktok'){
+          const approved=(await this.pool.query(`SELECT id FROM marketing_social_posts
+            WHERE product_id=$1 AND channel='tiktok' AND status='approved'
+              AND payload->>'productRevision'=$2 LIMIT 1`,[p.id,p.revision])).rows;
+          if(approved.length)continue;
+        }
         const payload=prepareSocial(p,channel,{...this.cfg,...this.providerCfg}),revision=hash(payload);
         await this.pool.query(`UPDATE marketing_social_posts SET status='superseded',updated_at=now()
           WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')`,[p.id,channel,revision]);
@@ -127,6 +135,29 @@ export class SocialCoordinator {
     await this.pool.query(`UPDATE marketing_social_posts SET status=$2,remote=remote||$3::jsonb,
       published_at=CASE WHEN $2='published' THEN COALESCE(published_at,now()) ELSE published_at END,
       error_code=$4,updated_at=now() WHERE id=$1`,[id,status,JSON.stringify(state),status==='recovery_required'?'ZERNIO_REVIEW_REQUIRED':null]);
+  }
+  async report(){
+    const counts=(await this.pool.query(`SELECT channel,status,count(*)::int AS count
+      FROM (SELECT channel,status FROM marketing_posts UNION ALL
+        SELECT channel,status FROM marketing_social_posts) posts GROUP BY channel,status ORDER BY channel,status`)).rows;
+    const failures=(await this.pool.query(`SELECT channel,error_code,count(*)::int AS count
+      FROM marketing_social_posts WHERE status IN ('approved','recovery_required','remote_pending')
+        AND error_code IS NOT NULL GROUP BY channel,error_code ORDER BY channel,error_code`)).rows
+      .filter(r=>/^[A-Z0-9_]{1,80}$/.test(r.error_code));
+    const published=(await this.pool.query(`SELECT channel,remote->>'permalink' AS permalink,published_at
+      FROM (SELECT channel,remote,published_at FROM marketing_posts WHERE status='published'
+        UNION ALL SELECT channel,remote,published_at FROM marketing_social_posts WHERE status='published') posts
+      ORDER BY published_at DESC NULLS LAST LIMIT 20`)).rows;
+    const publications=published.flatMap(r=>{
+      const permalink=publicPostURL(r.permalink,r.channel);
+      return permalink?[{channel:r.channel,permalink,publishedAt:r.published_at}]:[];
+    });
+    return {counts,failures,publications,adSpendEUR:0};
+  }
+  async emitReport(force=false){
+    if(!force && Date.now()-(this.lastReportAt||0)<5*60000)return;
+    this.lastReportAt=Date.now();
+    log('MARKETING_PUBLICATION_REPORT',await this.report());
   }
   async tick(now=new Date()){
     if(this.busy)return;this.busy=true;
@@ -188,6 +219,7 @@ export class SocialCoordinator {
     }finally{
       if(locked)await client.query('SELECT pg_advisory_unlock(73341003)').catch(()=>{});
       client?.release();this.busy=false;
+      await this.emitReport().catch(e=>log('SOCIAL_REPORT_PENDING',{reason:codeOf(e)}));
     }
   }
   start(){
@@ -196,4 +228,20 @@ export class SocialCoordinator {
     this.timer.unref();
   }
   stop(){clearInterval(this.timer);}
+}
+export function publicPostURL(value,channel){
+  const hosts={facebook:['facebook.com','www.facebook.com'],instagram:['instagram.com','www.instagram.com'],
+    tiktok:['tiktok.com','www.tiktok.com'],pinterest:['pinterest.com','www.pinterest.com']};
+  try{
+    const u=new URL(value);
+    if(u.protocol!=='https:'||u.username||u.password||u.port||!hosts[channel]?.includes(u.hostname))return null;
+    if(channel==='tiktok'&&!/^\/@[^/]+\/(video|photo)\/\d+\/?$/.test(u.pathname))return null;
+    if(channel==='pinterest'&&!/^\/pin\/\d+\/?$/.test(u.pathname))return null;
+    // Facebook can use story_fbid/id to identify a post; drop every other query.
+    const query=new URLSearchParams();
+    if(channel==='facebook')for(const key of ['story_fbid','id']){
+      if(/^\d+$/.test(u.searchParams.get(key)||''))query.set(key,u.searchParams.get(key));
+    }
+    return u.origin+u.pathname+(query.size?'?'+query:'');
+  }catch{return null;}
 }

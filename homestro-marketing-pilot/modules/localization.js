@@ -58,7 +58,9 @@ export function compilePost(product,channel,asset) {
   const price=Math.min(...product.variants.filter(v=>v.available && v.price>0).map(v=>Number(v.price))).toLocaleString('de-DE',{style:'currency',currency:'EUR'});
   // Pinterest has a dedicated destination link. Keep its description within 800
   // characters without cutting claims mid-sentence or losing the product URL.
-  const benefits=c.benefits.map(b=>'• '+b.text);
+  // Two grounded benefits are enough for a readable product post. Drop complete
+  // benefits rather than rewriting factual claims or cutting them mid-sentence.
+  const benefits=c.benefits.slice(0,2).map(b=>'• '+b.text);
   const parts=channel==='pinterest'
     ? [c.hook,...benefits,`Ab ${price} zzgl. Versand.`,cta,hashtags.join(' ')]
     : [c.hook,...benefits,`Ab ${price} zzgl. Versand.`,cta,link,hashtags.join(' ')];
@@ -68,7 +70,14 @@ export function compilePost(product,channel,asset) {
   const caption=parts.join('\n\n');
   if(caption.length>2200)fail('CAPTION_TOO_LONG');
   return {productRevision:product.revision,channel,...asset,
-    title:c.title,caption,link,hashtags,adSpendEUR:0,locationId:null,
+    title:shortPostTitle(c.title),caption,link,hashtags,adSpendEUR:0,locationId:null,
     instagramLinkNote:channel==='instagram'?'Caption links are not clickable. Maintain a matching link in bio.':null};
+}
+export function shortPostTitle(title,max=70){
+  const value=cleanText(title);if(value.length<=max)return value;
+  const separator=value.search(/\s+[–—|]\s+/);
+  if(separator>15 && separator<=max)return value.slice(0,separator);
+  const end=value.lastIndexOf(' ',max-1);
+  return value.slice(0,end>15?end:max).replace(/[ ,;:–—-]+$/,'');
 }
 

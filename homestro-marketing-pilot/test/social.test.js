@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {SocialCoordinator,prepareSocial,approvePayload,eligible,socialConfig,berlinWindow} from '../modules/social.js';
+import {SocialCoordinator,prepareSocial,approvePayload,eligible,socialConfig,berlinWindow,publicPostURL} from '../modules/social.js';
 import {fail} from '../modules/core.js';
 
 const source=()=>({id:'gid://shopify/Product/1',status:'ACTIVE',contentReviewed:true,revision:'rev',
@@ -160,4 +160,33 @@ test('TikTok cap does not stop an eligible Pinterest job in the same tick',async
   const submitted=[],submit=f.c.provider.submit;
   f.c.provider.submit=async(j,checkpoint)=>{submitted.push(j.channel);return submit(j,checkpoint);};
   await f.c.tick(midday);assert.deepEqual(submitted,['pinterest']);
+});
+
+
+test('publication report distinguishes accepted jobs from published links and strips unsafe URLs',async()=>{
+  const f=fixture();
+  f.c.pool.query=async sql=>({rows:sql.includes('AS count')?(sql.includes('error_code')?
+    [{channel:'tiktok',error_code:'ZERNIO_RATE_LIMIT',count:1},{channel:'tiktok',error_code:'Bearer secret',count:1}]:
+    [{channel:'tiktok',status:'remote_pending',count:1},{channel:'pinterest',status:'published',count:1}]):
+    [{channel:'pinterest',permalink:'https://www.pinterest.com/pin/123/?token=secret',published_at:'now'},
+     {channel:'tiktok',permalink:'https://evil.example/video/1',published_at:'now'}]});
+  const r=await f.c.report();assert.equal(r.counts[0].status,'remote_pending');
+  assert.equal(r.publications.length,1);assert.equal(r.publications[0].permalink,'https://www.pinterest.com/pin/123/');
+  assert.equal(r.failures.length,1);assert.equal(JSON.stringify(r).includes('secret'),false);
+  assert.equal(publicPostURL('https://www.tiktok.com/@homestroo/photo/123','tiktok'),'https://www.tiktok.com/@homestroo/photo/123');
+  assert.equal(publicPostURL('https://www.tiktok.com/login?token=secret','tiktok'),null);
+});
+test('template changes preserve approved TikTok previews while preparing new Pinterest drafts',async()=>{
+  const f=fixture(),p=source(),queries=[];
+  f.c.providerCfg.accounts.tiktok='b'.repeat(24);
+  f.c.pool.query=async(sql,args=[])=>{
+    queries.push({sql,args});
+    if(sql.includes('SELECT document'))return {rows:[{document:p}]};
+    if(sql.includes("channel='tiktok' AND status='approved'"))return {rows:[{id:'approved-tiktok'}]};
+    return {rows:[],rowCount:1};
+  };
+  await f.c.prepare();
+  assert.equal(queries.filter(q=>q.sql.includes('INSERT INTO marketing_social_posts')).length,1);
+  assert.equal(queries.find(q=>q.sql.includes('INSERT INTO marketing_social_posts')).args[2],'pinterest');
+  assert.equal(queries.some(q=>q.sql.includes("SET status='superseded'")&&q.args[1]==='tiktok'),false);
 });

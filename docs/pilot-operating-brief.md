@@ -218,3 +218,26 @@ TikTok batch cannot starve Pinterest when TikTok is capped. First balanced relea
 2e2556ec848b47c851e3f0bad60d687533e565bb reached Railway SUCCESS on deployment
 a2c65129-59a6-424d-b220-e119bc85f125. Final fairness patch needs its own deployment
 verification; no new public TikTok/Pinterest post is asserted by this change.
+
+
+## Marketing quality and publication evidence — 10 October 2026
+Owner requested marketing first, using existing Shopify media and no paid ads.
+Balanced carousels inspect at most six source images using cached local Tesseract
+OCR and prefer up to four pictures with little embedded text. When every picture
+has dense text, use the least dense two; missing OCR falls back to source order.
+This is a heuristic, not language translation or semantic/visual deduplication.
+No generated product imagery or paid AI service is added. Social titles stop at
+70 characters/word boundaries and copy uses at most two existing grounded benefits.
+Approved TikTok payloads whose Shopify source revision is unchanged are preserved;
+future drafts use the improved template and still require actual preview consent.
+MARKETING_PUBLICATION_REPORT emits grouped statuses, safe error codes and validated
+public permalinks at startup and every five minutes. Accepted/pending provider jobs
+remain separate from published posts. Authenticated status also exposes these.
+113/113 marketing tests passed, including actual FFmpeg/Tesseract image selection,
+cache reuse, preserved TikTok consent, sanitized reports and existing quota guards.
+Before deployment: main 3f0c36b7be13b850d97e7c98a9c5ef4652754920 is live on Railway
+0a6d1ee2-8e71-4d02-8288-13f9ba1bf002 (SUCCESS). At 19:27 UTC Meta is waiting on
+DAILY_TOTAL_LIMIT (six historical posts/uncertain attempts versus new total cap4).
+Merchant read-only audit: Homestro.de account5447184929 has 50/50 items disapproved
+for misrepresentation. Account-level CRITICAL issue also impacts FREE_LISTINGS.
+This change does not remove Google suspension or prove a new TikTok publication.

@@ -33,3 +33,24 @@ test('real FFmpeg: carousel creates cached JPEGs only; attached video creates ve
     assert.equal(probe.streams[0].codec_name,'h264');assert.ok(Number(probe.format.duration)>=4);
   }finally{globalThis.fetch=original;await rm(dir,{recursive:true,force:true});}
 });
+
+
+
+test('real local OCR prefers a plain product photograph over a text-heavy image and caches its assessment',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'homestro-ocr-test-')),original=globalThis.fetch;
+  try{
+    execFileSync('ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=1080x1350',
+      '-vf',"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='PRODUCT PHOTO WITH LOTS OF TEXT':fontsize=38:fontcolor=black:x=20:y=100,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='BUY NOW SPECIAL OFFER QUALITY ITEM':fontsize=38:fontcolor=black:x=20:y=200",
+      '-frames:v','1','-threads','1',join(dir,'text.jpg')]);
+    execFileSync('ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=blue:s=100x100',
+      '-frames:v','1','-threads','1',join(dir,'plain.jpg')]);
+    const text=await readFile(join(dir,'text.jpg')),plain=await readFile(join(dir,'plain.jpg'));let downloads=0;
+    globalThis.fetch=async url=>{downloads++;return new Response(String(url).endsWith('text.jpg')?text:plain);};
+    const renderer=new MediaRenderer({dataDir:dir,mediaHosts:['cdn.shopify.com'],publicOrigin:'https://pilot.example',organicPolicy:'balanced-v1'});
+    const urls=['https://cdn.shopify.com/text.jpg','https://cdn.shopify.com/plain.jpg'];
+    const selected=await renderer.carousel(urls);assert.equal(selected.imageURLs.length,1);
+    const plainOnly=await renderer.carousel([urls[1]]);assert.equal(selected.imageURLs[0],plainOnly.imageURLs[0]);
+    const assessments=(await readdir(join(dir,'assets'))).filter(x=>x.endsWith('.ocr-v1.json'));
+    assert.equal(assessments.length,2);assert.deepEqual(await renderer.carousel(urls),selected);assert.equal(downloads,2);
+  }finally{globalThis.fetch=original;await rm(dir,{recursive:true,force:true});}
+});
