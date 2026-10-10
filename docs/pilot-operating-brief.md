@@ -208,7 +208,13 @@ holds, commercial TikTok disclosure and authentic preview/batch consent remain.
 Pinterest descriptions no longer duplicate the long URL; links remain in the
 provider destination field. Only complete trailing benefit sentences are omitted
 when required to meet 800 characters. No new AI/Ads/paid video service added.
-107/107 marketing tests passed, including real FFmpeg and batch-review harness.
+108/108 marketing tests passed, including real FFmpeg and batch-review harness.
 Startup ORGANIC_PUBLISH_POLICY logs and authenticated status expose per-channel
 limits. Deployment verification must use the actual new commit and Railway logs;
 this record does not itself prove a new live TikTok/Pinterest post.
+
+Queue selection now reserves up to 20 approved candidates per channel so a large
+TikTok batch cannot starve Pinterest when TikTok is capped. First balanced release
+2e2556ec848b47c851e3f0bad60d687533e565bb reached Railway SUCCESS on deployment
+a2c65129-59a6-424d-b220-e119bc85f125. Final fairness patch needs its own deployment
+verification; no new public TikTok/Pinterest post is asserted by this change.

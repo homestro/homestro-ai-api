@@ -127,7 +127,13 @@ Official policy references consulted:
 - https://policy.pinterest.com/en/community-guidelines
 - https://support.tiktok.com/en/business-and-creator/creator-and-business-accounts/promoting-a-brand-product-or-service
 
-Validation: 107/107 marketing tests pass, including differentiated caps/gaps,
+Validation: 108/108 marketing tests pass, including differentiated caps/gaps,
 night exclusion, exact-media suppression before Meta preflight, explicit-ID channel
 caps, Pinterest long-copy preservation and unchanged TikTok batch-consent tests.
 No guarantee of recommendation eligibility, reach or sales is implied.
+
+Queue selection now reserves up to 20 approved candidates per channel so a large
+TikTok batch cannot starve Pinterest when TikTok is capped. First balanced release
+2e2556ec848b47c851e3f0bad60d687533e565bb reached Railway SUCCESS on deployment
+a2c65129-59a6-424d-b220-e119bc85f125. Final fairness patch needs its own deployment
+verification; no new public TikTok/Pinterest post is asserted by this change.

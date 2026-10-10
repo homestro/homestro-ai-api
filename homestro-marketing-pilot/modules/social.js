@@ -145,7 +145,11 @@ export class SocialCoordinator {
         catch(e){log('SOCIAL_VERIFICATION_PENDING',{postId:job.id,reason:codeOf(e)});}
       }
       if(!this.cfg.workerEnabled||!this.cfg.publishingEnabled||!this.providerCfg.publishingEnabled||(!this.cfg.publishAroundClock&&!berlinWindow(now)))return;
-      const jobs=(await client.query("SELECT * FROM marketing_social_posts WHERE status='approved' ORDER BY approved_at LIMIT 20")).rows;
+      // A large approved TikTok batch must not starve Pinterest after TikTok's cap.
+      const jobs=(await client.query(`SELECT * FROM (
+        SELECT s.*,row_number() OVER (PARTITION BY channel ORDER BY approved_at,id) AS queue_rank
+        FROM marketing_social_posts s WHERE status='approved') fair
+        WHERE queue_rank<=20 ORDER BY approved_at,id`)).rows;
       for(const job of jobs){
         if(!this.providerCfg.accounts[job.channel])continue;
         const used=(await client.query(`SELECT count(*)::int AS n FROM marketing_social_posts

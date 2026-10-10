@@ -54,7 +54,7 @@ function fixture({current=source(),used=0,recent=0,duplicate=false,repeated=fals
     queries.push({sql,args});
     if(sql.includes('pg_try_advisory_lock'))return {rows:[{locked:true}]};
     if(sql.includes("remote ? 'providerPostId'"))return {rows:pending};
-    if(sql.includes("status='approved' ORDER BY"))return {rows:[j]};
+    if(sql.includes('AS queue_rank'))return {rows:[j]};
     if(sql.includes('count(*)::int AS n'))return {rows:[{n:used}]};
     if(sql.includes('count(*)::int AS recent'))return {rows:[{recent}]};
     if(sql.includes("interval '30 days'"))return {rows:repeated?[{id:'other-product'}]:[]};
@@ -147,4 +147,17 @@ test('long Pinterest copy retains destination link and price without exceeding d
   assert.ok(pin.caption.length<=800);assert.match(pin.caption,/20,00/);
   assert.equal(pin.caption.includes('https://'),false);assert.match(pin.productURL,/utm_source=pinterest/);
   assert.equal(p.localized.benefits.length,3);
+});
+test('TikTok cap does not stop an eligible Pinterest job in the same tick',async()=>{
+  const f=fixture(),client=await f.c.pool.connect(),query=client.query;
+  const pin=job(),tik={...job(),id:'tik',channel:'tiktok'};
+  client.query=async(sql,args=[])=>{
+    if(sql.includes('AS queue_rank'))return {rows:[tik,pin]};
+    if(sql.includes('count(*)::int AS n'))return {rows:[{n:args[0]==='tiktok'?4:0}]};
+    return query(sql,args);
+  };
+  f.c.cfg.organicPolicy='balanced-v1';f.c.providerCfg.accounts.tiktok='b'.repeat(24);
+  const submitted=[],submit=f.c.provider.submit;
+  f.c.provider.submit=async(j,checkpoint)=>{submitted.push(j.channel);return submit(j,checkpoint);};
+  await f.c.tick(midday);assert.deepEqual(submitted,['pinterest']);
 });
