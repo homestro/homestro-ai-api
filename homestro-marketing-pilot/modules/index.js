@@ -1,5 +1,6 @@
 import express from 'express';
 import {join} from 'node:path';
+import {randomBytes} from 'node:crypto';
 import {secureEqual,codeOf,log,fail,config} from './core.js';
 import {Store} from './store.js';
 import {fetchProduct,syncCatalog} from './shopify.js';
@@ -11,6 +12,8 @@ import {generateFeed} from './feed.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
+import {SocialCoordinator,socialConfig} from './social.js';
+import {socialReviewPage} from './social-review.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   // Await initialization once at startup. Errors disable marketing, never the main server.
@@ -22,6 +25,14 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
+    let social=null;
+    try{
+      const providerCfg=cfg.social===undefined?socialConfig(process.env,cfg):cfg.social;
+      if(providerCfg){
+        social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh});
+        await social.migrate();
+      }
+    }catch(e){social=null;log('SOCIAL_DISABLED',{reason:codeOf(e)});}
     const processProduct=async id=>{
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
@@ -52,6 +63,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         for(const p of await store.feedRows())await processProduct(p.id,cfg.autonomyEnabled);
         const r=await syncCatalog(graphql,id=>processProduct(id,cfg.autonomyEnabled));
         await approveReviewed(store,cfg);
+        if(social)await social.prepare().catch(e=>log('SOCIAL_PREPARATION_FAILED',{reason:codeOf(e)}));
         const pendingReasons=(await pool.query(`SELECT reason,count(*)::int AS count FROM marketing_products p
           CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason
           WHERE p.status='pending_marketing' GROUP BY reason ORDER BY count DESC,reason`)).rows;
@@ -66,6 +78,26 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     };
     const route=handler=>async(req,res)=>{try{await handler(req,res);}catch(e){res.status(400).json({error:codeOf(e)});}};
     const router=express.Router();router.use(apiKeyMiddleware||auth,express.json({limit:'128kb'}));
+    const socialRequired=()=>{if(!social)fail('SOCIAL_NOT_CONFIGURED');return social;};
+    router.get('/social/status',route(async(req,res)=>{
+      if(!social)return res.json({configured:false,adSpendEUR:0});
+      const counts=(await pool.query('SELECT channel,status,count(*)::int AS count FROM marketing_social_posts GROUP BY channel,status')).rows;
+      res.json({configured:true,channels:Object.keys(social.providerCfg.accounts),counts,
+        publishingEnabled:cfg.workerEnabled&&cfg.publishingEnabled&&social.providerCfg.publishingEnabled,
+        maximumDailyPerChannel:1,tiktokRequiresPreviewConsent:true,adSpendEUR:0});
+    }));
+    router.get('/social/posts',route(async(req,res)=>res.json(await socialRequired().list(req.query.status||'draft_queued'))));
+    router.post('/social/prepare',route(async(req,res)=>res.json(await socialRequired().prepare())));
+    router.get('/social/tiktok-settings',route(async(req,res)=>{
+      const s=socialRequired();await s.provider.verifyConnection('tiktok');
+      res.json(await s.provider.request('accounts/'+s.providerCfg.accounts.tiktok+'/tiktok/creator-info'));
+    }));
+    router.get('/social/connection',route(async(req,res)=>{
+      const s=socialRequired();
+      for(const channel of Object.keys(s.providerCfg.accounts))await s.provider.verifyConnection(channel);
+      res.json({ok:true,channels:Object.keys(s.providerCfg.accounts),adSpendEUR:0});
+    }));
+    router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
     router.get('/status',route(async(req,res)=>{
@@ -97,6 +129,12 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     // No endpoint blindly changes recovery_required back to approved. Inspect platform IDs first.
     app.use('/api/marketing/v2',router);
     registerReview(app);
+    app.get('/marketing-social-review',(req,res)=>{
+      const nonce=randomBytes(16).toString('base64');
+      res.set('Cache-Control','no-store').set('Content-Security-Policy',
+        `default-src 'self'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'`)
+        .type('html').send(socialReviewPage(nonce));
+    });
     app.use('/marketing-assets',express.static(join(cfg.dataDir,'assets'),{
       dotfiles:'deny',index:false,fallthrough:false,maxAge:'7d',immutable:true,
       setHeaders:res=>{res.set('X-Content-Type-Options','nosniff');}
@@ -124,6 +162,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         maxDailyPerChannel:cfg.maxDailyPerChannel,timezone:'Europe/Berlin',hours:'09:00-22:00',adSpendEUR:0});
     }
     worker.start();
+    social?.start();
     if(cfg.syncOnce){
       log('SYNC_ONCE_START',{publishingEnabled:cfg.publishingEnabled,workerEnabled:cfg.workerEnabled});
       try {
@@ -136,7 +175,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }
     if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();if(!cfg.autonomyEnabled)void sync();}
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
-    return {enabled:true,processProduct,sync,store,worker,
-      stop(){worker.stop();clearInterval(syncTimer);}};
+    return {enabled:true,processProduct,sync,store,worker,social,
+      stop(){worker.stop();social?.stop();clearInterval(syncTimer);}};
   }catch(e){log('DISABLED',{reason:codeOf(e)});return {enabled:false,processProduct:async()=>({processed:0,status:'marketing_disabled'}),stop(){}};}
 }
+
