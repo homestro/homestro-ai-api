@@ -14,8 +14,13 @@ import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
 import {SocialCoordinator,socialConfig} from './social.js';
 import {socialReviewPage} from './social-review.js';
+import {inspectSocialConnection} from './social-connection.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
+  if(String(process.env.PILOT_SOCIAL_CHECK_CONNECTION).toLowerCase()==='true') {
+    inspectSocialConnection(process.env).then(result=>log('SOCIAL_CONNECTION_CHECK',result))
+      .catch(e=>log('SOCIAL_CONNECTION_CHECK_FAILED',{reason:codeOf(e)}));
+  }
   // Await initialization once at startup. Errors disable marketing, never the main server.
   try {
     if(!apiKeyMiddleware && (!cfg.adminKey || cfg.adminKey.length<32))fail('PILOT_ADMIN_KEY_REQUIRED');

@@ -157,10 +157,19 @@ provider secrets, deployment, PostgreSQL migration and real public platform link
 are not yet verified. No claim of live TikTok/Pinterest operation is made.
 Setup and exact variables: docs/social-organic-setup.md.
 Reviewable GitHub change: https://github.com/homestro/homestro-ai-api/pull/79
-(draft, not merged/deployed). The initial commit is
+(merged and deployed successfully on 10 October 2026; merge commit
+7c71f474041e0a621a097d0273e009db440ae6b3). The initial commit is
 6d790e994ed1282965e474ee1eb07d67c404cd2e. Local marketing regression tests passed
 89/89, including real FFmpeg rendering; subsequent read-failure regression raises
 the suite to 90 tests. This PR is implementation evidence, not a live post link.
 Zernio currently advertises two connected accounts free; do not add a card or third
 account. Existing Railway/OpenAI running costs remain.
+
+Owner screenshots confirm TikTok @homestroo and Pinterest @homestro0684 connected,
+with public board Homestro – Ideen für Zuhause selected as current. Railway
+confirms ZERNIO_API_KEY exists; OAuth tools redact its value. Social publishing
+is still disabled. A copied Pinterest account ID is malformed (25 characters);
+the opt-in PILOT_SOCIAL_CHECK_CONNECTION startup check reads accounts and boards
+using the server-held key and logs only public IDs, names and privacy. It performs
+no writes and emits sanitized failure codes. Two targeted diagnostic tests pass.
 
