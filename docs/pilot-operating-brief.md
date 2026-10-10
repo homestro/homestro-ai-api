@@ -173,3 +173,12 @@ the opt-in PILOT_SOCIAL_CHECK_CONNECTION startup check reads accounts and boards
 using the server-held key and logs only public IDs, names and privacy. It performs
 no writes and emits sanitized failure codes. Two targeted diagnostic tests pass.
 
+10 October, 20:33 Berlin: owner review screenshot shows individual TikTok consent
+and an approved queue entry. Connection check confirmed @homestroo, @homestro0684
+and public board 1094585953125321154. Corrected Pinterest account ID to
+6aca3f628a43e7f438cb0f87; social integration and publishing variables enabled,
+deployment fb4cd590-deec-4872-989d-e73c4e793dce succeeded. Review UI now displays
+smaller linked photo previews, collapses successfully approved cards, scrolls to
+the next card and shows remaining approvals. Per-post consent is unchanged;
+generated browser script syntax checked. A queued approval is not a public link.
+
