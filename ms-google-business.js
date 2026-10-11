@@ -151,6 +151,9 @@ class GoogleBusinessPublisher {
       for (const location of page.locations || []) {
         if (!/^locations\/\d+$/.test(String(location.name || '')) || !location.title) continue;
         if (String(location.title).trim().toLocaleLowerCase('de-DE') !== 'ms handwerk & service') continue;
+        let website;
+        try { website = new URL(String(location.websiteUri || '')); } catch { continue; }
+        if (website.protocol !== 'https:' || !['ms-handwerkservice.de', 'www.ms-handwerkservice.de'].includes(website.hostname)) continue;
         result.push({ name: `${account.name}/${location.name}`, title: String(location.title), websiteUri: location.websiteUri || null });
       }
     }
@@ -207,7 +210,7 @@ class GoogleBusinessPublisher {
             else if (latest.state === 'REJECTED') await client.query(`UPDATE ${POSTS_TABLE} SET status='failed',error_code='GOOGLE_POST_REJECTED',updated_at=now() WHERE id=$1`, [item.id]);
           } catch { /* Keep the remote post pending; never create a duplicate. */ }
         }
-        const cap = await client.query(`SELECT count(*)::int AS n FROM ${POSTS_TABLE} WHERE status IN ('published','publishing','verification_pending','recovery_required') AND updated_at>=now()-interval '24 hours'`);
+        const cap = await client.query(`SELECT count(*)::int AS n FROM ${POSTS_TABLE} WHERE status IN ('publishing','verification_pending','recovery_required') OR (status='published' AND published_at>=now()-interval '24 hours')`);
         if (Number(cap.rows[0]?.n || 0) >= cfg.maxDaily) return { skipped: 'DAILY_LIMIT' };
         const post = (await client.query(`SELECT * FROM ${POSTS_TABLE} WHERE status='queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED`)).rows[0];
         if (!post) return { skipped: 'QUEUE_EMPTY' };
