@@ -26,8 +26,19 @@ export class ZernioOrganic {
     } catch {fail(method==='POST'?'ZERNIO_RESULT_UNCERTAIN':'ZERNIO_READ_FAILED');}
     let data;try{data=await response.json();}catch{fail(method==='POST'?'ZERNIO_RESULT_UNCERTAIN':'ZERNIO_INVALID_RESPONSE');}
     if(!response.ok) {
-      // Do not include remote messages, credentials or the response body in logs.
-      const code=response.status===401?'ZERNIO_REAUTH_REQUIRED':response.status===429?'ZERNIO_RATE_LIMIT':response.status>=500&&method==='POST'?'ZERNIO_RESULT_UNCERTAIN':'ZERNIO_REQUEST_FAILED';
+      // Keep provider text and response bodies private; expose only a bounded
+      // operation label and HTTP status so operators can distinguish setup,
+      // TikTok eligibility, dry-run, and write failures.
+      const operation=path==='accounts'?'ACCOUNTS':
+        path.endsWith('/tiktok/creator-info')?'TIKTOK_CREATOR_INFO':
+        path.endsWith('/pinterest-boards')?'PINTEREST_BOARDS':
+        path==='posts'&&method==='POST'&&body?.dryRun===true?'PUBLISH_PREFLIGHT':
+        path==='posts'&&method==='POST'?'POST_CREATE':
+        path.startsWith('posts/')?'POST_RECONCILE':'REQUEST';
+      const code=response.status===401?'ZERNIO_REAUTH_REQUIRED':
+        response.status===429?'ZERNIO_RATE_LIMIT':
+        response.status>=500&&method==='POST'&&body?.dryRun!==true?'ZERNIO_RESULT_UNCERTAIN':
+        `ZERNIO_${operation}_HTTP_${response.status}`;
       fail(code);
     }
     return data;

@@ -9,19 +9,26 @@ const clean=value=>String(value||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,
 export const sourceLooksGerman=source=>/\b(?:der|die|das|für|mit|und|aus|zum|zur|ein|eine|im|auf|oder|dein|deine|vier|zwei)\b/i.test(source);
 const safeCode=value=>typeof value==='string' && /^[A-Za-z0-9_.-]{1,60}$/.test(value)?value:undefined;
 export function createSourceLocalizer({apiKey,model='gpt-4o-mini',fetchImpl=fetch}={}) {
+  // A rejected key is an environment fault, not a product fault. Stop sending one
+  // identical request per product until the service restarts with corrected config.
+  let apiKeyRejected=false;
+  const fromGermanSource=({title,description,facts})=>{
+    const source=clean(title)+' '+clean(description)+' '+facts.map(f=>clean(f.text)).join(' ');
+    if(!sourceLooksGerman(source))fail('GERMAN_TRANSLATION_REQUIRED');
+    const selected=facts.map(f=>({id:String(f.id),text:clean(f.text).slice(0,300)}))
+      .filter(f=>f.id && f.text).slice(0,10);
+    return validateLocalized({language:'de',title:clean(title).slice(0,150),description:clean(description),
+      hook:clean(title).slice(0,100),searchTitle:clean(title).slice(0,150),seoTitle:clean(title).slice(0,70),
+      seoDescription:clean(description).slice(0,160),
+      benefits:selected.slice(0,3).map(f=>({factId:f.id,text:f.text}))},facts);
+  };
   return async ({title,description,facts=[]})=>{
     const t=clean(title),d=clean(description);
     if(!t || !d || !facts.length)fail('SOURCE_COPY_REQUIRED');
     const selected=facts.map(f=>({id:String(f.id),text:clean(f.text).slice(0,300)}))
       .filter(f=>f.id && f.text).slice(0,10);
     if(!selected.length)fail('SOURCE_COPY_REQUIRED');
-    if(!apiKey) {
-      const source=t+' '+d+' '+selected.map(f=>f.text).join(' ');
-      if(!sourceLooksGerman(source))fail('GERMAN_TRANSLATION_REQUIRED');
-      return validateLocalized({language:'de',title:t.slice(0,150),description:d,
-        hook:t.slice(0,100),searchTitle:t.slice(0,150),seoTitle:t.slice(0,70),seoDescription:d.slice(0,160),
-        benefits:selected.slice(0,3).map(f=>({factId:f.id,text:f.text}))},facts);
-    }
+    if(!apiKey || apiKeyRejected)return fromGermanSource({title:t,description:d,facts:selected});
     const response=await fetchImpl('https://api.openai.com/v1/chat/completions',{
       method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},
       body:JSON.stringify({model,temperature:0.2,max_completion_tokens:1000,response_format:{type:'json_object'},
@@ -34,6 +41,11 @@ export function createSourceLocalizer({apiKey,model='gpt-4o-mini',fetchImpl=fetc
     if(!response.ok){
       let providerError={};try{providerError=(await response.json())?.error||{};}catch{}
       log('LOCALIZATION_PROVIDER_ERROR',{status:response.status,type:safeCode(providerError.type),providerCode:safeCode(providerError.code),providerParam:safeCode(providerError.param)});
+      if(response.status===401){
+        apiKeyRejected=true;
+        log('LOCALIZATION_PROVIDER_DISABLED',{reason:'HTTP_401'});
+        return fromGermanSource({title:t,description:d,facts:selected});
+      }
       fail('LOCALIZATION_PROVIDER_FAILED');
     }
     let body;

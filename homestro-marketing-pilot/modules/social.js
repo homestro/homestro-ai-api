@@ -112,6 +112,18 @@ export class SocialCoordinator {
   async list(status='draft_queued'){
     return (await this.pool.query('SELECT * FROM marketing_social_posts WHERE status=$1 ORDER BY created_at LIMIT 100',[status])).rows;
   }
+  async checkTikTokPreflight(){
+    const job=(await this.list('approved')).find(row=>row.channel==='tiktok'&&
+      row.payload?.tiktokSettings?.content_preview_confirmed===true&&
+      row.payload?.tiktokSettings?.express_consent_given===true);
+    if(!job)fail('TIKTOK_NO_APPROVED_PREVIEW');
+    const current=await this.freshSnapshot(job.product_id);
+    if(!eligible(current,this.cfg)||current.revision!==job.payload.productRevision)fail('SOCIAL_REVIEW_STALE');
+    // Zernio's dryRun checks TikTok permissions and payload validity without
+    // creating a public post or consuming a publication slot.
+    const result=await this.provider.preflightTikTok({...job,status:'publishing'});
+    return {ok:result?.dryRun===true&&result?.canPublish===true,channel:'tiktok',format:job.payload.format};
+  }
   async approve(id,body){
     const client=await this.pool.connect();
     try{

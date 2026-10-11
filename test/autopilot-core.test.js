@@ -12,10 +12,10 @@ const germanDescription = '<p>' + ('Dieses Produkt bietet eine praktische Anwend
 function ready(overrides = {}) {
   return {
     landedCostVerified: true, status: 'DRAFT', title: 'Praktischer Küchenhelfer für den Alltag', description: germanDescription,
-    seo: { title: 'Praktischer Küchenhelfer', description: 'Küchenhelfer für eine einfache und zuverlässige Anwendung.' },
+    seo: { title: 'Praktischer Küchenhelfer für den Alltag | Homestro', description: 'Entdecke einen praktischen Küchenhelfer für den Alltag mit übersichtlichen Eigenschaften und einfacher Handhabung in deiner Küche.' },
     collections: { nodes: [{ id: 'gid://shopify/Collection/1' }] },
     variants: { nodes: [{ id: 'v1', price: '39.90', selectedOptions: [{ name: 'Farbe', value: 'Schwarz' }], image: { url: 'https://cdn.example/a.jpg' }, inventoryItem: { unitCost: { amount: '10' } } }] },
-    media: { nodes: [{ image: { url: 'https://cdn.example/a.jpg', width: 1200, height: 1200 } }] },
+    media: { nodes: [{ image: { url: 'https://cdn.example/a.jpg', width: 1200, height: 1200, altText: 'Praktischer Küchenhelfer im Alltag' } }] },
     rules: { minSellingPrice: 34.9, minRatio: 3, minNetProfit: 12 }, ...overrides
   };
 }

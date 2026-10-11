@@ -190,3 +190,21 @@ test('template changes preserve approved TikTok previews while preparing new Pin
   assert.equal(queries.find(q=>q.sql.includes('INSERT INTO marketing_social_posts')).args[2],'pinterest');
   assert.equal(queries.some(q=>q.sql.includes("SET status='superseded'")&&q.args[1]==='tiktok'),false);
 });
+
+test('TikTok connection check uses an approved preview for dry-run and never submits a public post',async()=>{
+  const j={...job(),channel:'tiktok',status:'approved'};
+  j.payload={...prepareSocial(source(),'tiktok',{...providerCfg,accounts:{tiktok:'a'.repeat(24)}}),
+    productRevision:'rev',
+    tiktokSettings:{content_preview_confirmed:true,express_consent_given:true,
+      privacy_level:'PUBLIC_TO_EVERYONE',allow_comment:false}};
+  let checked=null;
+  const coordinator=new SocialCoordinator({
+    pool:{query:async()=>({rows:[j]})},cfg:base,
+    providerCfg:{accounts:{tiktok:'a'.repeat(24)},publishingEnabled:true},
+    freshSnapshot:async()=>source(),
+    provider:{preflightTikTok:async post=>{checked=post;return {dryRun:true,canPublish:true};}}
+  });
+  assert.deepEqual(await coordinator.checkTikTokPreflight(),{ok:true,channel:'tiktok',format:'carousel'});
+  assert.equal(checked.status,'publishing');
+  assert.equal(checked.payload.tiktokSettings.express_consent_given,true);
+});

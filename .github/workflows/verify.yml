@@ -1,0 +1,38 @@
+name: verify
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "fix/**", "codex/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-image:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install system test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg tesseract-ocr fonts-dejavu-core
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run API and regression tests
+        run: npm test
+      - name: Run marketing pilot tests
+        if: always()
+        run: npm run test:marketing
+      - name: Build production image
+        if: always()
+        run: docker build --file Dockerfile.homestro-fixed --tag homestro-ai-api:ci .
