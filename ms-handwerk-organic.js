@@ -80,7 +80,7 @@ function buildDraft(input = {}) {
   const relatedServices = service === 'Innenanstrich' || service === 'Spachtelarbeiten'
     ? 'Innenanstriche, Spachtel- und Schleifarbeiten'
     : `${service}, Renovierungs- und Hausservice`;
-  const googlePost = `${service} in ${city}\n\n${projectDescription}\n\nMS Handwerk & Service übernimmt ${relatedServices} in ${city} und Umgebung. Saubere und zuverlässige Ausführung, faire Preise, kurzfristige Termine und kostenlose Besichtigung.\n\nTelefon und WhatsApp: 0176 36336476.`;
+  const googlePost = `${service} in ${city}\n\n${projectDescription}\n\nMS Handwerk & Service übernimmt ${relatedServices} in ${city} und Umgebung.\n\nTelefon und WhatsApp: 0176 36336476.`;
   const localPost = `${intro}\n\n${projectDescription}\n\nMS Handwerk & Service aus Kempten ist für Renovierungen und Hausservice in der Umgebung erreichbar. Informationen: https://ms-handwerkservice.de`;
 
   return {
@@ -92,11 +92,11 @@ function buildDraft(input = {}) {
     autoPublished: false,
     reviewRequired: true,
     website: { suggestedPath: `/projekte/${slug}/`, title, metaDescription, articleHtml, published: false },
-    googleBusinessProfile: { text: googlePost, link: googleUrl.toString(), published: false, automationAvailable: false },
+    googleBusinessProfile: { text: googlePost, link: googleUrl.toString(), published: false, automationAvailable: true },
     localSocial: { text: localPost, photoUrls: photos, published: false },
     notes: [
-      'Entwurf používá pouze zadaný popis zakázky; před zveřejněním ho zkontrolujte.',
-      'Příspěvek v Google profilu je zatím připravený k ručnímu vložení.',
+      'Text používá jen zadané údaje o dokončené zakázce; Pilot nesmí vymýšlet realizace ani sliby.',
+      'Po propojení ověřeného profilu a zapnutí automatického publikování zařadí Pilot příspěvek do fronty Google.',
       'Stránka projektu se na webu vytvoří až po nasazení; navržená cesta zatím neexistuje.'
     ]
   };
