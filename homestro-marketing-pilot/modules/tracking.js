@@ -1,11 +1,11 @@
 import {createHmac,timingSafeEqual} from 'node:crypto';
-import {fail,productURL,trackingLink} from './core.js';
+import {fail,productURL} from './core.js';
 
 const CHANNELS=new Set(['facebook','instagram','tiktok','pinterest']);
 const FORMATS=new Set(['image','carousel','reels']);
 const signature=(payload,secret)=>createHmac('sha256',secret).update(payload).digest('base64url');
 
-export function createTrackedLink({url,productId,channel,format,publicOrigin,secret}) {
+export function createTrackedLink({productId,channel,format,publicOrigin,secret}) {
   if(!/^gid:\/\/shopify\/Product\/\d+$/.test(String(productId||'')))fail('INVALID_PRODUCT_ID');
   if(!CHANNELS.has(channel)||!FORMATS.has(format))fail('INVALID_TRACKING_SOURCE');
   if(typeof secret!=='string'||secret.length<32)fail('TRACKING_SECRET_REQUIRED');
