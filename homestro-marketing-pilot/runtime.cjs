@@ -1,5 +1,10 @@
 'use strict';
 // Existing server adapter. Primary Shopify pipeline never depends on marketing initialization.
+function marketingGraphqlAllowed(query) {
+  const source=String(query||'').trim();
+  if(/^query(?:\\s|\\{)/i.test(source))return true;
+  return /^mutation\\s+(?:PilotProductSeoUpdate|PilotArticleDraft)\\s*\\(/.test(source);
+}
 function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentials,onCredentialError}={}) {
   let instance=null,state={enabled:false,reason:'initializing'};
   app.get('/api/marketing/v2/runtime',apiKey,(_req,res)=>res.json({...state,adSpendEUR:0}));
@@ -13,7 +18,7 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
       const cfg=config({...env,PILOT_ADMIN_KEY:env.PILOT_ADMIN_KEY||env.HOMESTRO_API_KEY});
       cfg.getCredentials=getCredentials;cfg.onCredentialError=onCredentialError;
       const boundedGraphql=(query,variables)=>{
-        if(!String(query).trim().startsWith('query '))throw new Error('Marketing Shopify reads only');
+        if(!marketingGraphqlAllowed(query))throw new Error('Marketing Shopify operation not allowed');
         let timer;
         return Promise.race([graphql(query,variables),new Promise((_,reject)=>{
           timer=setTimeout(()=>reject(new Error('SHOPIFY_TIMEOUT')),20000);
@@ -54,4 +59,4 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
     catch{return {processed:0,status:'pending_marketing'};}
   }};
 }
-module.exports={registerMarketingPilot};
+module.exports={registerMarketingPilot,marketingGraphqlAllowed};
