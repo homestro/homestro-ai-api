@@ -80,7 +80,7 @@ function buildDraft(input = {}) {
   const relatedServices = service === 'Innenanstrich' || service === 'Spachtelarbeiten'
     ? 'Innenanstriche, Spachtel- und Schleifarbeiten'
     : `${service}, Renovierungs- und Hausservice`;
-  const googlePost = `${service} in ${city}\n\n${projectDescription}\n\nMS Handwerk & Service übernimmt ${relatedServices} in ${city} und Umgebung. Saubere und zuverlässige Ausführung, faire Preise, kurzfristige Termine und kostenlose Besichtigung.\n\nTelefon und WhatsApp: 0176 36336476.`;
+  const googlePost = `${service} in ${city}\n\n${projectDescription}\n\nMS Handwerk & Service übernimmt ${relatedServices} in ${city} und Umgebung.\n\nTelefon und WhatsApp: 0176 36336476.`;
   const localPost = `${intro}\n\n${projectDescription}\n\nMS Handwerk & Service aus Kempten ist für Renovierungen und Hausservice in der Umgebung erreichbar. Informationen: https://ms-handwerkservice.de`;
 
   return {
@@ -92,17 +92,19 @@ function buildDraft(input = {}) {
     autoPublished: false,
     reviewRequired: true,
     website: { suggestedPath: `/projekte/${slug}/`, title, metaDescription, articleHtml, published: false },
-    googleBusinessProfile: { text: googlePost, link: googleUrl.toString(), published: false, automationAvailable: false },
+    googleBusinessProfile: { text: googlePost, link: googleUrl.toString(), published: false, automationAvailable: true },
     localSocial: { text: localPost, photoUrls: photos, published: false },
     notes: [
-      'Entwurf používá pouze zadaný popis zakázky; před zveřejněním ho zkontrolujte.',
-      'Příspěvek v Google profilu je zatím připravený k ručnímu vložení.',
+      'Text používá jen zadané údaje o dokončené zakázce; Pilot nesmí vymýšlet realizace ani sliby.',
+      'Po propojení ověřeného profilu a zapnutí automatického publikování zařadí Pilot příspěvek do fronty Google.',
       'Stránka projektu se na webu vytvoří až po nasazení; navržená cesta zatím neexistuje.'
     ]
   };
 }
 
-function registerMsHandwerkOrganic(app) {
+function registerMsHandwerkOrganic(app, _apiKey, integrations = {}) {
+  const googleBusiness = integrations?.googleBusiness || integrations;
+  const metaBusiness = integrations?.metaBusiness;
   const requestWindows = new Map();
   const draftRateLimit = (req, res, next) => {
     const now = Date.now();
@@ -139,15 +141,17 @@ function registerMsHandwerkOrganic(app) {
       $('generate').onclick=async()=>{results.replaceChildren();$('error').textContent='';try{const response=await fetch('/api/ms-handwerk/organic/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:$('service').value,city:$('city').value,projectDescription:$('description').value,photoUrls:$('photos').value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean)})});const data=await response.json();if(!response.ok)throw Error(data.error||'Návrh se nepodařilo vytvořit');const d=data.draft;addOutput('Google profil – text příspěvku',d.googleBusinessProfile.text);addOutput('Google profil – odkaz pro tlačítko „Mehr erfahren“',d.googleBusinessProfile.link);addOutput('Návrh textu pro web (HTML)',d.website.articleHtml);addOutput('Nebenan / Facebook',d.localSocial.text);$('error').textContent='Hotovo jako návrh. Použij jen pravdivý popis skutečné zakázky a ověř práva k fotografiím. Nic nebylo zveřejněno.';}catch(e){$('error').textContent=e.message;}};
       </script></html>`);
   });
-  app.get('/api/ms-handwerk/organic/status', (_req, res) => res.json({
-    ok: true,
-    business: 'MS Handwerk & Service',
-    mode: 'DRAFT_ONLY',
-    adSpendEUR: 0,
-    paidAdsEnabled: false,
-    autoPublishingEnabled: false,
-    contentGeneration: 'template-based; no OpenAI call'
-  }));
+  app.get('/api/ms-handwerk/organic/status', async (_req, res) => {
+    let google = { configured: false, connected: false, locationConfigured: false, publishingEnabled: false, workerRunning: false };
+    let meta = { configured: false, connected: false, publishingEnabled: false, workerRunning: false };
+    try { if (googleBusiness) google = await googleBusiness.status(); } catch (e) { google = { configured: false, error: e.code || 'GOOGLE_STATUS_FAILED' }; }
+    try { if (metaBusiness) meta = await metaBusiness.status(); } catch (e) { meta = { configured: false, error: e.code || 'META_STATUS_FAILED' }; }
+    const enabled = Boolean((google.configured && google.connected && google.locationConfigured && google.publishingEnabled && google.workerRunning)
+      || (meta.configured && meta.connected && meta.publishingEnabled && meta.workerRunning));
+    res.json({ ok: true, business: 'MS Handwerk & Service', mode: enabled ? 'AUTOPUBLISH_READY' : 'SETUP_REQUIRED',
+      adSpendEUR: 0, paidAdsEnabled: false, autoPublishingEnabled: enabled, googleBusinessProfile: google, meta,
+      contentGeneration: 'template-based; no OpenAI call' });
+  });
   app.post('/api/ms-handwerk/organic/draft', draftRateLimit, (req, res) => {
     try { return res.json({ ok: true, draft: buildDraft(req.body) }); }
     catch (error) { return res.status(400).json({ ok: false, error: error.message || 'INVALID_INPUT' }); }
