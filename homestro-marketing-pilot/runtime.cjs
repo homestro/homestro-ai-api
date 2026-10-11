@@ -3,7 +3,12 @@
 function marketingGraphqlAllowed(query) {
   const source=String(query||'').trim();
   if(/^query(?:\s|\{)/i.test(source))return true;
-  return /^mutation\s+(?:PilotProductSeoUpdate|PilotArticleDraft)\s*\(/.test(source);
+  const normalized=source.replace(/\s+/g,' ');
+  const allowed=new Set([
+    'mutation PilotProductSeoUpdate($input: ProductInput!) { productUpdate(input: $input) { product { id seo { title description } } userErrors { field message } } }',
+    'mutation PilotArticleDraft($article: ArticleCreateInput!) { articleCreate(article: $article) { article { id title handle isPublished onlineStoreUrl } userErrors { field message } } }'
+  ]);
+  return allowed.has(normalized);
 }
 function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentials,onCredentialError}={}) {
   let instance=null,state={enabled:false,reason:'initializing'};
