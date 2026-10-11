@@ -51,7 +51,8 @@ be supplied instead if an owner-managed Railway configuration is preferred.
 
 - Authenticated queue endpoint: `POST /api/ms-handwerk/organic/google/queue`.
   The web page sends service, city and a completed project's German description.
-- Read status: `GET /api/ms-handwerk/organic/google/status`.
+- Read Google connection status: `GET /api/ms-handwerk/organic/google/status`.
+- Read combined MS pilot readiness: `GET /api/ms-handwerk/organic/status`.
 - Check OAuth and Business Profile access without publishing:
   `GET /api/ms-handwerk/organic/google/check`.
 - Read queue/history: `GET /api/ms-handwerk/organic/google/posts`.
