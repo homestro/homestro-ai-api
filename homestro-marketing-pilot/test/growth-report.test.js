@@ -21,7 +21,8 @@ test('aggregates pilot evidence and leaves unavailable attribution unknown',()=>
       {channel:'instagram',status:'published',count:1,confirmed_permalink_count:0},
       {channel:'tiktok',status:'draft_queued',count:3,confirmed_permalink_count:0}
     ],
-    pendingReasons:[{reason:'NO_PUBLIC_PRODUCT_URL',count:1}]
+    pendingReasons:[{reason:'NO_PUBLIC_PRODUCT_URL',count:1}],
+    clickRows:[{channel:'facebook',count:7},{channel:'pinterest',count:2}]
   });
   assert.equal(report.catalog.total,6);
   assert.equal(report.catalog.readyProducts,4);
@@ -29,6 +30,9 @@ test('aggregates pilot evidence and leaves unavailable attribution unknown',()=>
   assert.equal(report.catalog.seoCopyMissing,1);
   assert.equal(report.organic.publishedRows,3);
   assert.equal(report.organic.confirmedPublications,2);
+  assert.equal(report.organic.trackedLinkRequests,9);
+  assert.equal(report.organic.byChannel.facebook.trackedLinkRequests,7);
+  assert.equal(report.organic.byChannel.pinterest.trackedLinkRequests,2);
   assert.equal(report.organic.byChannel.tiktok.draftQueued,3);
   assert.equal(report.attribution.sessions,null);
   assert.equal(report.attribution.orders,null);
@@ -40,6 +44,7 @@ test('empty datasets report no fabricated impressions, clicks, or sales',()=>{
   const report=buildGrowthReport({products:[],posts:[],pendingReasons:[]});
   assert.equal(report.catalog.total,0);
   assert.equal(report.organic.publishedRows,0);
+  assert.equal(report.organic.trackedLinkRequests,0);
   assert.equal(report.attribution.clicks,null);
   assert.equal(report.attribution.revenueEUR,null);
   assert.ok(report.attribution.missing.includes('Search Console impressions and clicks'));
