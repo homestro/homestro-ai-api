@@ -10,7 +10,7 @@ test('skips never count as processed and pending remain distinct from complete',
 test('actual background runner records skipped sources instead of successful processing', async()=>{
  const fs=require('node:fs');
  const source=fs.readFileSync(require.resolve('../server.js'),'utf8');
- const runner=source.slice(source.indexOf('async function draftAutopilotRun(){'),source.indexOf('\nasync function catalogRun(){'));
+ const runner=source.slice(source.indexOf('async function draftAutopilotRun(){'),source.indexOf('\nasync function catalogRun('));
  const state={running:false,processed:0};
  const invoke=new Function('draftAutopilotState','getClientToken','shopifyGraphQL','isDsersImportedCandidate','processExistingDraftProduct','summarizeAutopilotResults','console',runner+';return draftAutopilotRun();');
  await invoke(state,async()=> 'test',async()=>({products:{nodes:[{id:'missing'},{id:'ready'}]}}),()=>true,async id=>id==='missing'?{id,processed:false,skipped:true,reason:'source-missing'}:{id,processed:true,complete:true},summarizeAutopilotResults,{log(){},error(){}});
