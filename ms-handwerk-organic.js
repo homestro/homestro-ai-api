@@ -102,7 +102,7 @@ function buildDraft(input = {}) {
   };
 }
 
-function registerMsHandwerkOrganic(app) {
+function registerMsHandwerkOrganic(app, _apiKey, googleBusiness) {
   const requestWindows = new Map();
   const draftRateLimit = (req, res, next) => {
     const now = Date.now();
@@ -139,15 +139,14 @@ function registerMsHandwerkOrganic(app) {
       $('generate').onclick=async()=>{results.replaceChildren();$('error').textContent='';try{const response=await fetch('/api/ms-handwerk/organic/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:$('service').value,city:$('city').value,projectDescription:$('description').value,photoUrls:$('photos').value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean)})});const data=await response.json();if(!response.ok)throw Error(data.error||'Návrh se nepodařilo vytvořit');const d=data.draft;addOutput('Google profil – text příspěvku',d.googleBusinessProfile.text);addOutput('Google profil – odkaz pro tlačítko „Mehr erfahren“',d.googleBusinessProfile.link);addOutput('Návrh textu pro web (HTML)',d.website.articleHtml);addOutput('Nebenan / Facebook',d.localSocial.text);$('error').textContent='Hotovo jako návrh. Použij jen pravdivý popis skutečné zakázky a ověř práva k fotografiím. Nic nebylo zveřejněno.';}catch(e){$('error').textContent=e.message;}};
       </script></html>`);
   });
-  app.get('/api/ms-handwerk/organic/status', (_req, res) => res.json({
-    ok: true,
-    business: 'MS Handwerk & Service',
-    mode: 'DRAFT_ONLY',
-    adSpendEUR: 0,
-    paidAdsEnabled: false,
-    autoPublishingEnabled: false,
-    contentGeneration: 'template-based; no OpenAI call'
-  }));
+  app.get('/api/ms-handwerk/organic/status', async (_req, res) => {
+    let google = { configured: false, connected: false, locationConfigured: false, publishingEnabled: false, workerRunning: false };
+    try { if (googleBusiness) google = await googleBusiness.status(); } catch (e) { google = { configured: false, error: e.code || 'GOOGLE_STATUS_FAILED' }; }
+    const enabled = Boolean(google.configured && google.connected && google.locationConfigured && google.publishingEnabled && google.workerRunning);
+    res.json({ ok: true, business: 'MS Handwerk & Service', mode: enabled ? 'AUTOPUBLISH_READY' : 'SETUP_REQUIRED',
+      adSpendEUR: 0, paidAdsEnabled: false, autoPublishingEnabled: enabled, googleBusinessProfile: google,
+      contentGeneration: 'template-based; no OpenAI call' });
+  });
   app.post('/api/ms-handwerk/organic/draft', draftRateLimit, (req, res) => {
     try { return res.json({ ok: true, draft: buildDraft(req.body) }); }
     catch (error) { return res.status(400).json({ ok: false, error: error.message || 'INVALID_INPUT' }); }
