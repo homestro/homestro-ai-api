@@ -17,6 +17,7 @@ import {SocialCoordinator,socialConfig} from './social.js';
 import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
+import {buildGrowthReport,reportWindow} from './growth-report.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -130,6 +131,15 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
+    router.get('/growth/report',route(async(req,res)=>{
+      const days=reportWindow(req.query.days);
+      const [products,posts,pendingReasons]=await Promise.all([
+        pool.query('SELECT status,count(*)::int AS count, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NOT NULL AND document->\'localized\'->>\'seoDescription\' IS NOT NULL)::int AS seo_copy_ready, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NULL OR document->\'localized\'->>\'seoDescription\' IS NULL)::int AS seo_copy_missing FROM marketing_products GROUP BY status'),
+        pool.query('SELECT channel,status,count(*)::int AS count, count(*) FILTER (WHERE remote->>\'permalink\' ~ \'^https://\')::int AS confirmed_permalink_count FROM marketing_posts WHERE COALESCE(published_at,created_at)>=now()-($1::int * interval \'1 day\') GROUP BY channel,status',[days]),
+        pool.query('SELECT reason,count(*)::int AS count FROM marketing_products p CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason WHERE p.status=\'pending_marketing\' GROUP BY reason ORDER BY count DESC,reason')
+      ]);
+      res.json(buildGrowthReport({days,products:products.rows,posts:posts.rows,pendingReasons:pendingReasons.rows}));
+    }));
     router.get('/status',route(async(req,res)=>{
       const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
       const posts=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_posts GROUP BY status')).rows;
