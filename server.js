@@ -62,7 +62,7 @@ app.get('/auth/install',(req,res)=>{
  if(!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop))return res.status(400).send('Invalid Shopify shop.');
  const state=crypto.randomBytes(24).toString('hex');oauthStates.set(state,{shop,expires:Date.now()+600000});
  const redirect=encodeURIComponent(`https://${req.get('host')}/auth/callback`);
- const scopes=encodeURIComponent('write_products,read_products');
+ const scopes=encodeURIComponent('write_products,read_products,write_content');
  res.redirect(`https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(c.clientId)}&scope=${scopes}&redirect_uri=${redirect}&state=${state}`);
 });
 app.get('/auth/callback',async(req,res)=>{
