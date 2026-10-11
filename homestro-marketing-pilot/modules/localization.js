@@ -1,4 +1,5 @@
 import {fail,trackingLink} from './core.js';
+import {createTrackedLink} from './tracking.js';
 
 const categories={
   beauty:['#Haarklammern','#Haarschmuck','#Alltagslook'],
@@ -48,9 +49,11 @@ export async function localize(product,adapter) {
     facts:product.facts||[],instructions:'Native German. Only verified facts. No invented specs, health claims, ratings, scarcity or guarantees. Return title, description, hook, three benefits with factId, searchTitle, seoTitle, seoDescription, language.'});
   return validateLocalized(repairLocalized(copy),product.facts||[]);
 }
-export function compilePost(product,channel,asset) {
+export function compilePost(product,channel,asset,cfg={}) {
   const c=product.localized;
-  const link=trackingLink(product.url,channel,asset.format);
+  const link=cfg.adminKey&&cfg.publicOrigin
+    ? createTrackedLink({productId:product.id,channel,format:asset.format,publicOrigin:cfg.publicOrigin,secret:cfg.adminKey})
+    : trackingLink(product.url,channel,asset.format);
   const hashtags=[...(categories[product.categoryKey]||categories.home),'#Homestro'];
   const cta=channel==='instagram'
     ? 'Entdecke das Produkt bei Homestro – über den Link in unserem Profil.'
