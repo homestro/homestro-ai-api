@@ -32,7 +32,7 @@ export async function createSeoArticleDraft({pool,graphql,blogId,author,input}) 
     if(!inserted.rowCount) {
       const existing=(await c.query('SELECT content_hash,shopify_id,status FROM marketing_seo_articles WHERE handle=$1 FOR UPDATE',[article.handle])).rows[0];
       if(existing.content_hash!==fingerprint)fail('SEO_ARTICLE_HANDLE_CONFLICT');
-      if(existing.shopify_id)return {created:false,status:existing.status,id:existing.shopify_id,handle:article.handle};
+      if(existing.shopify_id){ await c.query('COMMIT'); return {created:false,status:existing.status,id:existing.shopify_id,handle:article.handle}; }
       fail('SEO_ARTICLE_RECOVERY_REQUIRED');
     }
     reserved=true;await c.query('COMMIT');
