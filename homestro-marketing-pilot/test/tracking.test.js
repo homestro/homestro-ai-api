@@ -8,7 +8,7 @@ const secret='a'.repeat(48);
 test('signs tracking links with a fixed HTTPS origin and verified source',()=>{
   const link=createTrackedLink({...source,publicOrigin:'https://pilot.example',secret});
   assert.match(link,/^https:\/\/pilot\.example\/marketing-click\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/);
-  const [,payload,sig]=new URL(link).pathname.split('/');
+  const [, ,payload,sig]=new URL(link).pathname.split('/');
   assert.deepEqual(parseTrackedLink(payload,sig,secret),source);
 });
 
