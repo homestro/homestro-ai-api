@@ -1,3 +1,13 @@
+## MS Handwerk Google Business automation — 11 October 2026
+
+Implementation is prepared on branch `codex/ms-google-auto-publishing-20261011` in the GitHub pull request. It adds a separate Google Business Profile OAuth connector for MS Handwerk & Service, encrypted persisted credentials, an owner-authorized profile picker restricted to the exact MS Handwerk & Service profile name, a durable post queue, and a 60-second worker. The publisher is gated off unless Google OAuth settings and `GOOGLE_BUSINESS_AUTOPUBLISH_ENABLED=true` are present. The default cap is one post in a rolling 24-hour window. Posts use only supplied completed-job details; the generic template no longer promises unverified prices, availability or free inspections. Google posts are not sent to Homestro or Meta.
+
+The worker records Google’s returned post ID and only marks a post published when its state is LIVE. A missing/ambiguous remote outcome remains held for recovery and is not sent again automatically. The owner can connect Google, choose the MS profile and enter completed-job details at `/ms-handwerk-google-connect`. The worker can publish queued content without a chat session, but it does not invent new customer jobs or details. Organic only; adSpendEUR remains 0.
+
+Local validation: 4 Google publishing tests and 4 MS Handwerk organic draft tests pass; JavaScript syntax check passes. Current Railway production service `homestro-ai-api-fixed-current` is deployment `5944860d-6b1b-4b25-9ccd-db3b5ecb4539` SUCCESS. Its live variable-name inventory has no `GOOGLE_BUSINESS_*` settings, and this implementation is not yet deployed or connected to a Google account. No Google post is claimed. Google API access approval, OAuth client configuration and account-owner consent remain required before the Google feature can publish; Google requires the applicant to manage a verified Business Profile active for 60+ days and have the business website listed on the profile.
+
+---
+
 # Oprava výběru zamítnutých produktů — 8. 10. 2026
 Kontrola přes Railway potvrdila deployment 9776ddc1-da2b-49fb-8b00-eff4bb0fbb6d SUCCESS a běžící workerEnabled=true, publishingEnabled=true. Logy potvrdily nové publikace: Facebook https://www.facebook.com/122263627130172038/posts/122263929632172038 (17:47 UTC), Instagram https://www.instagram.com/p/DePgls5mBsC/ (17:50 UTC). Připojený persistentní volume /data 1024 MB je nyní doložený.
 
