@@ -31,6 +31,8 @@ jobs:
       - name: Run API and regression tests
         run: npm test
       - name: Run marketing pilot tests
+        if: always()
         run: npm run test:marketing
       - name: Build production image
+        if: always()
         run: docker build --file Dockerfile.homestro-fixed --tag homestro-ai-api:ci .
