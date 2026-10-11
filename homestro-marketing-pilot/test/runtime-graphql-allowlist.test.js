@@ -8,13 +8,13 @@ const {marketingGraphqlAllowed}=require('../runtime.cjs');
 test('allows Shopify reads and only the two required pilot write operations',()=>{
   assert.equal(marketingGraphqlAllowed('query PilotProduct($id:ID!){ product(id:$id){id} }'),true);
   assert.equal(marketingGraphqlAllowed('query{shop{name}}'),true);
-  assert.equal(marketingGraphqlAllowed('mutation PilotProductSeoUpdate($input:ProductInput!){productUpdate(input:$input){product{id}}}'),true);
-  assert.equal(marketingGraphqlAllowed('mutation PilotArticleDraft($article:ArticleCreateInput!){articleCreate(article:$article){article{id}}}'),true);
+  assert.equal(marketingGraphqlAllowed('mutation PilotProductSeoUpdate($input: ProductInput!) { productUpdate(input: $input) { product { id seo { title description } } userErrors { field message } } }'),true);
+  assert.equal(marketingGraphqlAllowed('mutation PilotArticleDraft($article: ArticleCreateInput!) { articleCreate(article: $article) { article { id title handle isPublished onlineStoreUrl } userErrors { field message } } }'),true);
 });
 
 test('rejects any unapproved Shopify mutation and comment-prefixed operation',()=>{
   assert.equal(marketingGraphqlAllowed('mutation ChangePrice($input:ProductInput!){productUpdate(input:$input){product{id}}}'),false);
-  assert.equal(marketingGraphqlAllowed('mutation PilotArticleDraft{articleCreate(article:{isPublished:true}){article{id}}}'),false);
+  assert.equal(marketingGraphqlAllowed('mutation PilotProductSeoUpdate($input: ProductInput!) { productUpdate(input: $input) { product { id title } userErrors { field message } } }'),false);
   assert.equal(marketingGraphqlAllowed('# comment\nmutation PilotArticleDraft($article:ArticleCreateInput!){articleCreate(article:$article){article{id}}}'),false);
   assert.equal(marketingGraphqlAllowed('not graphql'),false);
 });
