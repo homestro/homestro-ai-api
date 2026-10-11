@@ -19,6 +19,7 @@ test('builds a zero-ad draft from supplied real project details without publishi
   assert.doesNotMatch(draft.googleBusinessProfile.text, /Ein weiteres Projekt|Ein Projekt aus/);
   assert.match(draft.googleBusinessProfile.text, /^Innenanstrich in Kempten\n\nWände und Decken/);
   assert.doesNotMatch(draft.googleBusinessProfile.text, /<[^>]+>|[\u{1F000}-\u{1FAFF}]/u);
+  assert.doesNotMatch(draft.googleBusinessProfile.text, /faire Preise|kurzfristige Termine|kostenlose Besichtigung/i);
   assert.match(draft.googleBusinessProfile.link, /utm_source=google/);
   assert.deepEqual(draft.localSocial.photoUrls, ['https://ms-handwerkservice.de/fotos/projekt-1.jpg']);
 });
