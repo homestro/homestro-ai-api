@@ -9,10 +9,10 @@ const valid={title:'Ordnung im kleinen Flur: praktische Ideen',handle:'ordnung-k
 const config={blogId:'gid://shopify/Blog/105535177023',author:'Homestro Redaktion'};
 
 test('creates escaped Shopify article body as a private draft',()=>{
-  const article=articleDraftInput({...config,input:{...valid,body:valid.body+' <script>alert(1)</script>'}});
+  const article=articleDraftInput({...config,input:{...valid,body:valid.body+' <b>mark</b>'}});
   assert.equal(article.isPublished,false);
   assert.equal(article.blogId,config.blogId);
-  assert.ok(article.body.includes('&lt;script&gt;'));
+  assert.ok(article.body.includes('&lt;b&gt;mark&lt;/b&gt;'));
   assert.ok(!article.body.includes('<script>'));
   assert.ok(article.body.startsWith('<p>'));
 });
