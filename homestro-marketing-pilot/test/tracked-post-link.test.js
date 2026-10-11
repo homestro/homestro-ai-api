@@ -12,7 +12,7 @@ test('compiled organic post uses its signed tracking redirect when pilot configu
   const post=compilePost(product,'facebook',{format:'carousel',imageURLs:['https://assets.example/1.jpg']},cfg);
   const link=new URL(post.link);
   assert.equal(link.origin,cfg.publicOrigin);
-  const [,payload,sig]=link.pathname.split('/');
+  const [, ,payload,sig]=link.pathname.split('/');
   assert.deepEqual(parseTrackedLink(payload,sig,cfg.adminKey),{
     productId:product.id,channel:'facebook',format:'carousel'
   });
