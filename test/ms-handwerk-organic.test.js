@@ -75,3 +75,15 @@ test('serves a usable no-key draft form and rate-limits the public draft endpoin
   assert.equal(limited, 1);
   assert.equal(response.code, 429);
 });
+
+test('MS status exposes autonomous Google readiness only after connection, profile selection and worker enablement', async () => {
+  const routes = new Map();
+  const app = { get: (path, ...handlers) => routes.set(`GET ${path}`, handlers), post() {} };
+  registerMsHandwerkOrganic(app, null, { status: async () => ({ configured: true, connected: true,
+    locationConfigured: true, publishingEnabled: true, workerRunning: true, adSpendEUR: 0 }) });
+  let status;
+  await routes.get('GET /api/ms-handwerk/organic/status')[0]({}, { json(value) { status = value; } });
+  assert.equal(status.mode, 'AUTOPUBLISH_READY');
+  assert.equal(status.autoPublishingEnabled, true);
+  assert.equal(status.adSpendEUR, 0);
+});
