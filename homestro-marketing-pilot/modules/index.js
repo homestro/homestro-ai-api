@@ -19,6 +19,7 @@ import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
 import {buildGrowthReport,reportWindow} from './growth-report.js';
 import {createSeoArticleDraft} from './seo-articles.js';
+import {buildSeoContentPlan} from './content-plan.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -135,6 +136,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.get('/seo/articles/drafts',route(async(req,res)=>{
       const rows=(await pool.query('SELECT handle,status,shopify_id,created_at,updated_at FROM marketing_seo_articles ORDER BY created_at DESC LIMIT 100')).rows;
       res.json({blogConfigured:Boolean(cfg.seoBlogId),writeContentScopeRequired:true,articles:rows});
+    }));
+    router.get('/seo/content-plan/:id',route(async(req,res)=>{
+      const id=decodeURIComponent(String(req.params.id||''));
+      if(!/^gid:\/\/shopify\/Product\/\\d+$/.test(id))fail('INVALID_PRODUCT_ID');
+      const row=(await pool.query('SELECT document,status,reasons FROM marketing_products WHERE id=$1',[id])).rows[0];
+      if(!row)fail('PRODUCT_NOT_FOUND');
+      res.json(buildSeoContentPlan({product:row.document,status:row.status,reasons:row.reasons}));
     }));
     router.post('/seo/articles/draft',route(async(req,res)=>{
       if(!cfg.seoBlogId)fail('SEO_BLOG_NOT_CONFIGURED');
