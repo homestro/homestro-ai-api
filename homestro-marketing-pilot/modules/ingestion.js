@@ -21,7 +21,7 @@ export function snapshot(raw,extras={},feeRate=0) {
   p.revision=hash(p); return p;
 }
 export class Ingestion {
-  constructor({store,renderer,localizer,feeRate=0}) {Object.assign(this,{store,renderer,localizer,feeRate});}
+  constructor({store,renderer,localizer,feeRate=0,cfg={}}) {Object.assign(this,{store,renderer,localizer,feeRate,cfg});}
   async process(raw,extras={}, {prepareOnly=false}={}) {
     let p;
     try {
