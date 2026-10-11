@@ -134,6 +134,7 @@ All `/api/marketing/v2/*` endpoints require `Authorization: Bearer <PILOT_ADMIN_
 | GET `/connection` | Read-only Meta identity check, no post |
 | GET `/posts?status=draft_queued` | Full reviewable captions and asset URLs |
 | GET `/posts?status=recovery_required` | Saved remote state for manual investigation |
+| GET `/seo/content-plan/:id` | Catalog-grounded German SEO topics and outline; URL-encode the full Shopify Product GID; no search-volume claims |
 | GET `/pending-products` | First ten unresolved products and reasons |
 | PUT `/products/:id/inputs` | Save verified inputs and process product; URL-encode the whole GID |
 | POST `/posts/:id/approve` | Body `{"reviewer":"Mirko"}`; approves the exact compiled payload |
