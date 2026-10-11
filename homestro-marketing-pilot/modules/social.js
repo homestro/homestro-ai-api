@@ -28,7 +28,7 @@ export function eligible(p,cfg) {
 export function prepareSocial(p,channel,cfg) {
   if(!eligible(p,cfg)||!p.localized||!p.asset||p.asset.previewOnly)fail('SOCIAL_SOURCE_NOT_READY');
   productURL(p.url);
-  const result=compilePost(p,channel,p.asset);
+  const result=compilePost(p,channel,p.asset,cfg);
   result.title=result.title.slice(0,channel==='pinterest'?100:result.format==='reels'?150:90);
   result.productURL=result.link;
   if(channel==='pinterest'){

@@ -57,7 +57,8 @@ export function config(env=process.env) {
     publishEveryHours:Number(env.PILOT_PUBLISH_EVERY_HOURS||0),
     publishAroundClock:envBool(env.PILOT_PUBLISH_AROUND_CLOCK),
     organicPolicy:env.PILOT_ORGANIC_POLICY||'',
-    feedCap:Number(env.PILOT_FEED_MAX_OFFERS||50), intervalMs:60000};
+    feedCap:Number(env.PILOT_FEED_MAX_OFFERS||50), intervalMs:60000,
+    seoBlogId:env.PILOT_SEO_BLOG_ID||'gid://shopify/Blog/105535177023',seoAuthor:env.PILOT_SEO_AUTHOR||'Homestro Redaktion'};
   cfg.autonomyEnabled=env.PILOT_AUTONOMY_POLICY==='homestro-reviewed-organic-v1';
   cfg.excludedProductIds=(env.META_ORGANIC_EXCLUDED_PRODUCT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean);
   if(!/^v\d+\.\d+$/.test(cfg.graphVersion) || !/^\d+$/.test(cfg.pageId) || !/^\d+$/.test(cfg.instagramId))fail('INVALID_META_CONFIG');

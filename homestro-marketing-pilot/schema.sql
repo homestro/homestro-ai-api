@@ -29,3 +29,21 @@ ALTER TABLE marketing_posts ADD COLUMN IF NOT EXISTS published_at timestamptz;
 UPDATE marketing_posts s SET published_at=COALESCE(
   (SELECT min(e.created_at) FROM marketing_events e WHERE e.post_id=s.id AND e.code='published'),s.updated_at)
 WHERE s.status='published' AND s.published_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS marketing_seo_articles (
+  handle text PRIMARY KEY,
+  content_hash text NOT NULL,
+  status text NOT NULL CHECK(status IN ('creating','draft_created','failed','recovery_required')),
+  shopify_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS marketing_clicks (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  product_id text NOT NULL REFERENCES marketing_products(id),
+  channel text NOT NULL CHECK(channel IN ('facebook','instagram','tiktok','pinterest')),
+  format text NOT NULL CHECK(format IN ('image','carousel','reels')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS marketing_clicks_created ON marketing_clicks(created_at,channel);

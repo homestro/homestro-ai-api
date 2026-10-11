@@ -21,7 +21,7 @@ export function snapshot(raw,extras={},feeRate=0) {
   p.revision=hash(p); return p;
 }
 export class Ingestion {
-  constructor({store,renderer,localizer,feeRate=0}) {Object.assign(this,{store,renderer,localizer,feeRate});}
+  constructor({store,renderer,localizer,feeRate=0,cfg={}}) {Object.assign(this,{store,renderer,localizer,feeRate,cfg});}
   async process(raw,extras={}, {prepareOnly=false}={}) {
     let p;
     try {
@@ -72,7 +72,7 @@ export class Ingestion {
           p.asset=asset;
           for(const channel of ['facebook','instagram']){
             if(p.previouslyPublished[channel])continue;
-            const payload=compilePost(p,channel,asset);
+            const payload=compilePost(p,channel,asset,this.cfg);
             if(await this.store.queue(p.id,channel,hash(payload),payload))queued++;
           }
         } catch(e) { const reason=codeOf(e); reasons.push(reason); if(reason==='INTERNAL_ERROR') log('RENDER_INTERNAL_ERROR',{name:String(e?.name||'Error').slice(0,60),message:String(e?.message||'').slice(0,120)}); }
