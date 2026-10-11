@@ -40,6 +40,11 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       if(providerCfg){
         social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh});
         await social.migrate();
+        if(String(process.env.PILOT_SOCIAL_CHECK_CONNECTION).toLowerCase()==='true') {
+          social.checkTikTokPreflight()
+            .then(result=>log('TIKTOK_PREFLIGHT_CHECK',result))
+            .catch(e=>log('TIKTOK_PREFLIGHT_CHECK_FAILED',{reason:codeOf(e)}));
+        }
         await social.emitReport(true).catch(e=>log('SOCIAL_REPORT_PENDING',{reason:codeOf(e)}));
       }
     }catch(e){social=null;log('SOCIAL_DISABLED',{reason:codeOf(e)});}
