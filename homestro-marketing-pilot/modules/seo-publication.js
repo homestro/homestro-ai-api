@@ -40,5 +40,5 @@ export async function publishProductSeo(graphql, raw, copy) {
   const errors=result?.productUpdate?.userErrors||[];
   if(errors.length) fail('SHOPIFY_SEO_WRITE_FAILED');
   if(!result?.productUpdate?.product?.id) fail('SHOPIFY_SEO_WRITE_FAILED');
-  return {updated:true,fields:input.metafields.map(x=>x.key||(x.id===raw.seoTitleTag?.id?'title_tag':'description_tag'))};
+  return {updated:true,fields:input.metafields.map(x=>x.key || (x.id===raw.seoTitleTag?.id?'title_tag':'description_tag'))};
 }
