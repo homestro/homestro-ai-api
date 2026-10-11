@@ -20,6 +20,7 @@ import {channelPolicy} from './publishing-policy.js';
 import {buildGrowthReport,reportWindow} from './growth-report.js';
 import {createSeoArticleDraft} from './seo-articles.js';
 import {buildSeoContentPlan} from './content-plan.js';
+import {parseTrackedLink,trackedDestination} from './tracking.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -34,7 +35,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     if(!apiKeyMiddleware && (!cfg.adminKey || cfg.adminKey.length<32))fail('PILOT_ADMIN_KEY_REQUIRED');
     const store=new Store(pool);await store.migrate();
     const renderer=new MediaRenderer(cfg), meta=new MetaOrganic(cfg);
-    const ingestion=new Ingestion({store,renderer,localizer,feeRate:cfg.feeRate});
+    const ingestion=new Ingestion({store,renderer,localizer,feeRate:cfg.feeRate,cfg});
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
@@ -107,6 +108,21 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       next();
     };
     const route=handler=>async(req,res)=>{try{await handler(req,res);}catch(e){res.status(400).json({error:codeOf(e)});}};
+    app.get('/marketing-click/:payload/:signature',async(req,res)=>{
+      try {
+        const source=parseTrackedLink(req.params.payload,req.params.signature,cfg.adminKey);
+        const row=(await pool.query('SELECT document FROM marketing_products WHERE id=$1',[source.productId])).rows[0];
+        if(!row)return res.status(404).send('Link nicht verfügbar.');
+        const destination=trackedDestination(row.document,source.channel,source.format);
+        try {
+          await pool.query('INSERT INTO marketing_clicks(product_id,channel,format) VALUES($1,$2,$3)',
+            [source.productId,source.channel,source.format]);
+        } catch(e) { log('CLICK_RECORD_FAILED',{reason:codeOf(e)}); }
+        res.set('Cache-Control','no-store').redirect(302,destination);
+      } catch {
+        res.status(404).send('Link nicht verfügbar.');
+      }
+    });
     const router=express.Router();router.use(apiKeyMiddleware||auth,express.json({limit:'128kb'}));
     const socialRequired=()=>{if(!social)fail('SOCIAL_NOT_CONFIGURED');return social;};
     router.get('/social/status',route(async(req,res)=>{
@@ -151,12 +167,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }));
     router.get('/growth/report',route(async(req,res)=>{
       const days=reportWindow(req.query.days);
-      const [products,posts,pendingReasons]=await Promise.all([
+      const [products,posts,pendingReasons,clickRows]=await Promise.all([
         pool.query('SELECT status,count(*)::int AS count, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NOT NULL AND document->\'localized\'->>\'seoDescription\' IS NOT NULL)::int AS seo_copy_ready, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NULL OR document->\'localized\'->>\'seoDescription\' IS NULL)::int AS seo_copy_missing FROM marketing_products GROUP BY status'),
         pool.query('SELECT channel,status,count(*)::int AS count, count(*) FILTER (WHERE remote->>\'permalink\' ~ \'^https://\')::int AS confirmed_permalink_count FROM marketing_posts WHERE COALESCE(published_at,created_at)>=now()-($1::int * interval \'1 day\') GROUP BY channel,status',[days]),
         pool.query('SELECT reason,count(*)::int AS count FROM marketing_products p CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason WHERE p.status=\'pending_marketing\' GROUP BY reason ORDER BY count DESC,reason')
+        ,pool.query('SELECT channel,count(*)::int AS count FROM marketing_clicks WHERE created_at>=now()-($1::int * interval '1 day') GROUP BY channel',[days])
       ]);
-      res.json(buildGrowthReport({days,products:products.rows,posts:posts.rows,pendingReasons:pendingReasons.rows}));
+      res.json(buildGrowthReport({days,products:products.rows,posts:posts.rows,pendingReasons:pendingReasons.rows,clickRows:clickRows.rows}));
     }));
     router.get('/status',route(async(req,res)=>{
       const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
