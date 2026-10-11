@@ -9,6 +9,7 @@ import {Ingestion,snapshot} from './ingestion.js';
 import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
+import {publishProductSeo} from './seo-publication.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
@@ -52,7 +53,18 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
-        return await ingestion.process(raw,inputs);
+        const result=await ingestion.process(raw,inputs);
+        if(result.status==='draft_queued' && result.processed) {
+          const prepared=await store.product(id);
+          try {
+            const seo=await publishProductSeo(graphql,raw,prepared?.document?.localized);
+            if(seo.updated)log('PRODUCT_SEO_SYNCED',{productId:id,fields:seo.fields});
+          } catch(e) {
+            // SEO writeback is retried on the next catalog scan; keep approved social work intact.
+            log('PRODUCT_SEO_SYNC_FAILED',{productId:id,reason:codeOf(e)});
+          }
+        }
+        return result;
       }
       catch(e){
         // Archived/deleted products are invalidated and disappear from the feed.
