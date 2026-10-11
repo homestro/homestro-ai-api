@@ -171,7 +171,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         pool.query('SELECT status,count(*)::int AS count, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NOT NULL AND document->\'localized\'->>\'seoDescription\' IS NOT NULL)::int AS seo_copy_ready, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NULL OR document->\'localized\'->>\'seoDescription\' IS NULL)::int AS seo_copy_missing FROM marketing_products GROUP BY status'),
         pool.query('SELECT channel,status,count(*)::int AS count, count(*) FILTER (WHERE remote->>\'permalink\' ~ \'^https://\')::int AS confirmed_permalink_count FROM marketing_posts WHERE COALESCE(published_at,created_at)>=now()-($1::int * interval \'1 day\') GROUP BY channel,status',[days]),
         pool.query('SELECT reason,count(*)::int AS count FROM marketing_products p CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason WHERE p.status=\'pending_marketing\' GROUP BY reason ORDER BY count DESC,reason')
-        ,pool.query('SELECT channel,count(*)::int AS count FROM marketing_clicks WHERE created_at>=now()-($1::int * interval '1 day') GROUP BY channel',[days])
+        ,pool.query("SELECT channel,count(*)::int AS count FROM marketing_clicks WHERE created_at>=now()-($1::int * interval '1 day') GROUP BY channel",[days])
       ]);
       res.json(buildGrowthReport({days,products:products.rows,posts:posts.rows,pendingReasons:pendingReasons.rows,clickRows:clickRows.rows}));
     }));
