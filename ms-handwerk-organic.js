@@ -102,7 +102,9 @@ function buildDraft(input = {}) {
   };
 }
 
-function registerMsHandwerkOrganic(app, _apiKey, googleBusiness) {
+function registerMsHandwerkOrganic(app, _apiKey, integrations = {}) {
+  const googleBusiness = integrations?.googleBusiness || integrations;
+  const metaBusiness = integrations?.metaBusiness;
   const requestWindows = new Map();
   const draftRateLimit = (req, res, next) => {
     const now = Date.now();
@@ -141,10 +143,13 @@ function registerMsHandwerkOrganic(app, _apiKey, googleBusiness) {
   });
   app.get('/api/ms-handwerk/organic/status', async (_req, res) => {
     let google = { configured: false, connected: false, locationConfigured: false, publishingEnabled: false, workerRunning: false };
+    let meta = { configured: false, connected: false, publishingEnabled: false, workerRunning: false };
     try { if (googleBusiness) google = await googleBusiness.status(); } catch (e) { google = { configured: false, error: e.code || 'GOOGLE_STATUS_FAILED' }; }
-    const enabled = Boolean(google.configured && google.connected && google.locationConfigured && google.publishingEnabled && google.workerRunning);
+    try { if (metaBusiness) meta = await metaBusiness.status(); } catch (e) { meta = { configured: false, error: e.code || 'META_STATUS_FAILED' }; }
+    const enabled = Boolean((google.configured && google.connected && google.locationConfigured && google.publishingEnabled && google.workerRunning)
+      || (meta.configured && meta.connected && meta.publishingEnabled && meta.workerRunning));
     res.json({ ok: true, business: 'MS Handwerk & Service', mode: enabled ? 'AUTOPUBLISH_READY' : 'SETUP_REQUIRED',
-      adSpendEUR: 0, paidAdsEnabled: false, autoPublishingEnabled: enabled, googleBusinessProfile: google,
+      adSpendEUR: 0, paidAdsEnabled: false, autoPublishingEnabled: enabled, googleBusinessProfile: google, meta,
       contentGeneration: 'template-based; no OpenAI call' });
   });
   app.post('/api/ms-handwerk/organic/draft', draftRateLimit, (req, res) => {
