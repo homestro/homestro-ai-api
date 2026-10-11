@@ -38,3 +38,12 @@ CREATE TABLE IF NOT EXISTS marketing_seo_articles (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS marketing_clicks (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  product_id text NOT NULL REFERENCES marketing_products(id),
+  channel text NOT NULL CHECK(channel IN ('facebook','instagram','tiktok','pinterest')),
+  format text NOT NULL CHECK(format IN ('image','carousel','reels')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS marketing_clicks_created ON marketing_clicks(created_at,channel);
