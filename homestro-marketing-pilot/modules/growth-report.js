@@ -9,14 +9,14 @@ export function reportWindow(value) {
 }
 
 const countMap=rows=>Object.fromEntries((rows||[]).map(row=>[row.status,Number(row.count)||0]));
-export function buildGrowthReport({days=30,products=[],posts=[],pendingReasons=[],generatedAt=new Date().toISOString()}={}) {
+export function buildGrowthReport({days=30,products=[],posts=[],pendingReasons=[],clickRows=[],generatedAt=new Date().toISOString()}={}) {
   const productCounts=countMap(products);
   const productTotal=Object.values(productCounts).reduce((n,x)=>n+x,0);
   const readyProducts=Number(products.find(x=>x.status==='ready')?.count)||0;
   const seoCopyReady=Number(products.find(x=>x.status==='ready')?.seo_copy_ready)||0;
   const seoCopyMissing=Number(products.find(x=>x.status==='ready')?.seo_copy_missing)||0;
   const byChannel={};
-  let confirmedPublications=0, publishedRows=0;
+  let confirmedPublications=0, publishedRows=0, trackedLinkRequests=0;
   for(const row of posts||[]) {
     const channel=String(row.channel||'unknown');
     byChannel[channel] ||= {published:0,confirmedPermalink:0,draftQueued:0,approved:0,other:0};
@@ -31,10 +31,17 @@ export function buildGrowthReport({days=30,products=[],posts=[],pendingReasons=[
     else if(row.status==='approved') byChannel[channel].approved+=n;
     else byChannel[channel].other+=n;
   }
+  for(const row of clickRows||[]) {
+    const channel=String(row.channel||'unknown');
+    const n=Number(row.count)||0;
+    byChannel[channel] ||= {published:0,confirmedPermalink:0,draftQueued:0,approved:0,other:0};
+    byChannel[channel].trackedLinkRequests=(byChannel[channel].trackedLinkRequests||0)+n;
+    trackedLinkRequests+=n;
+  }
   return {
     generatedAt,windowDays:days,adSpendEUR:0,
     catalog:{total:productTotal,byStatus:productCounts,readyProducts,seoCopyReady,seoCopyMissing},
-    organic:{publishedRows,confirmedPublications,byChannel,pendingReasons},
+    organic:{publishedRows,confirmedPublications,trackedLinkRequests,clickMetric:'signed redirect requests; includes automated link previews and is not unique visitors',byChannel,pendingReasons},
     attribution:{connected:false,sessions:null,clicks:null,orders:null,revenueEUR:null,
       searchImpressions:null,searchClicks:null,
       missing:['Shopify session/order attribution','Search Console impressions and clicks','social-platform reach and clicks']},
