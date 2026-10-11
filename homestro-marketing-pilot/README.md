@@ -16,7 +16,7 @@ This package is written and locally tested. It has NOT been deployed, connected 
 ## SEO content and performance reporting
 
 - `POST /api/marketing/v2/seo/articles/draft` creates a Shopify blog article as an unpublished draft. Send reviewed German `title`, `handle`, `summary`, `body` (plain text, 800–15,000 characters) and optional `tags`. The pilot escapes the body into safe paragraphs, reserves each handle in PostgreSQL before contacting Shopify, and holds uncertain requests for manual recovery so retries cannot create duplicate pages. It never publishes the article.
-- `GET /api/marketing/v2/seo/articles/drafts` lists draft workflow state. Shopify authorization needs `write_content` or `write_online_store_pages`; configure `PILOT_SEO_BLOG_ID` and obtain that scope for the pilot's own Shopify token before use. This endpoint accepts prepared article copy; it does not invent long-form facts.
+- `GET /api/marketing/v2/seo/articles/drafts` lists draft workflow state. Shopify authorization needs `write_content` or `write_online_store_pages`. The verified existing News blog is the default; override `PILOT_SEO_BLOG_ID` if needed. After this scope change is installed, the store owner must reauthorize the app before article drafts can be created. This endpoint accepts prepared article copy; it does not invent long-form facts.
 - `GET /api/marketing/v2/growth/report?days=30` (7, 14, 30 or 90) reports catalog readiness, prepared SEO coverage, post states, and recorded public permalinks. It deliberately returns sales, sessions, Search Console and reach metrics as unknown until verified analytics connectors are configured. It never turns a queued post into a claimed visit or order. Ad spend is always 0 EUR.
 
 ## State machine
