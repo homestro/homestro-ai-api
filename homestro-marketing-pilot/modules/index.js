@@ -123,6 +123,24 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         res.status(404).send('Link nicht verfügbar.');
       }
     });
+    // Public dashboard exposes aggregate counts and already-public permalinks only; no drafts, IDs, or customer data.
+    app.get('/api/marketing/v2/public-results',route(async(req,res)=>{
+      const days=reportWindow(req.query.days);
+      const [posts,clicks,recent]=await Promise.all([
+        pool.query(`SELECT channel,count(*) FILTER (WHERE status='published')::int AS published
+          FROM marketing_posts WHERE COALESCE(published_at,created_at)>=now()-($1::int*interval '1 day') GROUP BY channel`,[days]),
+        pool.query(`SELECT channel,count(*)::int AS clicks FROM marketing_clicks
+          WHERE created_at>=now()-($1::int*interval '1 day') GROUP BY channel`,[days]),
+        pool.query(`SELECT channel,payload->>'title' AS title,remote->>'permalink' AS permalink,published_at
+          FROM marketing_posts WHERE status='published' AND remote->>'permalink' ~ '^https://'
+          ORDER BY published_at DESC NULLS LAST LIMIT 10`)
+      ]);
+      const clicksByChannel=new Map(clicks.rows.map(x=>[x.channel,x.clicks]));
+      const channels=posts.rows.map(x=>({channel:x.channel,published:x.published,clicks:clicksByChannel.get(x.channel)||0}));
+      const publishedTotal=channels.reduce((n,x)=>n+x.published,0);
+      const clickTotal=clicks.rows.reduce((n,x)=>n+x.clicks,0);
+      res.set('Cache-Control','no-store').json({generatedAt:new Date().toISOString(),days,adSpendEUR:0,publishedTotal,clickTotal,channels,recent:recent.rows});
+    }));
     const router=express.Router();router.use(apiKeyMiddleware||auth,express.json({limit:'128kb'}));
     const socialRequired=()=>{if(!social)fail('SOCIAL_NOT_CONFIGURED');return social;};
     router.get('/social/status',route(async(req,res)=>{
