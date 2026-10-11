@@ -59,12 +59,13 @@ test('Responses API assistant output_text content is parsed as valid product JSO
 });
 
 test('missing or empty assistant text produces a safe structural diagnostic', async()=>{
-  const {result,logs}=await run([{
+  const malformed={
     ok:true,status:200,text:async()=>JSON.stringify({status:'completed',secret:'must-not-appear',output:[
       {type:'reasoning',summary:[{text:'private reasoning'}]},
       {type:'message',role:'assistant',content:[{type:'output_text',text:'   '},{type:'refusal',refusal:'private refusal'}]}
     ]})
-  }]);
+  };
+  const {result,logs}=await run([malformed,malformed]);
   assert.equal(result.fallback,true);
   assert.match(result.reason,/httpStatus=200,responseStatus=completed,outputStructure=reasoning\[\]\|message:assistant\[output_text,refusal\]/);
   assert.doesNotMatch(result.reason+logs.join('\n'),/must-not-appear|private reasoning|private refusal/);
