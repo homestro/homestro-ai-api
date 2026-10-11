@@ -303,3 +303,14 @@ The earlier two TikTok rows remain recovery_required with the old generic
 ZERNIO_REQUEST_FAILED code; they were not resent because their remote outcome is
 not confirmed. New Zernio failures now log only a safe operation label and HTTP
 status, and the next opt-in check can isolate TikTok preflight failures.
+
+
+## Organic orders audit — 11 October 2026
+
+Owner requested maximum organic growth with paid-ad spend kept at 0 EUR. Live Shopify analytics for the last 30 days report 470 sessions: 433 from the United States, 26 from Germany, 5 Nigeria, 3 Poland, 2 Philippines and 1 Canada. Referrer summary: 409 direct, 60 social, 1 unknown. Germany recorded 2 sessions with cart additions and 2 reaching checkout, with 0 completed checkouts. This is a small sample and does not isolate checkout abandonment causes; it does show that current recorded visits are overwhelmingly outside the primary German market. Landing pages include 37 sessions on /password and 25 across sitemap paths.
+
+Merchant Center account 5447184929 was checked live: all 50 of 50 products are NOT_ELIGIBLE_OR_DISAPPROVED due to account-level CRITICAL Misrepresentation. The issue impacts FREE_LISTINGS as well as paid destinations. The owner has already contacted Google; no appeal was submitted by this audit and no approval is claimed.
+
+Homestro's published About page (gid://shopify/Page/698020823422, handle uber-uns) was updated through Shopify Admin GraphQL and confirmed successful, with no userErrors. It now clearly states the proprietor and address already published in the Impressum, DE/AT shipping coverage and prices consistent with the existing shipping policy, product-specific delivery-time disclosure, return-policy links and support contact details. The change is public and does not guarantee Merchant Center reinstatement.
+
+Railway production service homestro-ai-api-fixed-current is healthy on deployment 943f5134-e644-4b1c-af55-0adbb38c5840 (SUCCESS). Pilot sync reported 192 processed, 0 errors and 79 pending; main reasons include rejected, no public product URL and inactive product. Latest publication report recorded 11 Facebook, 11 Instagram, 7 Pinterest and 1 TikTok published total; public URLs include Facebook https://www.facebook.com/122263627130172038/posts/122264371826172038, Instagram https://www.instagram.com/p/DeXSeDFmNqo/, Pinterest https://www.pinterest.com/pin/1094585884467546858/ and TikTok https://www.tiktok.com/@homestroo/video/7695118040219782433. TikTok has four recovery_required records and one Pinterest invalid-product-URL record; old recovery outcomes were not resent. Social-platform reach and per-post clicks remain unavailable, so published status is not evidence of buyer reach or attributed orders. Ad spend remains 0 EUR.
