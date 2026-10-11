@@ -184,7 +184,6 @@ async function aiProduct(input){
    try{
     const text=extractOpenAiResponseText(d,{httpStatus:r.status});
     const parsed=cleanJson(text);
-    if(homestroPlain(parsed?.description).length<900)throw new Error('AI description too short');
     return parsed;
    }catch(e){
     lastError=e;
