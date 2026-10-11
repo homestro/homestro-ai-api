@@ -133,3 +133,21 @@ test('changed products retire obsolete drafts even when no replacement can be pr
   assert.match(q[1].sql,/status IN \('draft_queued','approved'\)/);
   assert.match(q[1].sql,/IS DISTINCT FROM/);assert.deepEqual(q[1].args,['p','new']);
 });
+
+test('invalid OpenAI key is tried once, then German source copy continues without repeated requests',async()=>{
+  let requests=0;const lines=[];const oldLog=console.log;console.log=line=>lines.push(String(line));
+  const localizer=createSourceLocalizer({apiKey:'invalid-test-key',fetchImpl:async()=>{
+    requests++;return new Response(JSON.stringify({error:{type:'invalid_request_error',code:'invalid_api_key',message:'private provider message'}}),{status:401});
+  }});
+  try{
+    const english={title:'Storage boxes',description:'Two plastic boxes.',facts:[{id:'f1',text:'Two boxes'}]};
+    await assert.rejects(localizer(english),{code:'GERMAN_TRANSLATION_REQUIRED'});
+    await assert.rejects(localizer(english),{code:'GERMAN_TRANSLATION_REQUIRED'});
+    const german=await localizer({title:'Aufbewahrungsboxen',description:'Vier Boxen für mehr Ordnung in der Küche.',
+      facts:[{id:'f1',text:'Vier Boxen im Set'}]});
+    assert.equal(german.language,'de');assert.equal(german.benefits[0].factId,'f1');
+    assert.equal(requests,1);
+  }finally{console.log=oldLog;}
+  assert.match(lines.join('\\n'),/"LOCALIZATION_PROVIDER_DISABLED"/);
+  assert.doesNotMatch(lines.join('\\n'),/invalid-test-key|private provider message/);
+});
