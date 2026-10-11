@@ -18,6 +18,7 @@ import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
 import {buildGrowthReport,reportWindow} from './growth-report.js';
+import {createSeoArticleDraft} from './seo-articles.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -131,6 +132,15 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
+    router.get('/seo/articles/drafts',route(async(req,res)=>{
+      const rows=(await pool.query('SELECT handle,status,shopify_id,created_at,updated_at FROM marketing_seo_articles ORDER BY created_at DESC LIMIT 100')).rows;
+      res.json({blogConfigured:Boolean(cfg.seoBlogId),writeContentScopeRequired:true,articles:rows});
+    }));
+    router.post('/seo/articles/draft',route(async(req,res)=>{
+      if(!cfg.seoBlogId)fail('SEO_BLOG_NOT_CONFIGURED');
+      const result=await createSeoArticleDraft({pool,graphql,blogId:cfg.seoBlogId,author:cfg.seoAuthor,input:req.body});
+      res.json(result);
+    }));
     router.get('/growth/report',route(async(req,res)=>{
       const days=reportWindow(req.query.days);
       const [products,posts,pendingReasons]=await Promise.all([
