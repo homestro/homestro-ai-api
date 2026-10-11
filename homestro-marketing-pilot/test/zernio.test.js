@@ -7,6 +7,13 @@ const cfg={apiKey:'test-secret',accounts:{tiktok:id,pinterest:id},publicOrigin:o
 const job=()=>({id:'pilot-1',product_id:'shopify-1',channel:'tiktok',status:'publishing',approved_by:'owner',approved_at:'2026-10-09T20:00:00Z',payload:{format:'carousel',caption:'Produktbeschreibung',title:'Produkt',productURL:'https://homestro.de/products/product',adSpendEUR:0,imageURLs:[`${origin}/marketing-assets/${'c'.repeat(64)}.jpg`],tiktokSettings:{content_preview_confirmed:true,express_consent_given:true,privacy_level:'PUBLIC_TO_EVERYONE',allow_comment:false}}});
 const response=(body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body});
 
+test('Zernio errors expose only operation and HTTP status, never provider body text',async()=>{
+  const api=new ZernioOrganic(cfg,async()=>response({error:'private provider detail'},403));
+  await assert.rejects(api.request(`accounts/${id}/tiktok/creator-info`),{code:'ZERNIO_TIKTOK_CREATOR_INFO_HTTP_403'});
+  const dryRun=new ZernioOrganic(cfg,async()=>response({error:'private provider detail'},400));
+  await assert.rejects(dryRun.request('posts',{method:'POST',body:{dryRun:true}}),{code:'ZERNIO_PUBLISH_PREFLIGHT_HTTP_400'});
+});
+
 test('missing preview consent blocks submission without network writes',async()=>{
   let calls=0;const api=new ZernioOrganic(cfg,async()=>{calls++;});const j=job();delete j.payload.tiktokSettings;
   await assert.rejects(api.submit(j,async()=>{}),{code:'TIKTOK_PREVIEW_CONSENT_REQUIRED'});assert.equal(calls,0);
