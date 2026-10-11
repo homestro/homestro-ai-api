@@ -6,12 +6,19 @@ This package is written and locally tested. It has NOT been deployed, connected 
 
 1. Read the full Shopify product, paginating both media and variants.
 2. Preserve Shopify prices. Missing supplier reference/cost becomes a recorded pending item, not a pipeline exception. Numeric cost fallback is zero; verified margin remains NULL. No price mutation exists in this package.
-3. Use reviewed German copy, or an injected localization engine. Cache localized copy per product revision. Generated titles, descriptions and SEO metadata stay in this database; writing them back to Shopify is deliberately not part of this package.
+3. Use reviewed German copy, or an injected localization engine. Cache localized copy per product revision. Generated titles, descriptions and SEO metadata stay in this database until the product is ready. The pilot then writes only the reviewed SEO title and description to Shopify's `global.title_tag` and `global.description_tag` product metafields; it does not change the product title, description, price, or availability. A rejected Shopify write is logged and retried on the next catalog scan. This publishes metadata on existing product pages, not independent landing pages, and does not guarantee indexing or rankings.
 4. If Shopify has a READY MP4 video, normalize it to a 720×1280 Reel (maximum 30 seconds) with a German text hook for the first 3 seconds. Source audio is removed: do not assume supplier music has licensed publishing rights.
 5. If no MP4 exists, prepare 2–10 JPEG images for an Instagram carousel and Facebook organic multi-photo post. One image produces a single-image post. There is NO video slideshow fallback. JPEGs are fitted, not cropped, into a common 1080×1350 frame and cached on disk.
 6. Save the German caption, UTM link, format and public asset URLs as `draft_queued`. In the enabled Homestro autonomy policy, a structurally validated German copy and a currently available Shopify variant with a positive live price are approved automatically. The pilot reads that price for the post and never changes it. Rejected, unavailable, incomplete or changed products stay blocked.
 7. A minute scheduler publishes one approved post at a time, at most 6 posts total and 3 per channel per rolling 24 hours by default. Set both caps lower if desired. Database advisory locks prevent normal overlapping workers. Periodic catalog scans cover ALL active products, not only the first 30.
 8. Serve a fresh XML feed (default 50 variant offers), validating current Shopify price/stock at request time. Google must fetch it; it does not instantly update Merchant Center. This package does not fix account Misrepresentation, claim a domain, guarantee indexing or create ads.
+
+## SEO content and performance reporting
+
+- `POST /api/marketing/v2/seo/articles/draft` creates a Shopify blog article as an unpublished draft. Send reviewed German `title`, `handle`, `summary`, `body` (plain text, 800–15,000 characters) and optional `tags`. The pilot escapes the body into safe paragraphs, reserves each handle in PostgreSQL before contacting Shopify, and holds uncertain requests for manual recovery so retries cannot create duplicate pages. It never publishes the article.
+- `GET /api/marketing/v2/seo/articles/drafts` lists draft workflow state. Shopify authorization needs `write_content` or `write_online_store_pages`. The verified existing News blog is the default; override `PILOT_SEO_BLOG_ID` if needed. After this scope change is installed, the store owner must reauthorize the app before article drafts can be created. This endpoint accepts prepared article copy; it does not invent long-form facts.
+- `GET /api/marketing/v2/seo/content-plan/:id` returns a German content-navigator plan from the catalog title, category and verified product facts: a primary keyword hypothesis, related phrases, article topics and an outline. Search volume, difficulty and rankings stay `null`; it does not publish or claim keyword research. URL-encode the Shopify Product GID.
+- `GET /api/marketing/v2/growth/report?days=30` (7, 14, 30 or 90) reports catalog readiness, prepared SEO coverage, post states, and recorded public permalinks. It deliberately returns sales, sessions, Search Console and reach metrics as unknown until verified analytics connectors are configured. It never turns a queued post into a claimed visit or order. Ad spend is always 0 EUR.
 
 ## State machine
 
@@ -127,6 +134,7 @@ All `/api/marketing/v2/*` endpoints require `Authorization: Bearer <PILOT_ADMIN_
 | GET `/connection` | Read-only Meta identity check, no post |
 | GET `/posts?status=draft_queued` | Full reviewable captions and asset URLs |
 | GET `/posts?status=recovery_required` | Saved remote state for manual investigation |
+| GET `/seo/content-plan/:id` | Catalog-grounded German SEO topics and outline; URL-encode the full Shopify Product GID; no search-volume claims |
 | GET `/pending-products` | First ten unresolved products and reasons |
 | PUT `/products/:id/inputs` | Save verified inputs and process product; URL-encode the whole GID |
 | POST `/posts/:id/approve` | Body `{"reviewer":"Mirko"}`; approves the exact compiled payload |
