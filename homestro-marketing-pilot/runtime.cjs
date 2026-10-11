@@ -2,8 +2,8 @@
 // Existing server adapter. Primary Shopify pipeline never depends on marketing initialization.
 function marketingGraphqlAllowed(query) {
   const source=String(query||'').trim();
-  if(/^query(?:\\s|\\{)/i.test(source))return true;
-  return /^mutation\\s+(?:PilotProductSeoUpdate|PilotArticleDraft)\\s*\\(/.test(source);
+  if(/^query(?:\s|\{)/i.test(source))return true;
+  return /^mutation\s+(?:PilotProductSeoUpdate|PilotArticleDraft)\s*\(/.test(source);
 }
 function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentials,onCredentialError}={}) {
   let instance=null,state={enabled:false,reason:'initializing'};
