@@ -1,4 +1,12 @@
-## MS Handwerk Google Business automation — 11 October 2026
+## MS Handwerk Meta + Google organic publishing — 11 October 2026
+
+The implementation is prepared in PR #83 on branch codex/ms-google-auto-publishing-20261011. MS Handwerk has a separate Meta OAuth connection and encrypted account record; Homestro's Meta page and Instagram credentials are never reused. It adds Facebook and Instagram queues plus the existing separate Google Business Profile queue. Each platform is disabled by default and uses a maximum of one post per channel in a rolling 24-hour window. Paid advertising stays disabled at 0 EUR.
+
+A manager must connect MS's own Meta page and Google profile once. The Pilot can then publish queued posts without an open chat. It does not invent customer jobs: a real completed-job description is supplied for each post. Instagram additionally requires a real public image hosted on ms-handwerkservice.de. Ambiguous outcomes are held for recovery and never blindly resent. Current Railway production lacks the new Google and MS Meta OAuth environment variables; these changes are not deployed or connected yet. No live post is claimed.
+
+Local validation: Google, Meta and MS draft test suites pass; JavaScript syntax checks pass. Google API access and verified active profile requirements, Meta OAuth app review/permissions if required, and owner consent must be completed before live posting. See docs/ms-google-business-setup.md and docs/ms-meta-business-setup.md.
+
+---\n\n## MS Handwerk Google Business automation — 11 October 2026
 
 Implementation is prepared on branch `codex/ms-google-auto-publishing-20261011` in the GitHub pull request. It adds a separate Google Business Profile OAuth connector for MS Handwerk & Service, encrypted persisted credentials, an owner-authorized profile picker restricted to the exact MS Handwerk & Service profile name, a durable post queue, and a 60-second worker. The publisher is gated off unless Google OAuth settings and `GOOGLE_BUSINESS_AUTOPUBLISH_ENABLED=true` are present. The default cap is one post in a rolling 24-hour window. Posts use only supplied completed-job details; the generic template no longer promises unverified prices, availability or free inspections. Google posts are not sent to Homestro or Meta.
 
