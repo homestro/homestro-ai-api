@@ -13,6 +13,12 @@ This package is written and locally tested. It has NOT been deployed, connected 
 7. A minute scheduler publishes one approved post at a time, at most 6 posts total and 3 per channel per rolling 24 hours by default. Set both caps lower if desired. Database advisory locks prevent normal overlapping workers. Periodic catalog scans cover ALL active products, not only the first 30.
 8. Serve a fresh XML feed (default 50 variant offers), validating current Shopify price/stock at request time. Google must fetch it; it does not instantly update Merchant Center. This package does not fix account Misrepresentation, claim a domain, guarantee indexing or create ads.
 
+## SEO content and performance reporting
+
+- `POST /api/marketing/v2/seo/articles/draft` creates a Shopify blog article as an unpublished draft. Send reviewed German `title`, `handle`, `summary`, `body` (plain text, 800–15,000 characters) and optional `tags`. The pilot escapes the body into safe paragraphs, reserves each handle in PostgreSQL before contacting Shopify, and holds uncertain requests for manual recovery so retries cannot create duplicate pages. It never publishes the article.
+- `GET /api/marketing/v2/seo/articles/drafts` lists draft workflow state. Shopify authorization needs `write_content` or `write_online_store_pages`; configure `PILOT_SEO_BLOG_ID` and obtain that scope for the pilot's own Shopify token before use. This endpoint accepts prepared article copy; it does not invent long-form facts.
+- `GET /api/marketing/v2/growth/report?days=30` (7, 14, 30 or 90) reports catalog readiness, prepared SEO coverage, post states, and recorded public permalinks. It deliberately returns sales, sessions, Search Console and reach metrics as unknown until verified analytics connectors are configured. It never turns a queued post into a claimed visit or order. Ad spend is always 0 EUR.
+
 ## State machine
 
 Product: `pending_marketing` → `ready` after missing information/reviews are resolved.
