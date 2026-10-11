@@ -271,3 +271,17 @@ Ve stejné Railway produkci zůstává živá stará služba `homestro-ai-api` (
 Před tímto auditem chyběl GitHub Actions workflow a produkční konfigurace Railway uvádí `checkSuites=false`. Docker build kontroluje pouze kvalitu opravy, syntax `server.js` a `autopilot-core.js`; nespouští úplnou hlavní regresní ani marketingovou sadu. V PR 80 je proto nově workflow `.github/workflows/verify.yml`, který spustí `npm test`, `npm run test:marketing` a sestaví `Dockerfile.homestro-fixed`. První úplné spuštění odhalilo 6 selhání v existující hlavní sadě: krátký AI popis se odfiltroval před cílenou opravou, testovací console stub postrádal warn, produktový QA fixture nesplňoval nová pravidla SEO/alt textu a test autopilota hledal zastaralou signaturu funkce. Opravy jsou v PR 80. Následná kompletní CI kontrola na commitu `4bf7f02818715b97cf002b5bf6c18b76e832d24b` prošla: hlavní sada 91/91, marketingová sada 115/115 a sestavení produkčního Docker image. PR zůstává draft a změna nebyla nasazena do produkce. Railway konektor nemá operaci pro zápis `checkSuites`; dokud nebude kontrola v Railway nebo v pravidlech větve povinná, GitHub zelený status sám o sobě automatickému deploymentu nezabrání.
 
 Bezpečnostní blokace zůstávají záměrné: nepublikovat neaktivní produkt či produkt bez veřejné nákupní URL; nepřekračovat schválené rolling limity; nejisté vzdálené publikace ručně ověřit, nikdy slepě opakovat. K 11. 10. bylo šest publikovaných/nejasných pokusů v posledních 24 hodinách při celkovém limitu 4, proto worker správně čekal na uvolnění limitu. Tento audit neprokazuje novou publikaci ani opravu Merchant Center.
+
+
+## TikTok repair verification — 11 October 2026
+
+Merged PR #80 with the Pilot reliability and TikTok diagnostic fix. GitHub Actions run
+38147318209 passed the API suite, Pilot suite and production Docker image build.
+Railway deployment d5cadb7e-b3ca-446e-a514-ae8b3c17f72f reached SUCCESS at
+2026-10-11 14:34 UTC. The opt-in startup check confirmed the connected TikTok
+account @homestroo and Zernio dryRun returned canPublish=true for an existing
+owner-approved carousel preview. The dryRun did not create a public post.
+The earlier two TikTok rows remain recovery_required with the old generic
+ZERNIO_REQUEST_FAILED code; they were not resent because their remote outcome is
+not confirmed. New Zernio failures now log only a safe operation label and HTTP
+status, and the next opt-in check can isolate TikTok preflight failures.
