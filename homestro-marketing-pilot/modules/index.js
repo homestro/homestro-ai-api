@@ -139,7 +139,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }));
     router.get('/seo/content-plan/:id',route(async(req,res)=>{
       const id=decodeURIComponent(String(req.params.id||''));
-      if(!/^gid:\/\/shopify\/Product\/\\d+$/.test(id))fail('INVALID_PRODUCT_ID');
+      if(!/^gid:\/\/shopify\/Product\/\d+$/.test(id))fail('INVALID_PRODUCT_ID');
       const row=(await pool.query('SELECT document,status,reasons FROM marketing_products WHERE id=$1',[id])).rows[0];
       if(!row)fail('PRODUCT_NOT_FOUND');
       res.json(buildSeoContentPlan({product:row.document,status:row.status,reasons:row.reasons}));
