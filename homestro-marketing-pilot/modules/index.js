@@ -9,6 +9,7 @@ import {Ingestion,snapshot} from './ingestion.js';
 import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
+import {publishProductSeo} from './seo-publication.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
@@ -16,6 +17,9 @@ import {SocialCoordinator,socialConfig} from './social.js';
 import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
+import {buildGrowthReport,reportWindow} from './growth-report.js';
+import {createSeoArticleDraft} from './seo-articles.js';
+import {buildSeoContentPlan} from './content-plan.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -52,7 +56,18 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
-        return await ingestion.process(raw,inputs);
+        const result=await ingestion.process(raw,inputs);
+        if(result.status==='draft_queued' && result.processed) {
+          const prepared=await store.product(id);
+          try {
+            const seo=await publishProductSeo(graphql,raw,prepared?.document?.localized);
+            if(seo.updated)log('PRODUCT_SEO_SYNCED',{productId:id,fields:seo.fields});
+          } catch(e) {
+            // SEO writeback is retried on the next catalog scan; keep approved social work intact.
+            log('PRODUCT_SEO_SYNC_FAILED',{productId:id,reason:codeOf(e)});
+          }
+        }
+        return result;
       }
       catch(e){
         // Archived/deleted products are invalidated and disappear from the feed.
@@ -118,6 +133,31 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
+    router.get('/seo/articles/drafts',route(async(req,res)=>{
+      const rows=(await pool.query('SELECT handle,status,shopify_id,created_at,updated_at FROM marketing_seo_articles ORDER BY created_at DESC LIMIT 100')).rows;
+      res.json({blogConfigured:Boolean(cfg.seoBlogId),writeContentScopeRequired:true,articles:rows});
+    }));
+    router.get('/seo/content-plan/:id',route(async(req,res)=>{
+      const id=decodeURIComponent(String(req.params.id||''));
+      if(!/^gid:\/\/shopify\/Product\/\d+$/.test(id))fail('INVALID_PRODUCT_ID');
+      const row=(await pool.query('SELECT document,status,reasons FROM marketing_products WHERE id=$1',[id])).rows[0];
+      if(!row)fail('PRODUCT_NOT_FOUND');
+      res.json(buildSeoContentPlan({product:row.document,status:row.status,reasons:row.reasons}));
+    }));
+    router.post('/seo/articles/draft',route(async(req,res)=>{
+      if(!cfg.seoBlogId)fail('SEO_BLOG_NOT_CONFIGURED');
+      const result=await createSeoArticleDraft({pool,graphql,blogId:cfg.seoBlogId,author:cfg.seoAuthor,input:req.body});
+      res.json(result);
+    }));
+    router.get('/growth/report',route(async(req,res)=>{
+      const days=reportWindow(req.query.days);
+      const [products,posts,pendingReasons]=await Promise.all([
+        pool.query('SELECT status,count(*)::int AS count, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NOT NULL AND document->\'localized\'->>\'seoDescription\' IS NOT NULL)::int AS seo_copy_ready, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NULL OR document->\'localized\'->>\'seoDescription\' IS NULL)::int AS seo_copy_missing FROM marketing_products GROUP BY status'),
+        pool.query('SELECT channel,status,count(*)::int AS count, count(*) FILTER (WHERE remote->>\'permalink\' ~ \'^https://\')::int AS confirmed_permalink_count FROM marketing_posts WHERE COALESCE(published_at,created_at)>=now()-($1::int * interval \'1 day\') GROUP BY channel,status',[days]),
+        pool.query('SELECT reason,count(*)::int AS count FROM marketing_products p CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason WHERE p.status=\'pending_marketing\' GROUP BY reason ORDER BY count DESC,reason')
+      ]);
+      res.json(buildGrowthReport({days,products:products.rows,posts:posts.rows,pendingReasons:pendingReasons.rows}));
+    }));
     router.get('/status',route(async(req,res)=>{
       const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
       const posts=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_posts GROUP BY status')).rows;
