@@ -4,6 +4,8 @@ export const PRODUCT_QUERY=`query PilotProduct($id:ID!, $mediaAfter:String, $var
   product(id:$id) {
     id title description descriptionHtml status handle updatedAt onlineStoreUrl tags productType
     seo { title description }
+    seoTitleTag: metafield(namespace:"global",key:"title_tag") { id value }
+    seoDescriptionTag: metafield(namespace:"global",key:"description_tag") { id value }
     supplierId: metafield(namespace:"homestro",key:"aliexpress_product_id") { jsonValue }
     publishedFacebook: metafield(namespace:"homestro",key:"organic_facebook_post_id") { jsonValue }
     publishedInstagram: metafield(namespace:"homestro",key:"organic_instagram_post_id") { jsonValue }
