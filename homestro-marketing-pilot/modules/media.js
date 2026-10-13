@@ -58,15 +58,35 @@ function fallbackScript(product) {
   const words=[c.hook,c.title,benefit,'Jetzt bei Homestro entdecken.'].filter(Boolean).join('. ').split(/\s+/).slice(0,30);
   return safeScript(words.join(' '));
 }
-async function responseOrFail(response) {
+function assertOpenAiAvailable(cfg) {
+  if(Number(cfg._openaiBlockedUntil||0)>Date.now())fail(cfg._openaiBlockedReason||'OPENAI_RATE_LIMIT');
+}
+function blockOpenAi(cfg,reason,milliseconds) {
+  cfg._openaiBlockedReason=reason;
+  cfg._openaiBlockedUntil=Date.now()+milliseconds;
+}
+async function responseOrFail(response,cfg) {
   if(response.ok)return response;
-  if(response.status===401||response.status===403)fail('OPENAI_AUTH_FAILED');
-  if(response.status===429)fail('OPENAI_RATE_LIMIT');
+  if(response.status===401||response.status===403) {
+    blockOpenAi(cfg,'OPENAI_AUTH_FAILED',24*60*60*1000);
+    fail('OPENAI_AUTH_FAILED');
+  }
+  if(response.status===429) {
+    let providerCode='';
+    try{providerCode=String((await response.clone().json())?.error?.code||'');}catch{}
+    const reason=providerCode==='insufficient_quota'?'OPENAI_QUOTA_EXCEEDED':'OPENAI_RATE_LIMIT';
+    const retryAfter=Number(response.headers.get('retry-after'));
+    const cooldown=providerCode==='insufficient_quota'?24*60*60*1000:
+      Math.min(Math.max(Number.isFinite(retryAfter)&&retryAfter>0?retryAfter:3600,60),24*60*60)*1000;
+    blockOpenAi(cfg,reason,cooldown);
+    fail(reason);
+  }
   fail('OPENAI_API_FAILED');
 }
 async function generateScript(product,cfg,fetchImpl) {
   if(typeof cfg.generateScript==='function')return safeScript(await cfg.generateScript(product));
   if(!cfg.openaiApiKey)return fallbackScript(product);
+  assertOpenAiAvailable(cfg);
   const copy=product.localized||{};
   const source={
     title:plain(copy.title||product.title,180),
@@ -84,7 +104,7 @@ async function generateScript(product,cfg,fetchImpl) {
           {role:'user',content:JSON.stringify(source)}
         ]})
     });
-    await responseOrFail(response);
+    await responseOrFail(response,cfg);
     const data=await response.json();
     const text=data.choices?.[0]?.message?.content;
     if(!text)fail('OPENAI_EMPTY_SCRIPT');
@@ -98,6 +118,7 @@ async function generateScript(product,cfg,fetchImpl) {
 async function getSpeech(script,cfg,fetchImpl) {
   if(typeof cfg.synthesizeSpeech==='function')return Buffer.from(await cfg.synthesizeSpeech(script));
   if(!cfg.openaiApiKey)fail('OPENAI_API_KEY_REQUIRED');
+  assertOpenAiAvailable(cfg);
   const response=await fetchImpl('https://api.openai.com/v1/audio/speech',{
     method:'POST',redirect:'error',signal:AbortSignal.timeout(60000),
     headers:{Authorization:'Bearer '+cfg.openaiApiKey,'Content-Type':'application/json'},
@@ -105,7 +126,7 @@ async function getSpeech(script,cfg,fetchImpl) {
       input:script,instructions:'Speak in natural, clear German at a friendly pace. Do not add words.',
       response_format:'mp3'})
   });
-  await responseOrFail(response);
+  await responseOrFail(response,cfg);
   const bytes=Buffer.from(await response.arrayBuffer());
   if(!bytes.length||bytes.length>15*1024*1024)fail('OPENAI_AUDIO_INVALID');
   return bytes;
@@ -177,17 +198,18 @@ export class MediaRenderer {
     const version={videoEngine:2,source,id:product.id,title:c.title,description:c.description,hook:c.hook,benefits:c.benefits,
       scriptModel:this.cfg.videoScriptModel||'gpt-4o-mini',ttsModel:this.cfg.videoTtsModel||'gpt-4o-mini-tts',voice:this.cfg.videoTtsVoice||'coral'};
     const key=hash(version),output=join(dir,key+'.mp4'),scriptPath=join(dir,key+'.script.txt'),speechPath=join(dir,key+'.speech.mp3');
-    let script;
+    let script,speech;
     try{script=(await readFile(scriptPath,'utf8')).trim();}catch{}
+    try{speech=await readFile(speechPath);}catch{}
     try{await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[],videoScript:script||null,voiceover:true};}catch{}
     const tmp=await mkdtemp(join(dir,'render-'));
     try{
+      // Check the daily voice quota before spending tokens on either a script or speech.
+      const cap=Number(this.cfg.videoDailyLimit||2);
+      if(!speech && await dailyVideoCount(dir)>=cap)fail('AI_VIDEO_DAILY_LIMIT');
       script=script||await generateScript(product,this.cfg,this.cfg.fetchImpl||fetch);
       await writeFile(scriptPath,script,'utf8');
-      let speech;
-      try{speech=await readFile(speechPath);}catch{
-        const cap=Number(this.cfg.videoDailyLimit||2);
-        if(await dailyVideoCount(dir)>=cap)fail('AI_VIDEO_DAILY_LIMIT');
+      if(!speech) {
         speech=await getSpeech(script,this.cfg,this.cfg.fetchImpl||fetch);
         await writeFile(join(tmp,'voice.mp3'),speech);
         await rename(join(tmp,'voice.mp3'),speechPath);

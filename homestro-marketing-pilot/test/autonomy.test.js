@@ -14,6 +14,7 @@ test('automatic approval uses an available current Shopify price and does not re
   let sql,params;await approveReviewed({pool:{query:async(q,p)=>{sql=q;params=p;return {rowCount:0};}}},{autonomyEnabled:true,excludedProductIds:['excluded']});
   assert.doesNotMatch(sql,/priceReviewed/);
   assert.match(sql,/p\.document->>'contentReviewed'='true'/);
+  assert.match(sql,/COALESCE\(s\.payload->>'format',''\)<>'reels'/);
   assert.match(sql,/jsonb_array_elements\(p\.document->'variants'\)/);
   assert.match(sql,/COALESCE\(\(v->>'price'\)::numeric,0\)>0/);
   assert.deepEqual(params,[['excluded']]);
