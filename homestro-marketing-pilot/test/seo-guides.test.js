@@ -114,3 +114,15 @@ test('a managed page is paused when its product group no longer has usable sourc
   await syncSeoGuides({...f,products:[]});assert.equal(f.record.status,'paused');
   assert.deepEqual(f.writes[0].args.page,{isPublished:false});
 });
+
+test('Shopify formatting line breaks preserve ownership but real edits remain protected',async()=>{
+  const p=products(),guide=buildGuide(topic,p),id='gid://shopify/Page/123';
+  const formatted=guide.body.replace(/></g,'>\n<');
+  const saved={handle:guide.handle,status:'published',shopify_id:id,body_hash:guide.fingerprint};
+  const f=fixture({remote:{...guide,id,body:formatted},saved});
+  p[0].localized.benefits[0].text='Aktualisiertes Merkmal';
+  await syncSeoGuides({...f,products:p});assert.equal(f.writes.length,1);
+  assert.match(f.writes[0].q,/PilotGuideUpdate/);
+  const edited=fixture({remote:{...guide,id,body:formatted.replace('Beschriebenes Merkmal 1','Manuell geändert')},saved});
+  await syncSeoGuides({...edited,products:p});assert.equal(edited.writes.length,0);
+});

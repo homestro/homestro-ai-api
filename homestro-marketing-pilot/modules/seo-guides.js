@@ -67,8 +67,14 @@ export function buildGuide(topic,products,cfg={}) {
 }
 const ownBody=(page,fingerprint)=>{
   const marker=`<!-- homestro-pilot-guide:${fingerprint} -->`;
-  return typeof page.body==='string'&&page.body.endsWith(marker)&&
-    hash({title:page.title,body:page.body.slice(0,-marker.length)})===fingerprint;
+  if(typeof page.body!=='string'||!page.body.endsWith(marker))return false;
+  const body=page.body.slice(0,-marker.length);
+  if(hash({title:page.title,body})===fingerprint)return true;
+  // Shopify adds formatting line breaks between HTML tags on page writes.
+  // Restore only inter-tag whitespace and our known article separators.
+  // Text, attributes, links, title and the ownership marker stay fingerprinted.
+  const restored=body.replace(/>\\s+</g,'><').trim().replace(/<\\/article><article>/g,'</article>\\n<article>');
+  return hash({title:page.title,body:restored})===fingerprint;
 };
 
 export async function syncSeoGuides({pool,graphql,products,cfg,freshSnapshot}) {

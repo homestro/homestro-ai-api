@@ -350,3 +350,10 @@ Private performance reports use read_reports and ShopifyQL to collect human sess
 
 The legacy Merchant feed URL can opt into the current verified Pilot feed engine, preserving the configured source URL while removing its old 50-offer limit. Both feed URLs recheck current Shopify price/stock and omit products whose freshness cannot be confirmed. Feed eligibility no longer depends on optional social-media rendering. Configured offer cap is 5000; rejected and excluded products are omitted. The Merchant Center misrepresentation account issue still requires Google approval; providing a valid feed does not establish approval or guaranteed free-listing traffic. Ads remain EUR0. Implementation tests and CI must pass before merge; record actual live deployment/publication separately.
 
+
+
+## Combined marketing live verification — 13 October 2026
+
+PR90 passed verify run229 and is live on commit 194476b1f49c1440d9b40441c4938a9829a08c40, Railway deployment ffd1af5b-99d2-4b34-8309-809afea75451. At21:26UTC Pilot confirmed its first six-product guide https://homestro.de/pages/homestro-ratgeber-kuechenhelfer; independent Admin read confirms published Page709701796222. Existing Merchant feed URL returned HTTP200 in13.3seconds at22:01UTC; public-results repeatedly returns HTTP200. This confirms backend outputs, not Google approval or new sales. Private measurement logs explicitly require read_reports. Confirmed totals remain Facebook14, Instagram14, Pinterest7, TikTok1; four uncertain TikTok outcomes remain isolated and were not replayed.
+
+Live checks found Shopify inserts inter-tag HTML line breaks on Page writes, causing a false MANAGED_PAGE_CHANGED result. The original guide ownership SHA256 was recovered exactly by removing only inter-tag formatting whitespace and restoring the generator's article separators. The follow-up preserves the full title/text/attribute/link/marker fingerprint while accepting that formatting change; actual edits remain protected by regression. No existing page text is overwritten merely to recover ownership. SEO cadence remains one write per24hours, advertising EUR0.
