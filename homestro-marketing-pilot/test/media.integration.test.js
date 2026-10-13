@@ -93,9 +93,10 @@ test('AI Reel mode fails closed on OpenAI authentication errors',async()=>{
   try {
     const renderer=new MediaRenderer({dataDir:dir,mediaHosts:['cdn.shopify.com'],publicOrigin:'https://pilot.example',
       aiVideoEnabled:true,openaiApiKey:'bad-key',videoDailyLimit:2,fetchImpl:async()=>new Response('unauthorized',{status:401})});
-    await assert.rejects(()=>renderer.render({id:'gid://shopify/Product/123',localized:{title:'Produkt',
+    await assert.rejects(()=>renderer.aiReel({id:'gid://shopify/Product/123',localized:{title:'Produkt',
       description:'Produktbeschreibung',hook:'Mehr Ordnung',benefits:[{text:'Gut sortiert'}]},
-      media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/product.jpg'}}]}),
+      media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/product.jpg'}}]},
+      {images:['https://cdn.shopify.com/product.jpg'],videoURL:null}),
       error=>error.code==='OPENAI_AUTH_FAILED');
   } finally {await rm(dir,{recursive:true,force:true});}
 });
@@ -110,10 +111,12 @@ test('AI Reel mode checks the daily voice quota before calling OpenAI',async()=>
     let calls=0;
     const renderer=new MediaRenderer({dataDir:dir,mediaHosts:['cdn.shopify.com'],publicOrigin:'https://pilot.example',
       aiVideoEnabled:true,openaiApiKey:'test-key',videoDailyLimit:1,fetchImpl:async()=>{calls++;return new Response('{}',{status:200});}});
-    await assert.rejects(()=>renderer.render({id:'gid://shopify/Product/456',title:'Produkt',
+    await assert.rejects(()=>renderer.aiReel({id:'gid://shopify/Product/456',title:'Produkt',
       localized:{title:'Produkt',description:'Produktbeschreibung',hook:'Ein guter Haken',benefits:[{text:'Ein belegter Vorteil'}]},
-      media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/product.jpg'}}]}),
+      media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/product.jpg'}}]},
+      {images:['https://cdn.shopify.com/product.jpg'],videoURL:null}),
       error=>error.code==='AI_VIDEO_DAILY_LIMIT');
     assert.equal(calls,0);
   } finally {await rm(dir,{recursive:true,force:true});}
 });
+

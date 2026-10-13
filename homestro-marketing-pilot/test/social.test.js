@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {SocialCoordinator,prepareSocial,approvePayload,eligible,socialConfig,berlinWindow,publicPostURL} from '../modules/social.js';
 import {fail} from '../modules/core.js';
+import {ZernioOrganic} from '../modules/zernio.js';
 
 const source=()=>({id:'gid://shopify/Product/1',status:'ACTIVE',contentReviewed:true,revision:'rev',
   url:'https://homestro.de/products/test',variants:[{available:true,price:20}],categoryKey:'home',
@@ -74,6 +75,42 @@ function fixture({current=source(),used=0,recent=0,duplicate=false,repeated=fals
   return {c,queries,get submits(){return submits;},get reconciles(){return reconciles;}};
 }
 const midday=new Date('2026-10-10T12:00:00Z');
+test('Pinterest post with production click tracking passes strict destination validation',()=>{
+  const cfg={...providerCfg,publicOrigin:'https://pilot.example',shopOrigin:'https://homestro.de',
+    adminKey:'owner-secret-for-tests-only-'.repeat(2),boardIds:['board']};
+  const payload=prepareSocial(source(),'pinterest',cfg);
+  assert.match(payload.link,/\/marketing-click\//);
+  const request=new ZernioOrganic(cfg).buildRequest({...job(),status:'publishing',payload});
+  const link=new URL(request.platforms[0].platformSpecificData.link);
+  assert.equal(link.origin,'https://homestro.de');
+  assert.equal(link.pathname,'/products/test');
+  assert.equal(link.searchParams.get('utm_source'),'pinterest');
+  assert.equal(link.searchParams.get('utm_campaign'),'homestro_pilot');
+});
+test('only locally rejected Pinterest destinations without remote state are retired',async()=>{
+  const f=fixture();await f.c.prepare();
+  const repair=f.queries.find(q=>q.sql.includes("error_code='LOCAL_DESTINATION_REJECTED'"));
+  assert.ok(repair);
+  assert.match(repair.sql,/channel='pinterest'.*status='recovery_required'/s);
+  assert.match(repair.sql,/error_code='INVALID_PRODUCT_URL'.*remote='\{\}'::jsonb/s);
+  assert.match(repair.sql,/SET status='rejected'/);
+  assert.equal(f.submits,0);
+});
+test('historical uncertainty is held separately from the rolling daily quota',async()=>{
+  const f=fixture();const client=await f.c.pool.connect(),query=client.query;
+  client.query=async(sql,args)=>{
+    if(sql.includes('count(*)::int AS n')){
+      assert.match(sql,/attempted_at>now\(\)-interval '24 hours'/);
+      assert.match(sql,/attempted_at IS NULL AND created_at>now\(\)-interval '24 hours'/);
+      assert.doesNotMatch(sql,/channel=\$1 AND \(status IN/);
+    }
+    return query(sql,args);
+  };
+  await f.c.tick(midday);assert.equal(f.submits,1);
+  const duplicateGuard=f.queries.find(q=>q.sql.includes('AND id<>$3'));
+  assert.match(duplicateGuard.sql,/recovery_required/);
+  assert.equal(/interval '24 hours'/.test(duplicateGuard.sql),false);
+});
 test('worker submits once and accepted response remains remote pending',async()=>{
   const f=fixture();await f.c.tick(midday);assert.equal(f.submits,1);
   const settlement=f.queries.find(q=>q.sql.includes('published_at=CASE'));
@@ -208,3 +245,4 @@ test('TikTok connection check uses an approved preview for dry-run and never sub
   assert.equal(checked.status,'publishing');
   assert.equal(checked.payload.tiktokSettings.express_consent_given,true);
 });
+

@@ -1,7 +1,7 @@
 import {mkdir,mkdtemp,readFile,writeFile,rename,rm,stat,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
-import {hash,fail} from './core.js';
+import {hash,fail,log} from './core.js';
 
 export function extractMedia(nodes=[]) {
   const videos=nodes.filter(n=>n.mediaContentType==='VIDEO' && n.status==='READY')
@@ -166,7 +166,17 @@ export class MediaRenderer {
   async render(product) {
     const selected=extractMedia(product.media);
     if(!selected.videoURL && !selected.images.length) fail('NO_MARKETING_MEDIA');
-    if(this.cfg.aiVideoEnabled) return this.aiReel(product,selected);
+    if(this.cfg.aiVideoEnabled) {
+      try{return await this.aiReel(product,selected);}
+      catch(e){
+        // Optional narration must not stop the entire organic photo pipeline.
+        // Keep cached/provider backoff and voice quotas intact; use existing
+        // product media without claiming an AI voice was generated.
+        if(!['AI_VIDEO_DAILY_LIMIT','OPENAI_RATE_LIMIT','OPENAI_QUOTA_EXCEEDED',
+          'OPENAI_AUTH_FAILED','OPENAI_API_KEY_REQUIRED'].includes(e?.code))throw e;
+        log('AI_VIDEO_DEFERRED',{productId:product.id,reason:e.code});
+      }
+    }
     if(!selected.videoURL) return this.carousel(selected.images);
     const key=hash({media:selected,hook:product.localized.hook,renderVersion:1});
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
@@ -281,4 +291,5 @@ export class MediaRenderer {
   }
   url(key){return `${this.cfg.publicOrigin}/marketing-assets/${key}.mp4`;}
 }
+
 

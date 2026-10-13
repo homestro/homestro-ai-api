@@ -1,3 +1,32 @@
+## Organic publication blockers — 13 October 2026
+
+Owner requests repairs that bring real shop traffic and sales, with paid ads at EUR0.
+Source audit at commit 26fb7e53874d09d85c4c1d39ef24cba5120fd4e9 found three concrete blockers:
+Pinterest's compiled productURL was a Railway click redirect but Zernio's strict destination
+validation accepts only https://homestro.de. Six historical Pinterest jobs had
+INVALID_PRODUCT_URL. Old recovery_required TikTok/Pinterest rows consumed the daily
+quota indefinitely. Optional AI Reels failures (voice quota/auth/provider rate limits)
+stopped otherwise usable photo posts during ingestion.
+
+The repair uses a direct Shopify product destination with Pinterest UTM attribution,
+counts social attempts/publications in a rolling 24-hour window, and falls back to
+existing photo/video media when optional narration is unavailable. Voice budgets and
+provider backoff are preserved. TikTok preview consent and Reels review remain required.
+Only Pinterest INVALID_PRODUCT_URL recovery rows with exactly empty remote state are
+retired as rejected local failures; provider intent, remote IDs and uncertain submissions
+are retained and never blindly resent. Same-product duplicate guards remain timeless.
+
+Local validation: complete marketing suite 151/151 passed, including real FFmpeg voice,
+captions, carousel and OCR integration tests. This note describes the prepared code;
+it does not yet prove a new live publication or an order.
+
+Live storage configuration was separately corrected to PILOT_DATA_DIR=/data/marketing,
+on the existing /data persistent volume. Railway deployment
+37df9392-95e9-4cb3-8b13-5d7846f454dd reached SUCCESS. The enabled marketing runtime was
+confirmed at 20:13:45 UTC. Existing channel counts and queued drafts are not proof of
+new publication. The user's Shopify report for Oct 9–13 had 57 US bot sessions and
+7 sessions from 3 German human visitors; do not describe bot visits as customers.
+
 ## MS Handwerk Meta + Google organic publishing — 11 October 2026
 
 The implementation is prepared in PR #83 on branch codex/ms-google-auto-publishing-20261011. MS Handwerk has a separate Meta OAuth connection and encrypted account record; Homestro's Meta page and Instagram credentials are never reused. It adds Facebook and Instagram queues plus the existing separate Google Business Profile queue. Each platform is disabled by default and uses a maximum of one post per channel in a rolling 24-hour window. Paid advertising stays disabled at 0 EUR.
@@ -310,3 +339,4 @@ status, and the next opt-in check can isolate TikTok preflight failures.
 An opt-in renderer is prepared on branch `codex/homestro-ai-reels-voiceover-20261011`. It uses an existing Shopify product MP4 where available; otherwise it adds a slow FFmpeg camera move to the product's first ready photo. It generates a factual German script from localized Shopify copy, requests a German voiceover from OpenAI, burns timed captions into a 720×1280 MP4, and reuses cached outputs. It does not regenerate product appearance or claim unsupported product benefits. The feature is disabled unless `PILOT_AI_VIDEO_ENABLED=true`, with limits of two new voice assets per UTC day and 20 seconds by default. Existing paid ads remain at 0 EUR.
 
 The implementation and integration tests are on the branch for CI review; they are not deployed and no post is claimed. The last production operating note recorded OpenAI HTTP 401, so voiceover cannot be confirmed until the Railway `OPENAI_API_KEY` is replaced with a valid project key. Keep the feature disabled until that key works and rights to the shop's source media are confirmed. Local child-process execution is blocked in this shell. GitHub Actions verify run #202 passed API/regression tests, marketing pilot tests (including FFmpeg rendering), and the production Docker image build on 12 October 2026.
+
