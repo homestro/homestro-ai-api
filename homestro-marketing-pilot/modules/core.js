@@ -48,6 +48,14 @@ export function config(env=process.env) {
     workerEnabled:envBool(env.PILOT_WORKER_ENABLED), publishingEnabled:envBool(env.PILOT_PUBLISH_ENABLED),
     publishOnce:envBool(env.PILOT_PUBLISH_ONCE), syncOnce:envBool(env.PILOT_SYNC_ONCE),
     feedEnabled:envBool(env.PILOT_FEED_ENABLED),
+    // Optional product Reels use the verified Shopify media and bounded OpenAI narration.
+    aiVideoEnabled:envBool(env.PILOT_AI_VIDEO_ENABLED),
+    openaiApiKey:String(env.OPENAI_API_KEY||'').trim(),
+    videoScriptModel:env.PILOT_VIDEO_SCRIPT_MODEL||'gpt-4o-mini',
+    videoTtsModel:env.PILOT_VIDEO_TTS_MODEL||'gpt-4o-mini-tts',
+    videoTtsVoice:env.PILOT_VIDEO_TTS_VOICE||'coral',
+    videoDailyLimit:Number(env.PILOT_VIDEO_DAILY_LIMIT||2),
+    videoMaxDurationSec:Number(env.PILOT_VIDEO_MAX_DURATION_SEC||20),
     // Merchant fees are separate from ad spend. Feed shipping must match checkout.
     feeRate:Number(env.PILOT_PAYMENT_FEE_RATE||0),
     shipping:JSON.parse(env.PILOT_SHIPPING_JSON||'[{"country":"DE","price":6.99,"freeFrom":50}]'),
@@ -67,6 +75,8 @@ export function config(env=process.env) {
   if(!Number.isInteger(cfg.maxDailyPosts) || cfg.maxDailyPosts<1 || cfg.maxDailyPosts>(cfg.publishEveryHours?24:10) ||
     !Number.isInteger(cfg.maxDailyPerChannel) || cfg.maxDailyPerChannel<1 || cfg.maxDailyPerChannel>(cfg.publishEveryHours?6:5))fail('INVALID_DAILY_LIMIT');
   if(!Number.isFinite(cfg.feeRate) || cfg.feeRate<0 || cfg.feeRate>=1)fail('INVALID_FEE_RATE');
+  if(!Number.isInteger(cfg.videoDailyLimit)||cfg.videoDailyLimit<1||cfg.videoDailyLimit>10||
+    !Number.isInteger(cfg.videoMaxDurationSec)||cfg.videoMaxDurationSec<8||cfg.videoMaxDurationSec>30)fail('INVALID_VIDEO_LIMIT');
   if(!Array.isArray(cfg.shipping) || !cfg.shipping.length)fail('INVALID_SHIPPING');
   if(cfg.organicPolicy==='balanced-v1')Object.assign(cfg,{publishEveryHours:8,
     publishAroundClock:false,maxDailyPosts:4,maxDailyPerChannel:2});

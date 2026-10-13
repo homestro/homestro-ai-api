@@ -54,3 +54,48 @@ test('real local OCR prefers a plain product photograph over a text-heavy image 
     assert.equal(assessments.length,2);assert.deepEqual(await renderer.carousel(urls),selected);assert.equal(downloads,2);
   }finally{globalThis.fetch=original;await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('AI Reel mode creates a vertical video with voice and captions from Shopify product media',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'homestro-ai-reel-test-'));
+  try {
+    execFileSync('/usr/bin/ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=blue:s=320x400:d=1',
+      '-frames:v','1','-threads','1',join(dir,'fixture.jpg')]);
+    execFileSync('/usr/bin/ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','sine=frequency=600:duration=6',
+      '-c:a','libmp3lame','-q:a','8','-threads','1',join(dir,'voice.mp3')]);
+    const jpeg=await readFile(join(dir,'fixture.jpg')),voice=await readFile(join(dir,'voice.mp3')),calls=[];
+    const renderer=new MediaRenderer({dataDir:dir,mediaHosts:['cdn.shopify.com'],publicOrigin:'https://pilot.example',
+      aiVideoEnabled:true,openaiApiKey:'test-key',videoDailyLimit:2,videoMaxDurationSec:15,
+      fetchImpl:async(url)=>{
+        const target=String(url);calls.push(target);
+        if(target.endsWith('/v1/chat/completions'))return new Response(JSON.stringify({choices:[{message:{content:'Mehr Ordnung in deiner Küche. Diese Boxen halten Kleinteile übersichtlich zusammen. Jetzt bei Homestro entdecken.'}}]}),{status:200,headers:{'Content-Type':'application/json'}});
+        if(target.endsWith('/v1/audio/speech'))return new Response(voice,{status:200,headers:{'Content-Type':'audio/mpeg'}});
+        return new Response(jpeg,{status:200,headers:{'Content-Type':'image/jpeg'}});
+      }});
+    const product={id:'gid://shopify/Product/123',title:'Küchenbox',
+      localized:{title:'Küchenbox',description:'Box für die Küche',hook:'Mehr Ordnung in deiner Küche',
+        benefits:[{text:'Für übersichtliche Aufbewahrung'}]},
+      media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/product.jpg'}}]};
+    const asset=await renderer.render(product);
+    assert.equal(asset.format,'reels');assert.equal(asset.voiceover,true);assert.match(asset.videoScript,/Küche/);
+    assert.equal(calls.filter(x=>x.endsWith('/v1/chat/completions')).length,1);
+    assert.equal(calls.filter(x=>x.endsWith('/v1/audio/speech')).length,1);
+    const file=join(dir,'assets',new URL(asset.videoURL).pathname.split('/').pop());
+    const probe=JSON.parse(execFileSync('/usr/bin/ffprobe',['-v','error','-show_streams','-show_format','-of','json',file]).toString());
+    const video=probe.streams.find(x=>x.codec_type==='video'),audio=probe.streams.find(x=>x.codec_type==='audio');
+    assert.equal(video.width,720);assert.equal(video.height,1280);assert.equal(video.codec_name,'h264');
+    assert.equal(audio.codec_name,'aac');assert.ok(Number(probe.format.duration)>=5);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('AI Reel mode fails closed on OpenAI authentication errors',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'homestro-ai-reel-auth-test-'));
+  try {
+    const renderer=new MediaRenderer({dataDir:dir,mediaHosts:['cdn.shopify.com'],publicOrigin:'https://pilot.example',
+      aiVideoEnabled:true,openaiApiKey:'bad-key',videoDailyLimit:2,fetchImpl:async()=>new Response('unauthorized',{status:401})});
+    await assert.rejects(()=>renderer.render({id:'gid://shopify/Product/123',localized:{title:'Produkt',
+      description:'Produktbeschreibung',hook:'Mehr Ordnung',benefits:[{text:'Gut sortiert'}]},
+      media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/product.jpg'}}]}),
+      error=>error.code==='OPENAI_AUTH_FAILED');
+  } finally {await rm(dir,{recursive:true,force:true});}
+});

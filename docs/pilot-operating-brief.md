@@ -303,3 +303,10 @@ The earlier two TikTok rows remain recovery_required with the old generic
 ZERNIO_REQUEST_FAILED code; they were not resent because their remote outcome is
 not confirmed. New Zernio failures now log only a safe operation label and HTTP
 status, and the next opt-in check can isolate TikTok preflight failures.
+
+
+## Homestro AI product Reels — 12 October 2026
+
+An opt-in renderer is prepared on branch `codex/homestro-ai-reels-voiceover-20261011`. It uses an existing Shopify product MP4 where available; otherwise it adds a slow FFmpeg camera move to the product's first ready photo. It generates a factual German script from localized Shopify copy, requests a German voiceover from OpenAI, burns timed captions into a 720×1280 MP4, and reuses cached outputs. It does not regenerate product appearance or claim unsupported product benefits. The feature is disabled unless `PILOT_AI_VIDEO_ENABLED=true`, with limits of two new voice assets per UTC day and 20 seconds by default. Existing paid ads remain at 0 EUR.
+
+The implementation and integration tests are on the branch for CI review; they are not deployed and no post is claimed. The last production operating note recorded OpenAI HTTP 401, so voiceover cannot be confirmed until the Railway `OPENAI_API_KEY` is replaced with a valid project key. Keep the feature disabled until that key works and rights to the shop's source media are confirmed. Local child-process execution is blocked in this shell. GitHub Actions verify run #202 passed API/regression tests, marketing pilot tests (including FFmpeg rendering), and the production Docker image build on 12 October 2026.
