@@ -52,6 +52,13 @@ export class Store {
   async feedRows() {
     return (await this.pool.query("SELECT document FROM marketing_products WHERE status='ready' AND COALESCE(document->>'kind','product')<>'brand_editorial' ORDER BY id")).rows.map(x=>x.document);
   }
+  async seoRows() {
+    // A narration/render outage must not suppress reviewed copy for SEO pages.
+    return (await this.pool.query(`SELECT document FROM marketing_products
+      WHERE document->>'status'='ACTIVE' AND document->>'contentReviewed'='true'
+        AND document->'localized' IS NOT NULL
+        AND COALESCE(document->>'rejected','false')<>'true' ORDER BY id`)).rows.map(x=>x.document);
+  }
   async withWorkerLock(fn) {
     const c=await this.pool.connect(); let locked=false;
     try {
@@ -64,3 +71,4 @@ export class Store {
     } finally { if(locked) await c.query('SELECT pg_advisory_unlock(73341001)').catch(()=>{}); c.release(); }
   }
 }
+
