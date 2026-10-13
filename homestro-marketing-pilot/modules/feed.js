@@ -1,4 +1,4 @@
-import {fail,trackingLink} from './core.js';
+import {fail,trackingLink,productURL} from './core.js';
 
 export const xmlEscape = value => String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]))
   .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g,'');
@@ -14,6 +14,7 @@ export function generateFeed(products,cfg) {
   const items=[];
   outer:for(const p of products){
     if(p.rejected || cfg.excludedProductIds?.includes(p.id) || p.status!=='ACTIVE' || p.currency!=='EUR' || !p.localized || !p.contentReviewed || !p.priceReviewed && !p.pricing?.costVerified)continue;
+    try{productURL(p.url);}catch{continue;}
     const image=p.media.find(x=>x.mediaContentType==='IMAGE' && x.status==='READY')?.image?.url;
     if(!image)continue;
     for(const v of p.variants){

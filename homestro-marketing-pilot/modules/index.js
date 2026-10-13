@@ -9,6 +9,7 @@ import {Ingestion,snapshot} from './ingestion.js';
 import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
+import {createFeedRefresh} from './feed-refresh.js';
 import {publishProductSeo} from './seo-publication.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
@@ -265,20 +266,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       dotfiles:'deny',index:false,fallthrough:false,maxAge:'7d',immutable:true,
       setHeaders:res=>{res.set('X-Content-Type-Options','nosniff');}
     }));
-    const freshFeedXML=async()=>{
-      if(!cfg.feedEnabled)fail('FEED_DISABLED');
-      // Freshness is checked at request time. No stale price/stock is emitted on an API failure.
-      const products=[];
-      for(const p of await store.seoRows()){
-        try{
-          const current=await fresh(p.id);
-          if(current.revision!==p.revision){await processProduct(p.id);const row=await store.product(p.id);if(row?.document)products.push(row.document);}
-          else products.push(p);
-        }catch{ /* Fail closed for this product, not for the shop. */ }
-        if(products.reduce((n,p)=>n+p.variants.length,0)>=cfg.feedCap)break;
-      }
-      return generateFeed(products,cfg);
-    };
+    const freshFeedXML=createFeedRefresh({store,fresh,cfg});
     app.get('/feeds/google-organic-v2.xml',route(async(req,res)=>{
       if(!cfg.feedEnabled)return res.status(503).json({error:'FEED_DISABLED'});
       res.set('Cache-Control','no-store').type('application/xml').send(await freshFeedXML());
