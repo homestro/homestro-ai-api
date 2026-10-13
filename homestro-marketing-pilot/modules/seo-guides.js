@@ -73,7 +73,7 @@ const ownBody=(page,fingerprint)=>{
   // Shopify adds formatting line breaks between HTML tags on page writes.
   // Restore only inter-tag whitespace and our known article separators.
   // Text, attributes, links, title and the ownership marker stay fingerprinted.
-  const restored=body.replace(/>\\s+</g,'><').trim().replace(/<\\/article><article>/g,'</article>\\n<article>');
+  const restored=body.replace(/>\s+</g,'><').trim().replace(/<\/article><article>/g,'</article>\n<article>');
   return hash({title:page.title,body:restored})===fingerprint;
 };
 
