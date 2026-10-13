@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {hash,fail,codeOf,log,productURL} from './core.js';
+import {hash,fail,codeOf,log,productURL,trackingLink} from './core.js';
 import {compilePost} from './localization.js';
 import {ZernioOrganic} from './zernio.js';
 import {channelPolicy,repeatedMedia} from './publishing-policy.js';
@@ -34,6 +34,9 @@ export function prepareSocial(p,channel,cfg) {
   if(channel==='pinterest'){
     result.boardId=cfg.boardId;
     if(result.format!=='reels'){result.imageURLs=result.imageURLs.slice(0,1);result.format='image';}
+    // Pinterest accepts the shop destination, not our Railway click redirect.
+    // Preserve attribution through Shopify UTM parameters and the strict shop allowlist.
+    result.productURL=trackingLink(p.url,'pinterest',result.format);
     if(result.caption.length>800)fail('PINTEREST_COPY_LIMIT');
   }
   return result;
@@ -77,6 +80,14 @@ export class SocialCoordinator {
       CREATE INDEX IF NOT EXISTS marketing_social_queue ON marketing_social_posts(status,created_at)`);
   }
   async prepare(){
+    // INVALID_PRODUCT_URL was thrown by buildRequest before any provider write.
+    // Retire only those local failures with no remote checkpoint; never retry an
+    // uncertain submission or discard its per-product duplicate protection.
+    const retired=await this.pool.query(`UPDATE marketing_social_posts SET status='rejected',
+      error_code='LOCAL_DESTINATION_REJECTED',updated_at=now()
+      WHERE channel='pinterest' AND status='recovery_required'
+        AND error_code='INVALID_PRODUCT_URL' AND remote='{}'::jsonb`);
+    if(retired.rowCount)log('SOCIAL_LOCAL_FAILURE_RETIRED',{channel:'pinterest',count:retired.rowCount});
     const products=(await this.pool.query("SELECT document FROM marketing_products WHERE status='ready'")).rows;
     let queued=0;
     for(const {document:p} of products)for(const channel of Object.keys(this.providerCfg.accounts)){
@@ -196,8 +207,10 @@ export class SocialCoordinator {
       for(const job of jobs){
         if(!this.providerCfg.accounts[job.channel])continue;
         const used=(await client.query(`SELECT count(*)::int AS n FROM marketing_social_posts
-          WHERE channel=$1 AND (status IN ('publishing','remote_pending','recovery_required')
-            OR published_at>now()-interval '24 hours' OR attempted_at>now()-interval '24 hours')`,[job.channel])).rows[0].n;
+          WHERE channel=$1 AND (published_at>now()-interval '24 hours'
+            OR attempted_at>now()-interval '24 hours'
+            OR (status IN ('publishing','remote_pending','recovery_required')
+              AND attempted_at IS NULL AND created_at>now()-interval '24 hours'))`,[job.channel])).rows[0].n;
         const policy=channelPolicy(this.cfg,job.channel),spacing=policy.hours,dailyLimit=policy.daily;
         if(used>=dailyLimit)continue;
         if(this.cfg.publishEveryHours||this.cfg.organicPolicy==='balanced-v1') {
@@ -257,3 +270,4 @@ export function publicPostURL(value,channel){
     return u.origin+u.pathname+(query.size?'?'+query:'');
   }catch{return null;}
 }
+
