@@ -99,3 +99,21 @@ test('AI Reel mode fails closed on OpenAI authentication errors',async()=>{
       error=>error.code==='OPENAI_AUTH_FAILED');
   } finally {await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('AI Reel mode checks the daily voice quota before calling OpenAI',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'homestro-ai-reel-cap-test-'));
+  try {
+    const assets=join(dir,'assets');
+    await mkdir(assets,{recursive:true});
+    await writeFile(join(assets,'already-counted.speech.mp3'),'cached');
+    let calls=0;
+    const renderer=new MediaRenderer({dataDir:dir,mediaHosts:['cdn.shopify.com'],publicOrigin:'https://pilot.example',
+      aiVideoEnabled:true,openaiApiKey:'test-key',videoDailyLimit:1,fetchImpl:async()=>{calls++;return new Response('{}',{status:200});}});
+    await assert.rejects(()=>renderer.render({id:'gid://shopify/Product/456',title:'Produkt',
+      localized:{title:'Produkt',description:'Produktbeschreibung',hook:'Ein guter Haken',benefits:[{text:'Ein belegter Vorteil'}]},
+      media:[{mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/product.jpg'}}]}),
+      error=>error.code==='AI_VIDEO_DAILY_LIMIT');
+    assert.equal(calls,0);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
