@@ -126,7 +126,7 @@ async function getSpeech(script,cfg,fetchImpl) {
       input:script,instructions:'Speak in natural, clear German at a friendly pace. Do not add words.',
       response_format:'mp3'})
   });
-  await responseOrFail(response);
+  await responseOrFail(response,cfg);
   const bytes=Buffer.from(await response.arrayBuffer());
   if(!bytes.length||bytes.length>15*1024*1024)fail('OPENAI_AUDIO_INVALID');
   return bytes;
