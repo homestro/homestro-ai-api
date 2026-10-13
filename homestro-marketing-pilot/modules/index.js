@@ -13,7 +13,7 @@ import {publishProductSeo} from './seo-publication.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
-import {SocialCoordinator,socialConfig} from './social.js';
+import {SocialCoordinator,socialConfig,publicPostURL} from './social.js';
 import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
@@ -21,6 +21,8 @@ import {buildGrowthReport,reportWindow} from './growth-report.js';
 import {createSeoArticleDraft} from './seo-articles.js';
 import {buildSeoContentPlan} from './content-plan.js';
 import {parseTrackedLink,trackedDestination} from './tracking.js';
+import {syncSeoGuides} from './seo-guides.js';
+import {refreshPerformance,readPerformance} from './performance.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -98,7 +100,12 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         const pendingReasons=(await pool.query(`SELECT reason,count(*)::int AS count FROM marketing_products p
           CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason
           WHERE p.status='pending_marketing' GROUP BY reason ORDER BY count DESC,reason`)).rows;
-        log('CATALOG_SYNC',{...r,pendingReasons});return {...r,pendingReasons};
+        log('CATALOG_SYNC',{...r,pendingReasons});
+        try {await syncSeoGuides({pool,graphql,products:await store.seoRows(),cfg,freshSnapshot:fresh});}
+        catch(e){log('SEO_PIPELINE_PENDING',{reason:codeOf(e)});}
+        try {await refreshPerformance({pool,graphql,enabled:cfg.analyticsEnabled});}
+        catch(e){log('PERFORMANCE_PIPELINE_PENDING',{reason:codeOf(e)});}
+        return {...r,pendingReasons};
       }catch(e){log(codeOf(e));return {error:codeOf(e)};}
       finally{if(locked)await client.query('SELECT pg_advisory_unlock(73341002)').catch(()=>{});client?.release();syncBusy=false;}
     };
@@ -126,23 +133,41 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     // Public dashboard exposes aggregate counts and already-public permalinks only; no drafts, IDs, or customer data.
     app.get('/api/marketing/v2/public-results',route(async(req,res)=>{
       const days=reportWindow(req.query.days);
-      const [posts,clicks,recent]=await Promise.all([
+      const [posts,clicks,recent,guides]=await Promise.all([
         pool.query(`SELECT channel,count(*) FILTER (WHERE status='published')::int AS published
-          FROM marketing_posts WHERE COALESCE(published_at,created_at)>=now()-($1::int*interval '1 day') GROUP BY channel`,[days]),
+          FROM (SELECT channel,status,published_at,created_at FROM marketing_posts UNION ALL
+            SELECT channel,status,published_at,created_at FROM marketing_social_posts) all_posts
+          WHERE COALESCE(published_at,created_at)>=now()-($1::int*interval '1 day') GROUP BY channel`,[days]),
         pool.query(`SELECT channel,count(*)::int AS clicks FROM marketing_clicks
           WHERE created_at>=now()-($1::int*interval '1 day') GROUP BY channel`,[days]),
         pool.query(`SELECT channel,payload->>'title' AS title,remote->>'permalink' AS permalink,published_at
-          FROM marketing_posts WHERE status='published' AND remote->>'permalink' ~ '^https://'
-          ORDER BY published_at DESC NULLS LAST LIMIT 10`)
+          FROM (SELECT channel,payload,remote,published_at,status FROM marketing_posts UNION ALL
+            SELECT channel,payload,remote,published_at,status FROM marketing_social_posts) all_posts
+          WHERE status='published' AND remote->>'permalink' ~ '^https://'
+          ORDER BY published_at DESC NULLS LAST LIMIT 10`),
+        pool.query("SELECT handle,url FROM marketing_seo_pages WHERE status='published' ORDER BY published_at DESC LIMIT 10")
       ]);
       const clicksByChannel=new Map(clicks.rows.map(x=>[x.channel,x.clicks]));
       const channels=posts.rows.map(x=>({channel:x.channel,published:x.published,clicks:clicksByChannel.get(x.channel)||0}));
       const publishedTotal=channels.reduce((n,x)=>n+x.published,0);
       const clickTotal=clicks.rows.reduce((n,x)=>n+x.clicks,0);
-      res.set('Cache-Control','no-store').json({generatedAt:new Date().toISOString(),days,adSpendEUR:0,publishedTotal,clickTotal,channels,recent:recent.rows});
+      res.set('Cache-Control','no-store').json({generatedAt:new Date().toISOString(),days,adSpendEUR:0,publishedTotal,clickTotal,
+        clickMetric:'signed redirect requests; includes automated link previews and is not unique visitors',channels,
+        recent:recent.rows.flatMap(p=>{const url=publicPostURL(p.permalink,p.channel);return url?[{...p,permalink:url}]:[];}),
+        guides:guides.rows,seoIndexingConfirmed:false,
+        feed:{enabled:cfg.feedEnabled,url:'/feeds/google-organic-v2.xml',maximumOffers:cfg.feedCap,merchantApprovalConfirmed:false}});
     }));
     const router=express.Router();router.use(apiKeyMiddleware||auth,express.json({limit:'128kb'}));
     const socialRequired=()=>{if(!social)fail('SOCIAL_NOT_CONFIGURED');return social;};
+    router.get('/seo/guides',route(async(req,res)=>{
+      const pages=(await pool.query('SELECT handle,status,url,product_ids,published_at,updated_at FROM marketing_seo_pages ORDER BY handle')).rows;
+      res.json({enabled:cfg.seoAutopublishEnabled,maximumDailyPages:cfg.seoMaxDailyPages,pages,indexingConfirmed:false,adSpendEUR:0});
+    }));
+    router.get('/performance',route(async(req,res)=>{
+      const days=reportWindow(req.query.days);
+      await refreshPerformance({pool,graphql,days,enabled:cfg.analyticsEnabled});
+      res.json(await readPerformance(pool,days));
+    }));
     router.get('/social/status',route(async(req,res)=>{
       if(!social)return res.json({configured:false,adSpendEUR:0});
       const report=await social.report();
@@ -187,11 +212,19 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       const days=reportWindow(req.query.days);
       const [products,posts,pendingReasons,clickRows]=await Promise.all([
         pool.query('SELECT status,count(*)::int AS count, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NOT NULL AND document->\'localized\'->>\'seoDescription\' IS NOT NULL)::int AS seo_copy_ready, count(*) FILTER (WHERE document->\'localized\'->>\'seoTitle\' IS NULL OR document->\'localized\'->>\'seoDescription\' IS NULL)::int AS seo_copy_missing FROM marketing_products GROUP BY status'),
-        pool.query('SELECT channel,status,count(*)::int AS count, count(*) FILTER (WHERE remote->>\'permalink\' ~ \'^https://\')::int AS confirmed_permalink_count FROM marketing_posts WHERE COALESCE(published_at,created_at)>=now()-($1::int * interval \'1 day\') GROUP BY channel,status',[days]),
+        pool.query(`SELECT channel,status,count(*)::int AS count,
+          count(*) FILTER (WHERE remote->>'permalink' ~ '^https:')::int AS confirmed_permalink_count
+          FROM (SELECT channel,status,remote,published_at,created_at FROM marketing_posts UNION ALL
+            SELECT channel,status,remote,published_at,created_at FROM marketing_social_posts) all_posts
+          WHERE COALESCE(published_at,created_at)>=now()-($1::int*interval '1 day') GROUP BY channel,status`,[days]),
         pool.query('SELECT reason,count(*)::int AS count FROM marketing_products p CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason WHERE p.status=\'pending_marketing\' GROUP BY reason ORDER BY count DESC,reason')
         ,pool.query("SELECT channel,count(*)::int AS count FROM marketing_clicks WHERE created_at>=now()-($1::int * interval '1 day') GROUP BY channel",[days])
       ]);
-      res.json(buildGrowthReport({days,products:products.rows,posts:posts.rows,pendingReasons:pendingReasons.rows,clickRows:clickRows.rows}));
+      await refreshPerformance({pool,graphql,days,enabled:cfg.analyticsEnabled});
+      const performance=await readPerformance(pool,days);
+      const seoPages=(await pool.query('SELECT handle,status,url,published_at FROM marketing_seo_pages ORDER BY handle')).rows;
+      res.json({...buildGrowthReport({days,products:products.rows,posts:posts.rows,pendingReasons:pendingReasons.rows,clickRows:clickRows.rows}),
+        performance,seo:{enabled:cfg.seoAutopublishEnabled,pages:seoPages,indexingConfirmed:false}});
     }));
     router.get('/status',route(async(req,res)=>{
       const products=(await pool.query('SELECT status,count(*)::int AS count FROM marketing_products GROUP BY status')).rows;
@@ -232,19 +265,23 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       dotfiles:'deny',index:false,fallthrough:false,maxAge:'7d',immutable:true,
       setHeaders:res=>{res.set('X-Content-Type-Options','nosniff');}
     }));
-    app.get('/feeds/google-organic-v2.xml',route(async(req,res)=>{
-      if(!cfg.feedEnabled)return res.status(503).json({error:'FEED_DISABLED'});
+    const freshFeedXML=async()=>{
+      if(!cfg.feedEnabled)fail('FEED_DISABLED');
       // Freshness is checked at request time. No stale price/stock is emitted on an API failure.
       const products=[];
-      for(const p of await store.feedRows()){
+      for(const p of await store.seoRows()){
         try{
           const current=await fresh(p.id);
-          if(current.revision!==p.revision){await processProduct(p.id);const row=await store.product(p.id);if(row?.status==='ready')products.push(row.document);}
+          if(current.revision!==p.revision){await processProduct(p.id);const row=await store.product(p.id);if(row?.document)products.push(row.document);}
           else products.push(p);
         }catch{ /* Fail closed for this product, not for the shop. */ }
         if(products.reduce((n,p)=>n+p.variants.length,0)>=cfg.feedCap)break;
       }
-      res.set('Cache-Control','no-store').type('application/xml').send(generateFeed(products,cfg));
+      return generateFeed(products,cfg);
+    };
+    app.get('/feeds/google-organic-v2.xml',route(async(req,res)=>{
+      if(!cfg.feedEnabled)return res.status(503).json({error:'FEED_DISABLED'});
+      res.set('Cache-Control','no-store').type('application/xml').send(await freshFeedXML());
     }));
     if(cfg.autonomyEnabled){
       await verifyHistory(store,meta,cfg);
@@ -268,8 +305,9 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }
     if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();if(!cfg.autonomyEnabled)void sync();}
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
-    return {enabled:true,processProduct,sync,store,worker,social,
+    return {enabled:true,processProduct,sync,store,worker,social,feedXML:freshFeedXML,
       stop(){worker.stop();social?.stop();clearInterval(syncTimer);}};
   }catch(e){log('DISABLED',{reason:codeOf(e)});return {enabled:false,processProduct:async()=>({processed:0,status:'marketing_disabled'}),stop(){}};}
 }
+
 

@@ -13,7 +13,7 @@ export function generateFeed(products,cfg) {
   for(const s of cfg.shipping)if(!/^[A-Z]{2}$/.test(s.country) || !Number.isFinite(s.price) || s.price<0)fail('INVALID_SHIPPING');
   const items=[];
   outer:for(const p of products){
-    if(p.status!=='ACTIVE' || p.currency!=='EUR' || !p.localized || !p.contentReviewed || !p.priceReviewed && !p.pricing?.costVerified)continue;
+    if(p.rejected || cfg.excludedProductIds?.includes(p.id) || p.status!=='ACTIVE' || p.currency!=='EUR' || !p.localized || !p.contentReviewed || !p.priceReviewed && !p.pricing?.costVerified)continue;
     const image=p.media.find(x=>x.mediaContentType==='IMAGE' && x.status==='READY')?.image?.url;
     if(!image)continue;
     for(const v of p.variants){
@@ -37,3 +37,4 @@ export function generateFeed(products,cfg) {
   }
   return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:g="http://base.google.com/ns/1.0"><channel><title>Homestro</title><link>https://homestro.de</link><description>Homestro Produktangebote</description>${items.join('')}</channel></rss>`;
 }
+

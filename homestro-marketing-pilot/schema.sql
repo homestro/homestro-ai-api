@@ -47,3 +47,20 @@ CREATE TABLE IF NOT EXISTS marketing_clicks (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS marketing_clicks_created ON marketing_clicks(created_at,channel);
+
+CREATE TABLE IF NOT EXISTS marketing_seo_pages (
+  handle text PRIMARY KEY,content_hash text NOT NULL,body_hash text,
+  status text NOT NULL CHECK(status IN ('creating','published','paused','failed','recovery_required')),
+  product_ids jsonb NOT NULL DEFAULT '[]',shopify_id text,url text,
+  attempted_at timestamptz,published_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS marketing_performance (
+  window_days integer PRIMARY KEY,payload jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS marketing_seo_attempts (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  handle text NOT NULL REFERENCES marketing_seo_pages(handle),attempted_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS marketing_seo_attempts_time ON marketing_seo_attempts(attempted_at);
+
