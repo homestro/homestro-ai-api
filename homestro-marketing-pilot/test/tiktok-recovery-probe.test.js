@@ -27,22 +27,22 @@ function fixture({age=1,keyBad=false,changed=false,existing=false,lookupBad=fals
  return {social,get writes(){return writes;},get reads(){return reads;},get settled(){return settled;}};
 }
 test('existing remote post reconciles without another provider write',async()=>{
- const f=fixture({existing:true});assert.equal((await runTikTokRecoveryProbe(f.social,now)).status,'published');
+ const f=fixture({existing:true});assert.equal((await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24))).status,'published');
  assert.equal(f.writes,0);assert.equal(f.settled,1);
 });
 test('one explicitly selected recent 400 uses the same job once within the replay window',async()=>{
- const f=fixture();await runTikTokRecoveryProbe(f.social,now);await runTikTokRecoveryProbe(f.social,now);
+ const f=fixture();await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24));await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24));
  assert.equal(f.writes,1);assert.equal(f.reads,1);assert.equal(f.settled,1);
 });
 test('old intent, wrong key, changed source or malformed lookup never trigger a write',async()=>{
  for(const opts of [{age:13},{keyBad:true},{changed:true},{lookupBad:true}]) {
-   const f=fixture(opts);assert.equal((await runTikTokRecoveryProbe(f.social,now)).status,'unconfirmed');assert.equal(f.writes,0);
+   const f=fixture(opts);assert.equal((await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24))).status,'unconfirmed');assert.equal(f.writes,0);
  }
 });
 test('definite rejection is diagnosed once and never becomes a successful publication',async()=>{
- const f=fixture({reject:true});const result=await runTikTokRecoveryProbe(f.social,now);
+ const f=fixture({reject:true});const result=await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24));
  assert.equal(result.reason,'ZERNIO_POST_CREATE_HTTP_400');assert.equal(f.settled,0);
- await runTikTokRecoveryProbe(f.social,now);assert.equal(f.writes,1);
+ await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24));assert.equal(f.writes,1);
 });
 test('diagnostics never include provider text, secrets, URLs or arbitrary field names',()=>{
  const d=providerDiagnostics({type:'platform_error',code:'platform_api_error',error:'Missing permission reconnect secret-token https://secret.example',param:'https://secret.example',platformError:{code:400}});
@@ -50,4 +50,9 @@ test('diagnostics never include provider text, secrets, URLs or arbitrary field 
  assert.ok(!JSON.stringify(d).includes('secret'));assert.equal(d.upstreamCode,400);
  const field=providerDiagnostics({type:'invalid_request_error',code:'invalid_field_value',param:'platforms[0].platformSpecificData.tiktokSettings.media_type'});
  assert.equal(field.providerCode,'invalid_field_value');assert.equal(field.param,'platforms[0].platformSpecificData.tiktokSettings.media_type');
+});
+
+test('changed provider account never replays the historical request',async()=>{
+ const f=fixture();const result=await runTikTokRecoveryProbe(f.social,now,now,'c'.repeat(24));
+ assert.equal(result.reason,'RECOVERY_ACCOUNT_UNCONFIRMED');assert.equal(f.writes,0);assert.equal(f.reads,0);
 });
