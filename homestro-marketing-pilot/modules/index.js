@@ -1,3 +1,4 @@
+import {checkMetaOrganicAudience} from './meta-audience-check.js';
 import express from 'express';
 import {join} from 'node:path';
 import {randomBytes} from 'node:crypto';
@@ -271,6 +272,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }));
     if(social&&process.env.PILOT_TIKTOK_VALIDATE_POST_ID&&process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID)
       await validateTikTokFailure(social,process.env.PILOT_TIKTOK_VALIDATE_POST_ID,process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID);
+    if(process.env.PILOT_META_AUDIENCE_CHECK==='true')await checkMetaOrganicAudience(meta,pool,cfg);
     const freshFeedXML=createFeedRefresh({store,fresh,cfg});
     app.get('/feeds/google-organic-v2.xml',route(async(req,res)=>{
       if(!cfg.feedEnabled)return res.status(503).json({error:'FEED_DISABLED'});

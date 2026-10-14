@@ -212,7 +212,7 @@ export class MediaRenderer {
     let script,speech;
     try{script=(await readFile(scriptPath,'utf8')).trim();}catch{}
     try{speech=await readFile(speechPath);}catch{}
-    try{await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[],videoScript:script||null,voiceover:true};}catch{}
+    try{await stat(output);log('AI_VIDEO_READY',{productId:product.id,videoURL:this.url(key),voiceover:true,cached:true});return {format:'reels',videoURL:this.url(key),imageURLs:[],videoScript:script||null,voiceover:true};}catch{}
     const tmp=await mkdtemp(join(dir,'render-'));
     try{
       // Check the daily voice quota before spending tokens on either a script or speech.
@@ -252,6 +252,7 @@ export class MediaRenderer {
         '-c:a','aac','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
       await encode(args,tmp,240000);
       await rename(join(tmp,'out.mp4'),output);
+      log('AI_VIDEO_READY',{productId:product.id,videoURL:this.url(key),voiceover:true,cached:false,duration});
       return {format:'reels',videoURL:this.url(key),imageURLs:[],videoScript:script,voiceover:true};
     } finally {await rm(tmp,{recursive:true,force:true});}
   }
