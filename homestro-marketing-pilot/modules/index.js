@@ -1,3 +1,4 @@
+import {GeneratedVideoDrafts} from './generative-video.js';
 import {checkMetaOrganicAudience} from './meta-audience-check.js';
 import express from 'express';
 import {join} from 'node:path';
@@ -46,6 +47,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
+    const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
+    await generated.migrate();
     let social=null;
     try{
       const providerCfg=cfg.social===undefined?socialConfig(process.env,cfg):cfg.social;
@@ -195,6 +198,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.json({ok:true,channels:Object.keys(s.providerCfg.accounts),adSpendEUR:0});
     }));
     router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
+    router.post('/generated-videos',route(async(req,res)=>res.json(await generated.start(req.body))));
+    router.get('/generated-videos/:key',route(async(req,res)=>res.json(await generated.poll(req.params.key))));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
     router.get('/seo/articles/drafts',route(async(req,res)=>{
@@ -306,5 +311,6 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       stop(){worker.stop();social?.stop();clearInterval(syncTimer);}};
   }catch(e){log('DISABLED',{reason:codeOf(e)});return {enabled:false,processProduct:async()=>({processed:0,status:'marketing_disabled'}),stop(){}};}
 }
+
 
 
