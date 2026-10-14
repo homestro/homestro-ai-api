@@ -13,6 +13,7 @@ test('real FFmpeg: carousel creates cached JPEGs only; attached video creates ve
     execFileSync('ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=blue:s=100x100:d=1',
       '-frames:v','1','-threads','1',join(dir,'fixture.jpg')]);
     execFileSync('ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=green:s=100x200:d=4.2',
+      '-f','lavfi','-i','sine=frequency=440:duration=4.2','-c:a','aac',
       '-c:v','libx264','-threads','1','-pix_fmt','yuv420p',join(dir,'fixture.mp4')]);
     const jpeg=await readFile(join(dir,'fixture.jpg')),mp4=await readFile(join(dir,'fixture.mp4'));
     globalThis.fetch=async url=>new Response(String(url).endsWith('.mp4')?mp4:jpeg);
@@ -24,6 +25,8 @@ test('real FFmpeg: carousel creates cached JPEGs only; attached video creates ve
     assert.equal(c.format,'carousel');assert.equal(c.imageURLs.length,2);
     assert.ok((await readdir(join(dir,'assets'))).every(x=>x.endsWith('.jpg')));
     const cache=await renderer.render(p);assert.deepEqual(cache,c);
+    renderer.cfg.aiVideoEnabled=true;
+    renderer.cfg.synthesizeSpeech=()=>{throw Error('Existing video must not generate a replacement voice');};
     const v=await renderer.render({...p,media:[...p.media,{mediaContentType:'VIDEO',status:'READY',sources:[
       {url:'https://cdn.shopify.com/test.mp4',mimeType:'video/mp4',width:100,height:200}]}]});
     assert.equal(v.format,'reels');
@@ -31,6 +34,7 @@ test('real FFmpeg: carousel creates cached JPEGs only; attached video creates ve
     const probe=JSON.parse(execFileSync('ffprobe',['-v','error','-show_streams','-show_format','-of','json',path]).toString());
     assert.equal(probe.streams[0].width,720);assert.equal(probe.streams[0].height,1280);
     assert.equal(probe.streams[0].codec_name,'h264');assert.ok(Number(probe.format.duration)>=4);
+    assert.ok(probe.streams.some(s=>s.codec_type==='audio'&&s.codec_name==='aac'));
   }finally{globalThis.fetch=original;await rm(dir,{recursive:true,force:true});}
 });
 
