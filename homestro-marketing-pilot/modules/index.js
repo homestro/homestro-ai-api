@@ -15,6 +15,7 @@ import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
 import {SocialCoordinator,socialConfig,publicPostURL} from './social.js';
+import {runTikTokRecoveryProbe} from './tiktok-recovery-probe.js';
 import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
@@ -279,6 +280,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       log('AUTONOMY_READY',{policy:'homestro-reviewed-organic-v1',posts,products,maxDailyPosts:cfg.maxDailyPosts,
         maxDailyPerChannel:cfg.maxDailyPerChannel,timezone:'Europe/Berlin',hours:'09:00-22:00',adSpendEUR:0});
     }
+    if(social&&process.env.PILOT_TIKTOK_RECOVERY_PROBE==='true'&&process.env.PILOT_TIKTOK_RECOVERY_CUTOFF&&process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID)
+      await runTikTokRecoveryProbe(social,new Date(),new Date(process.env.PILOT_TIKTOK_RECOVERY_CUTOFF),process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID);
     worker.start();
     social?.start();
     if(cfg.syncOnce){

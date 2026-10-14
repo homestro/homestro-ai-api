@@ -37,7 +37,7 @@ test('checkpoint precedes submission and an accepted post without URL stays pend
   const events=[];let postBody;
   const api=new ZernioOrganic(cfg,async(url,options)=>{
     if(url.endsWith('/accounts'))return response({accounts:[{_id:id,platform:'tiktok',isActive:true}]});
-    if(url.endsWith('/creator-info'))return response({creator:{canPostMore:true},privacyLevels:[{value:'PUBLIC_TO_EVERYONE'}],commercialContentTypes:[{value:'brand_organic'}]});
+    if(url.includes('/creator-info'))return response({creator:{canPostMore:true},privacyLevels:[{value:'PUBLIC_TO_EVERYONE'}],commercialContentTypes:[{value:'brand_organic'}]});
     const body=JSON.parse(options.body);if(body.dryRun)return response({dryRun:true,canPublish:true});
     assert.equal(events[0].phase,'zernio_submit_intent');assert.ok(options.headers['Idempotency-Key']);postBody=body;
     return response({post:{_id:remoteId,platforms:[{platform:'tiktok',accountId:id,status:'published',platformPostUrl:null}]}},201);
