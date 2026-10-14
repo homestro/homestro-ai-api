@@ -5,7 +5,7 @@ import {providerDiagnostics} from '../modules/provider-diagnostics.js';
 import {ZernioOrganic} from '../modules/zernio.js';
 test('failed payload validation uses only the documented non-publishing endpoint',async()=>{
  const account='a'.repeat(24),id='12e3a630-4f0c-4135-bc67-ff4378aa9c14';let calls=0;
- const social={providerCfg:{accounts:{tiktok:account}},pool:{query:async()=>({rows:[{channel:'tiktok'}]})},
+ const social={freshSnapshot:async()=>({}),providerCfg:{accounts:{tiktok:account}},pool:{query:async()=>({rows:[{channel:'tiktok'}]})},
    provider:{buildRequest:()=>({content:'Produkt',platforms:[{platform:'tiktok'}]}),request:async(path,options)=>{
      calls++;assert.equal(path,'tools/validate/post');assert.equal(options.method,'POST');
      return {valid:false,errors:[{error:'Missing required photo media type'}]};

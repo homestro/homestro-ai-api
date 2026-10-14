@@ -11,6 +11,7 @@ export function extractMedia(nodes=[]) {
   const images=[...new Set(nodes.filter(n=>n.mediaContentType==='IMAGE' && n.status==='READY').map(n=>n.image?.url).filter(Boolean))];
   return {videoURL:videos[0]?.url||null,images};
 }
+export const carouselAssetKey=image=>hash({image,imageRendererVersion:1});
 // Prefer product photographs with little embedded copy. OCR is a local heuristic,
 // not a language translation or a guarantee that a picture has no text.
 export function selectPhotos(photos,limit=4) {
@@ -258,7 +259,7 @@ export class MediaRenderer {
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const balanced=this.cfg.organicPolicy==='balanced-v1',photos=[];
     for(const image of [...new Set(images)].slice(0,balanced?6:10)) {
-      const key=hash({image,imageRendererVersion:1});const dest=join(dir,key+'.jpg');
+      const key=carouselAssetKey(image);const dest=join(dir,key+'.jpg');
       try {await stat(dest);} catch {
         const tmp=await mkdtemp(join(dir,'photo-'));
         try {
