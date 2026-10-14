@@ -64,9 +64,10 @@ export function berlinWindow(now=new Date()){
 }
 
 export class SocialCoordinator {
-  constructor({pool,cfg,providerCfg,freshSnapshot,provider}){
+  constructor({pool,cfg,providerCfg,freshSnapshot,provider,ensureAssets}){
     Object.assign(this,{pool,cfg,providerCfg,freshSnapshot});
     this.provider=provider||new ZernioOrganic(providerCfg);
+    this.ensureAssets=ensureAssets;
   }
   async migrate(){
     await this.pool.query(`CREATE TABLE IF NOT EXISTS marketing_social_posts (
@@ -231,6 +232,7 @@ export class SocialCoordinator {
           if(duplicate||!eligible(p,this.cfg)||p.revision!==job.payload.productRevision){
             await client.query("UPDATE marketing_social_posts SET status='superseded',error_code='SOCIAL_SOURCE_CHANGED' WHERE id=$1",[job.id]);continue;
           }
+          if(this.ensureAssets)await this.ensureAssets(job,p);
           await client.query("UPDATE marketing_social_posts SET status='publishing',attempted_at=now(),updated_at=now() WHERE id=$1",[job.id]);
           claimed=true;
           const state=await this.provider.submit({...job,status:'publishing'},remote=>this.checkpoint(job.id,remote));

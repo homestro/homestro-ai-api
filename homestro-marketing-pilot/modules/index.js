@@ -5,6 +5,7 @@ import {secureEqual,codeOf,log,fail,config} from './core.js';
 import {Store} from './store.js';
 import {fetchProduct,syncCatalog} from './shopify.js';
 import {MediaRenderer} from './media.js';
+import {ensureApprovedAssets} from './approved-assets.js';
 import {Ingestion,snapshot} from './ingestion.js';
 import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
@@ -48,10 +49,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     try{
       const providerCfg=cfg.social===undefined?socialConfig(process.env,cfg):cfg.social;
       if(providerCfg){
-        social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh});
+        social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh,ensureAssets:(job,source)=>ensureApprovedAssets({job,source,cfg,renderer})});
         await social.migrate();
-        if(process.env.PILOT_TIKTOK_VALIDATE_POST_ID&&process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID)
-          await validateTikTokFailure(social,process.env.PILOT_TIKTOK_VALIDATE_POST_ID,process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID);
         if(String(process.env.PILOT_SOCIAL_CHECK_CONNECTION).toLowerCase()==='true') {
           social.checkTikTokPreflight()
             .then(result=>log('TIKTOK_PREFLIGHT_CHECK',result))
@@ -270,6 +269,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       dotfiles:'deny',index:false,fallthrough:false,maxAge:'7d',immutable:true,
       setHeaders:res=>{res.set('X-Content-Type-Options','nosniff');}
     }));
+    if(social&&process.env.PILOT_TIKTOK_VALIDATE_POST_ID&&process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID)
+      await validateTikTokFailure(social,process.env.PILOT_TIKTOK_VALIDATE_POST_ID,process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID);
     const freshFeedXML=createFeedRefresh({store,fresh,cfg});
     app.get('/feeds/google-organic-v2.xml',route(async(req,res)=>{
       if(!cfg.feedEnabled)return res.status(503).json({error:'FEED_DISABLED'});
