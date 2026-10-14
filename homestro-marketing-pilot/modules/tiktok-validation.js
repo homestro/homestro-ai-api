@@ -7,6 +7,13 @@ export async function validateTikTokFailure(social,postId,expectedAccountId) {
     if(!job)fail('SOCIAL_POST_NOT_FOUND');
     const current=await social.freshSnapshot(job.product_id);
     const assets=social.ensureAssets?await social.ensureAssets(job,current):null;
+    const mediaChecks=await Promise.all((job.payload?.imageURLs||[]).map(async(url,index)=>{
+      try {
+        const response=await fetch(url,{method:'HEAD',redirect:'error',signal:AbortSignal.timeout(10000)});
+        return {index,status:response.status,type:response.headers.get('content-type'),bytes:Number(response.headers.get('content-length'))||0};
+      }catch{return {index,status:0,type:null,bytes:0};}
+    }));
+    log('TIKTOK_PUBLIC_ASSET_CHECK',{postId,mediaChecks});
     const body=social.provider.buildRequest({...job,status:'publishing'});
     const result=await social.provider.request('tools/validate/post',{method:'POST',body});
     log('TIKTOK_PAYLOAD_VALIDATION',{postId,valid:result?.valid===true,errorCount:Array.isArray(result?.errors)?result.errors.length:null,
