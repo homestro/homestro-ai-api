@@ -85,6 +85,10 @@ test('AI Reel mode creates a vertical video with voice and captions from Shopify
     const video=probe.streams.find(x=>x.codec_type==='video'),audio=probe.streams.find(x=>x.codec_type==='audio');
     assert.equal(video.width,720);assert.equal(video.height,1280);assert.equal(video.codec_name,'h264');
     assert.equal(audio.codec_name,'aac');assert.ok(Number(probe.format.duration)>=5);
+    // A layout repair reuses existing paid narration even when today's voice cap is full.
+    await rm(file);renderer.cfg.videoDailyLimit=1;calls.length=0;
+    const repaired=await renderer.render(product);assert.equal(repaired.videoURL,asset.videoURL);
+    assert.equal(calls.filter(x=>x.includes('api.openai.com')).length,0);
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 

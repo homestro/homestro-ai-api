@@ -1,3 +1,4 @@
+import {storyAss} from './video-story.js';
 import {mkdir,mkdtemp,readFile,writeFile,rename,rm,stat,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
@@ -101,7 +102,7 @@ async function generateScript(product,cfg,fetchImpl) {
       headers:{Authorization:'Bearer '+cfg.openaiApiKey,'Content-Type':'application/json'},
       body:JSON.stringify({model:cfg.videoScriptModel||'gpt-4o-mini',temperature:0.4,max_tokens:110,
         messages:[
-          {role:'system',content:'Write a short natural German voiceover script for a vertical product video. Use ONLY facts explicitly present in the supplied product copy. Do not invent material, dimensions, performance, ratings, discounts, guarantees, health effects, delivery promises, or scarcity. 15–30 spoken words, one short hook, one supported benefit, one neutral call to action. Return only the spoken German text.'},
+          {role:'system',content:'Write a natural German product video voiceover. Start immediately with a concrete relevant problem or short question, NEVER with a catalogue title. Use ONLY facts explicitly present in the supplied product copy. Do not invent material, dimensions, performance, ratings, discounts, guarantees, health effects, delivery promises, or scarcity. 20–30 spoken words: short hook, one supported benefit, neutral call to action. Avoid repeated benefits and long product names. Return only the spoken German text.'},
           {role:'user',content:JSON.stringify(source)}
         ]})
     });
@@ -124,7 +125,7 @@ async function getSpeech(script,cfg,fetchImpl) {
     method:'POST',redirect:'error',signal:AbortSignal.timeout(60000),
     headers:{Authorization:'Bearer '+cfg.openaiApiKey,'Content-Type':'application/json'},
     body:JSON.stringify({model:cfg.videoTtsModel||'gpt-4o-mini-tts',voice:cfg.videoTtsVoice||'coral',
-      input:script,instructions:'Speak in natural, clear German at a friendly pace. Do not add words.',
+      input:script,instructions:'Speak in natural conversational German with a lively, confident but friendly tone. Make the opening question engaging, keep a brisk clear pace, and avoid a robotic catalogue or exaggerated sales announcer voice. Do not add words.',
       response_format:'mp3'})
   });
   await responseOrFail(response,cfg);
@@ -208,7 +209,7 @@ export class MediaRenderer {
     const c=product.localized||{};
     const version={videoEngine:2,source,id:product.id,title:c.title,description:c.description,hook:c.hook,benefits:c.benefits,
       scriptModel:this.cfg.videoScriptModel||'gpt-4o-mini',ttsModel:this.cfg.videoTtsModel||'gpt-4o-mini-tts',voice:this.cfg.videoTtsVoice||'coral'};
-    const key=hash(version),output=join(dir,key+'.mp4'),scriptPath=join(dir,key+'.script.txt'),speechPath=join(dir,key+'.speech.mp3');
+    const audioKey=hash(version),key=hash({...version,videoEngine:3,shots:selected.images.slice(0,6)}),output=join(dir,key+'.mp4'),scriptPath=join(dir,audioKey+'.script.txt'),speechPath=join(dir,audioKey+'.speech.mp3');
     let script,speech;
     try{script=(await readFile(scriptPath,'utf8')).trim();}catch{}
     try{speech=await readFile(speechPath);}catch{}
@@ -230,26 +231,31 @@ export class MediaRenderer {
       const voiceDuration=Number(probe.format?.duration);
       if(!Number.isFinite(voiceDuration)||voiceDuration<2)fail('VIDEO_AUDIO_TOO_SHORT');
       const duration=Math.max(6,Math.min(Number(this.cfg.videoMaxDurationSec||20),voiceDuration+0.15));
-      await writeFile(join(tmp,'hook.txt'),plain(c.hook||c.title,80).match(/.{1,32}(?:\s|$)|.{1,32}/g)?.map(x=>x.trim()).join('\n')||'', 'utf8');
-      await writeFile(join(tmp,'captions.srt'),makeCaptions(script,duration),'utf8');
-      const hook=`drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=hook.txt:expansion=none:fontsize=30:fontcolor=white:box=1:boxcolor=black@0.68:boxborderw=12:x=(w-tw)/2:y=70:enable='lt(t,3)'`;
-      const subs=`subtitles=captions.srt:fontsdir=/usr/share/fonts/truetype/dejavu:force_style='FontName=DejaVu Sans,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=180'`;
-      const vfBase=`scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x151515,setsar=1,fps=30,${subs},${hook}`;
-      const frames=Math.ceil(duration*30);
+      await writeFile(join(tmp,'story.ass'),storyAss(c,script,duration),'utf8');
       const args=['-hide_banner','-loglevel','error','-y'];
       if(selected.videoURL) {
         await downloadMedia(selected.videoURL,join(tmp,'source.mp4'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch);
         const info=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_format','-of','json',join(tmp,'source.mp4')]));
         if(Number(info.format?.duration)<2||!Number.isFinite(Number(info.format?.duration)))fail('VIDEO_TOO_SHORT');
-        args.push('-stream_loop','-1','-i',join(tmp,'source.mp4'),'-i',speechPath,'-map','0:v:0','-map','1:a:0','-t',String(duration),'-vf',vfBase);
+        args.push('-stream_loop','-1','-i',join(tmp,'source.mp4'),'-i',speechPath,'-map','0:v:0','-map','1:a:0','-t',String(duration),
+          '-vf',"scale=680:680:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:265:color=0xf4f4ef,setsar=1,fps=30,ass=story.ass");
       } else {
-        await downloadMedia(selected.images[0],join(tmp,'source.jpg'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch,15*1024*1024);
-        const zoom=`scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,zoompan=z='min(zoom+0.0007,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=30,${subs},${hook}`;
-        args.push('-i',join(tmp,'source.jpg'),'-i',speechPath,'-map','0:v:0','-map','1:a:0','-t',String(duration),'-vf',zoom);
+        // Reuse the photo selector's cached OCR ranking; retain whole product images.
+        const photos=await this.carousel(selected.images);
+        const files=photos.imageURLs.slice(0,3).map(url=>join(dir,new URL(url).pathname.split('/').pop()));
+        if(!files.length)fail('NO_MARKETING_MEDIA');
+        const shots=[files[0],files[1]||files[0],files[2]||files[1]||files[0]];
+        for(const file of shots)args.push('-loop','1','-i',file);
+        args.push('-i',speechPath);
+        const segment=duration/shots.length,frames=Math.ceil(segment*30),filters=[];
+        shots.forEach((_,i)=>filters.push('['+i+':v]scale=680:680:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:265:color=0xf4f4ef,setsar=1,'+
+          "zoompan=z='"+[1,1.06,1.025][i]+"+0.015*on/"+frames+"':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d="+frames+":s=720x1280:fps=30,trim=duration="+segment+",setpts=PTS-STARTPTS[v"+i+']'));
+        filters.push('[v0][v1][v2]concat=n=3:v=1:a=0,ass=story.ass[v]');
+        args.push('-filter_complex',filters.join(';'),'-map','[v]','-map','3:a:0','-t',String(duration));
       }
       args.push('-threads','1','-filter_threads','1','-filter_complex_threads','1',
         '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p',
-        '-c:a','aac','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
+        '-af','loudnorm=I=-16:TP=-1.5:LRA=11','-c:a','aac','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
       await encode(args,tmp,240000);
       await rename(join(tmp,'out.mp4'),output);
       log('AI_VIDEO_READY',{productId:product.id,videoURL:this.url(key),voiceover:true,cached:false,duration});
@@ -293,5 +299,6 @@ export class MediaRenderer {
   }
   url(key){return `${this.cfg.publicOrigin}/marketing-assets/${key}.mp4`;}
 }
+
 
 
