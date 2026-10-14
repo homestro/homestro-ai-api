@@ -16,6 +16,7 @@ import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
 import {SocialCoordinator,socialConfig,publicPostURL} from './social.js';
 import {runTikTokRecoveryProbe} from './tiktok-recovery-probe.js';
+import {validateTikTokFailure} from './tiktok-validation.js';
 import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
@@ -49,6 +50,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       if(providerCfg){
         social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh});
         await social.migrate();
+        if(process.env.PILOT_TIKTOK_VALIDATE_POST_ID&&process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID)
+          await validateTikTokFailure(social,process.env.PILOT_TIKTOK_VALIDATE_POST_ID,process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID);
         if(String(process.env.PILOT_SOCIAL_CHECK_CONNECTION).toLowerCase()==='true') {
           social.checkTikTokPreflight()
             .then(result=>log('TIKTOK_PREFLIGHT_CHECK',result))

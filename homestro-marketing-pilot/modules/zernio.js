@@ -15,7 +15,7 @@ export class ZernioOrganic {
     if(cfg.publicOrigin && new URL(cfg.publicOrigin).protocol!=='https:')fail('ZERNIO_PUBLIC_ORIGIN_INVALID');
   }
   async request(path,{method='GET',body,key}={}) {
-    if(!/^(?:accounts|accounts\/[a-f0-9]{24}\/(?:tiktok\/creator-info(?:\?mediaType=(?:photo|video))?|pinterest-boards)|posts(?:\/[a-f0-9]{24})?)$/.test(path))fail('NON_ORGANIC_ENDPOINT_BLOCKED');
+    if(!/^(?:tools\/validate\/post|accounts|accounts\/[a-f0-9]{24}\/(?:tiktok\/creator-info(?:\?mediaType=(?:photo|video))?|pinterest-boards)|posts(?:\/[a-f0-9]{24})?)$/.test(path))fail('NON_ORGANIC_ENDPOINT_BLOCKED');
     if(!this.cfg.apiKey)fail('ZERNIO_CREDENTIALS_UNAVAILABLE');
     let response;
     try {
@@ -30,7 +30,7 @@ export class ZernioOrganic {
       // Keep provider text and response bodies private; expose only a bounded
       // operation label and HTTP status so operators can distinguish setup,
       // TikTok eligibility, dry-run, and write failures.
-      const operation=path==='accounts'?'ACCOUNTS':
+      const operation=path==='tools/validate/post'?'POST_VALIDATION':path==='accounts'?'ACCOUNTS':
         path.includes('/tiktok/creator-info')?'TIKTOK_CREATOR_INFO':
         path.endsWith('/pinterest-boards')?'PINTEREST_BOARDS':
         path==='posts'&&method==='POST'&&body?.dryRun===true?'PUBLISH_PREFLIGHT':
