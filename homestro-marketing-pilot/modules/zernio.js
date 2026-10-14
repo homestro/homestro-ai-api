@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
-import {fail} from './core.js';
+import {fail,log,PilotError} from './core.js';
+import {providerDiagnostics} from './provider-diagnostics.js';
 
 const objectId=value=>/^[a-f0-9]{24}$/.test(String(value));
 const CHANNELS=new Set(['tiktok','pinterest']);
@@ -14,7 +15,7 @@ export class ZernioOrganic {
     if(cfg.publicOrigin && new URL(cfg.publicOrigin).protocol!=='https:')fail('ZERNIO_PUBLIC_ORIGIN_INVALID');
   }
   async request(path,{method='GET',body,key}={}) {
-    if(!/^(?:accounts|accounts\/[a-f0-9]{24}\/(?:tiktok\/creator-info|pinterest-boards)|posts(?:\/[a-f0-9]{24})?)$/.test(path))fail('NON_ORGANIC_ENDPOINT_BLOCKED');
+    if(!/^(?:accounts|accounts\/[a-f0-9]{24}\/(?:tiktok\/creator-info(?:\?mediaType=(?:photo|video))?|pinterest-boards)|posts(?:\/[a-f0-9]{24})?)$/.test(path))fail('NON_ORGANIC_ENDPOINT_BLOCKED');
     if(!this.cfg.apiKey)fail('ZERNIO_CREDENTIALS_UNAVAILABLE');
     let response;
     try {
@@ -30,7 +31,7 @@ export class ZernioOrganic {
       // operation label and HTTP status so operators can distinguish setup,
       // TikTok eligibility, dry-run, and write failures.
       const operation=path==='accounts'?'ACCOUNTS':
-        path.endsWith('/tiktok/creator-info')?'TIKTOK_CREATOR_INFO':
+        path.includes('/tiktok/creator-info')?'TIKTOK_CREATOR_INFO':
         path.endsWith('/pinterest-boards')?'PINTEREST_BOARDS':
         path==='posts'&&method==='POST'&&body?.dryRun===true?'PUBLISH_PREFLIGHT':
         path==='posts'&&method==='POST'?'POST_CREATE':
@@ -39,7 +40,9 @@ export class ZernioOrganic {
         response.status===429?'ZERNIO_RATE_LIMIT':
         response.status>=500&&method==='POST'&&body?.dryRun!==true?'ZERNIO_RESULT_UNCERTAIN':
         `ZERNIO_${operation}_HTTP_${response.status}`;
-      fail(code);
+      const diagnostic=providerDiagnostics(data);
+      log('ZERNIO_PROVIDER_FAILURE',{operation,httpStatus:response.status,...diagnostic});
+      throw Object.assign(new PilotError(code),{diagnostic});
     }
     return data;
   }
@@ -93,7 +96,8 @@ export class ZernioOrganic {
   async preflightTikTok(job) {
     if(job.channel!=='tiktok')fail('INVALID_CHANNEL');
     const body=this.buildRequest(job);
-    const info=await this.request(`accounts/${this.cfg.accounts.tiktok}/tiktok/creator-info`);
+    const mediaType=job.payload.format==='reels'?'video':'photo';
+    const info=await this.request(`accounts/${this.cfg.accounts.tiktok}/tiktok/creator-info?mediaType=${mediaType}`);
     if(info.creator?.canPostMore!==true||!info.privacyLevels?.some(x=>x.value==='PUBLIC_TO_EVERYONE'))fail('TIKTOK_PUBLIC_POST_UNAVAILABLE');
     for(const key of ['allow_comment','allow_duet','allow_stitch']) {
       if(body.tiktokSettings[key]===true && info.postingLimits?.interactionSettings?.[key]?.enabled!==true)fail('TIKTOK_INTERACTION_NOT_ALLOWED');
@@ -121,7 +125,7 @@ export class ZernioOrganic {
     const entry=post.platforms?.find(x=>x.platform===channel && String(x.accountId?._id||x.accountId)===accountId);
     if(!entry)return {status:'recovery_required',permalink:null};
     if(entry.platformSpecificData?.isDraft===true||entry.platformSpecificData?.tiktokSettings?.draft===true)return {status:'draft_delivered',permalink:null};
-    if(entry.status==='failed')return {status:'failed',permalink:null};
+    if(entry.status==='failed')return {status:'failed',permalink:null,diagnostic:providerDiagnostics({error:entry.errorMessage})};
     let url;try{url=new URL(entry.platformPostUrl);}catch{return {status:'verification_pending',permalink:null};}
     const host=channel==='tiktok'?'tiktok.com':'pinterest.com';
     const valid=url.protocol==='https:' && (url.hostname===host||url.hostname===`www.${host}`) && !url.username && !url.password;
