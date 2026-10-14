@@ -4,12 +4,13 @@ import {createHash} from 'node:crypto';
 import {runTikTokRecoveryProbe} from '../modules/tiktok-recovery-probe.js';
 import {providerDiagnostics} from '../modules/provider-diagnostics.js';
 import {PilotError} from '../modules/core.js';
-const now=new Date('2026-10-14T08:00:00Z'),id='probe-job';
-function fixture({age=1,keyBad=false,changed=false,existing=false,lookupBad=false,reject=false}={}) {
+const now=new Date('2026-10-14T08:00:00Z'),id='12e3a630-4f0c-4135-bc67-ff4378aa9c14';
+function fixture({age=1,keyBad=false,changed=false,existing=false,lookupBad=false,reject=false,priorProbe=false,valid=true}={}) {
  let probed=false,writes=0,reads=0,settled=0;
  const job={id,product_id:'p',attempted_at:new Date(now-age*3600000).toISOString(),
    approved_by:'owner',approved_at:now.toISOString(),payload:{productRevision:'r'},
    remote:{phase:'zernio_submit_intent',idempotencyKey:keyBad?'bad':createHash('sha256').update('homestro:zernio:'+id).digest('hex')}};
+ if(priorProbe)job.remote.recoveryProbe=now.toISOString();
  const client={release(){},query:async sql=>{
    if(sql.includes('pg_try_advisory_lock'))return {rows:[{locked:true}]};
    if(sql.startsWith('SELECT *'))return {rows:probed?[]:[job]};
@@ -20,8 +21,8 @@ function fixture({age=1,keyBad=false,changed=false,existing=false,lookupBad=fals
  const social={pool:{connect:async()=>client},cfg:{workerEnabled:true,publishingEnabled:true,organicPolicy:'balanced-v1'},
    providerCfg:{publishingEnabled:true,accounts:{tiktok:'a'.repeat(24)}},
    freshSnapshot:async()=>({status:'ACTIVE',contentReviewed:true,revision:changed?'changed':'r',variants:[{available:true,price:20}]}),
-   checkpoint:async()=>{},settle:async()=>{settled++;},
-   provider:{buildRequest(){},request:async()=>{reads++;return lookupBad?{}:{posts:existing?[{_id:'b'.repeat(24),metadata:{pilotPostId:id}}]:[]};},
+   ensureAssets:async()=>({restored:0}),checkpoint:async()=>{},settle:async()=>{settled++;},
+   provider:{buildRequest(){},request:async path=>{reads++;if(path==='tools/validate/post')return {valid};return lookupBad?{}:{posts:existing?[{_id:'b'.repeat(24),metadata:{pilotPostId:id}}]:[]};},
      reconcile:async()=>({status:'published',permalink:'https://www.tiktok.com/@homestroo/video/123'}),
      submit:async j=>{writes++;assert.equal(j.id,id);if(reject)throw Object.assign(new PilotError('ZERNIO_POST_CREATE_HTTP_400'),{diagnostic:providerDiagnostics({type:'invalid_request_error',code:'invalid_field_value',param:'tiktokSettings.media_type'})});return {status:'verification_pending',permalink:null};}}};
  return {social,get writes(){return writes;},get reads(){return reads;},get settled(){return settled;}};
@@ -55,4 +56,12 @@ test('diagnostics never include provider text, secrets, URLs or arbitrary field 
 test('changed provider account never replays the historical request',async()=>{
  const f=fixture();const result=await runTikTokRecoveryProbe(f.social,now,now,'c'.repeat(24));
  assert.equal(result.reason,'RECOVERY_ACCOUNT_UNCONFIRMED');assert.equal(f.writes,0);assert.equal(f.reads,0);
+});
+
+test('asset repair requires a pinned previously probed intent and successful media validation',async()=>{
+ for(const opts of [{priorProbe:false},{priorProbe:true,valid:false}]) {
+  const f=fixture(opts);await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24),id);assert.equal(f.writes,0);
+ }
+ const f=fixture({priorProbe:true});await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24),id);
+ await runTikTokRecoveryProbe(f.social,now,now,'a'.repeat(24),id);assert.equal(f.writes,1);assert.equal(f.settled,1);
 });
