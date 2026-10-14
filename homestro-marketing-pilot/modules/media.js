@@ -168,7 +168,7 @@ export class MediaRenderer {
   async render(product) {
     const selected=extractMedia(product.media);
     if(!selected.videoURL && !selected.images.length) fail('NO_MARKETING_MEDIA');
-    if(this.cfg.aiVideoEnabled) {
+    if(this.cfg.aiVideoEnabled && !selected.videoURL) {
       try{return await this.aiReel(product,selected);}
       catch(e){
         // Optional narration must not stop the entire organic photo pipeline.
@@ -180,7 +180,7 @@ export class MediaRenderer {
       }
     }
     if(!selected.videoURL) return this.carousel(selected.images);
-    const key=hash({media:selected,hook:product.localized.hook,renderVersion:1});
+    const key=hash({media:selected,hook:product.localized.hook,renderVersion:2});
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const output=join(dir,key+'.mp4');
     try {await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch{}
@@ -194,9 +194,9 @@ export class MediaRenderer {
       await downloadMedia(selected.videoURL,join(tmp,'source.mp4'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch);
       const probe=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_format','-of','json',join(tmp,'source.mp4')]));
       if(Number(probe.format?.duration)<4 || !Number.isFinite(Number(probe.format?.duration))) fail('VIDEO_TOO_SHORT');
-      args.push('-i',join(tmp,'source.mp4'),'-t','30','-vf',vf,'-an');
+      args.push('-i',join(tmp,'source.mp4'),'-t','30','-vf',vf,'-map','0:v:0','-map','0:a:0?');
       args.push('-threads','1','-filter_threads','1','-filter_complex_threads','1',
-        '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',join(tmp,'out.mp4'));
+        '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
       await encode(args,tmp);
       await rename(join(tmp,'out.mp4'),output);
       return {format:'reels',videoURL:this.url(key),imageURLs:[]};
