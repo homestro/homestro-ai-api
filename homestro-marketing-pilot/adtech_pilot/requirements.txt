@@ -6,4 +6,6 @@ lxml>=5,<7
 openai>=1.60,<3
 anthropic>=0.45,<1
 Pillow>=10,<13
+google-auth>=2.35,<3
+requests>=2.32,<3
 uvicorn[standard]>=0.30,<1
