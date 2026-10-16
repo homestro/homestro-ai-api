@@ -20,7 +20,7 @@ from .creative_factory import BrandKit, CreativeFactory, OpenAIProvider
 from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
-from .media_buyer import MetaAdLibraryClient, PlanAuditStore
+from .media_buyer import MetaAdLibraryClient, MetaPublisher, PlanAuditStore
 from .micro_budget import MicroBudgetGate
 
 logger = logging.getLogger("homestro.adtech.daemon")
@@ -250,6 +250,9 @@ class PilotDaemon:
             for product in self._latest_products
             if product.get("description") and product.get("image_link")
         ]
+        selected_product_id = os.getenv("MICRO_BUDGET_PRODUCT_ID", "").strip()
+        if selected_product_id:
+            candidates = [p for p in candidates if str(p.get("id")) == selected_product_id]
         if not candidates or not logo_url:
             return {"status": "blocked", "reason": "VERIFIED_PRODUCT_IMAGE_OR_LOGO_MISSING"}
         product = candidates[0]
@@ -285,12 +288,20 @@ class PilotDaemon:
             logo_image=logo_image,
         )
         await self.audit.record("daemon_creative_candidate", candidate)
+        publisher_result = {"status": "not_submitted"}
+        if candidate.publishable_candidate:
+            publisher_result = await MetaPublisher(self.audit).publish_one(
+                creative=candidate,
+                product=product,
+                product_ids_in_feed={str(p.get("id")) for p in self._latest_products},
+            )
         return {
             "status": "candidate_ready" if candidate.publishable_candidate else "rejected_and_deleted",
             "product_id": product["id"],
             "quality_score": candidate.score.quality_score,
             "asset_path": candidate.asset_path or None,
-            "published": False,
+            "published": publisher_result.get("status") == "ACTIVE_PENDING_REVIEW",
+            "publisher": publisher_result,
         }
 
     @staticmethod
