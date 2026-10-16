@@ -192,6 +192,11 @@ def create_app(
             "mutations_enabled": bool(adapters) and not execution.dry_run,
             "daemon_enabled": os.getenv("PILOT_DAEMON_ENABLED", "true").lower()
             == "true",
+            "micro_budget_arm_requested": (
+                os.getenv("ALLOW_MICRO_BUDGET", "false").lower() == "true"
+                and os.getenv("DRY_RUN", "true").lower() == "false"
+            ),
+            "micro_budget_lifetime_cap_eur": 5.0,
         }
 
     @app.post("/feed/validate", dependencies=[Depends(require_admin)])
