@@ -26,6 +26,9 @@ class BrandKit(BaseModel):
 class CreativeBrief(BaseModel):
     product_id: str
     platform: str
+    hook: str = Field(min_length=4, max_length=120)
+    problem: str = Field(min_length=4, max_length=240)
+    solution: str = Field(min_length=4, max_length=240)
     headline: str = Field(min_length=4, max_length=40)
     primary_text: str = Field(min_length=10, max_length=500)
     description: str = Field(min_length=4, max_length=120)
@@ -209,7 +212,7 @@ class CreativeFactory:
         image_editor: ImageEditProvider,
         brand: BrandKit,
         output_dir: Path,
-        minimum_score: int = 75,
+        minimum_score: int = 85,
     ):
         self.llm, self.image_editor, self.brand = llm, image_editor, brand
         self.output_dir, self.minimum_score = output_dir, minimum_score
@@ -225,6 +228,36 @@ class CreativeFactory:
         logo_image: bytes,
         historical_winners: list[HistoricalWin] | None = None,
     ) -> GeneratedCreative:
+        feedback = ""
+        last_result: GeneratedCreative | None = None
+        for attempt in range(2):
+            last_result = await self._create_once(
+                product=product,
+                platform=platform,
+                product_image=product_image,
+                logo_image=logo_image,
+                historical_winners=historical_winners,
+                revision_feedback=feedback,
+            )
+            if last_result.publishable_candidate:
+                return last_result
+            Path(last_result.asset_path).unlink(missing_ok=True)
+            feedback = "; ".join(last_result.score.rationale)[:600]
+        assert last_result is not None
+        return last_result.model_copy(
+            update={"asset_path": "", "publishable_candidate": False}
+        )
+
+    async def _create_once(
+        self,
+        *,
+        product: dict[str, Any],
+        platform: str,
+        product_image: bytes,
+        logo_image: bytes,
+        historical_winners: list[HistoricalWin] | None,
+        revision_feedback: str,
+    ) -> GeneratedCreative:
         if not product_image or not logo_image:
             raise ValueError("Product image and official logo are required")
         facts = [str(x)[:300] for x in product.get("facts", [])[:20] if str(x).strip()]
@@ -236,7 +269,7 @@ class CreativeFactory:
         winners = [w.model_dump() for w in (historical_winners or [])[:10]]
         brief_prompt = json.dumps(
             {
-                "task": "Create one conversion-focused German ecommerce ad set.",
+                "task": "Create one conversion-focused German ecommerce ad set using this exact sequence: hook, problem, solution, call to action.",
                 "platform": platform,
                 "product": {
                     "id": product_id,
@@ -246,11 +279,12 @@ class CreativeFactory:
                     "price_eur": product.get("price"),
                 },
                 "verified_historical_winners": winners,
+                "revision_feedback_from_previous_attempt": revision_feedback,
                 "brand": self.brand.model_dump(),
                 "rules": [
                     "Use only supplied verified facts; no invented guarantees, discounts, ratings or shipping promises.",
-                    "Write natural German copy.",
-                    "Visual prompt must stage a premium lifestyle scene and replace a plain white product background.",
+                    "Write natural German copy: an attention hook, a relatable problem, a product-supported solution, then a clear action.",
+                    "Stage an emotionally warm, realistic everyday lifestyle scene and replace any plain white product background.",
                     "Preserve the product's actual shape, color, quantity and features from the reference image.",
                     "Do not ask the image model to draw text or a logo; logo is composited from the supplied official asset.",
                 ],
@@ -292,6 +326,13 @@ class CreativeFactory:
         )
         if not isinstance(score, CreativeScore):
             score = CreativeScore.model_validate(score)
+        if self._is_plain_white_image(branded):
+            score.lifestyle_background = False
+            score.quality_score = min(score.quality_score, 49)
+            if len(score.rationale) < 8:
+                score.rationale.append(
+                    "Generated image is still a plain white-background product shot"
+                )
         self.output_dir.mkdir(parents=True, exist_ok=True)
         safe_product_id = re.sub(r"[^A-Za-z0-9_-]", "_", product_id)[:80] or "product"
         asset_path = self.output_dir / f"{safe_product_id}-{uuid4().hex}.png"
@@ -306,6 +347,22 @@ class CreativeFactory:
             and score.lifestyle_background
             and score.factual_claims_supported,
         )
+
+    @staticmethod
+    def _is_plain_white_image(image_bytes: bytes) -> bool:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            rgb = ImageOps.exif_transpose(image).convert("RGB")
+            rgb.thumbnail((128, 128))
+            # Use raw bytes to avoid materializing thousands of Python tuples.
+            pixels = rgb.tobytes()
+        if not pixels:
+            return True
+        near_white = sum(
+            1
+            for offset in range(0, len(pixels), 3)
+            if min(pixels[offset : offset + 3]) >= 246
+        )
+        return near_white / (len(pixels) // 3) >= 0.94
 
     @staticmethod
     def _normalize_png(image_bytes: bytes) -> bytes:
