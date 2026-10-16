@@ -2,7 +2,7 @@ name: homestro-adtech-pilot
 
 services:
   adtech-pilot:
-    image: ${PILOT_IMAGE:-ghcr.io/homestro/homestro-ai-api:ads-pilot}
+    image: ${PILOT_IMAGE:-ghcr.io/homestro/homestro-adtech-pilot:latest}
     build:
       context: .
       dockerfile: Dockerfile.adtech-pilot
