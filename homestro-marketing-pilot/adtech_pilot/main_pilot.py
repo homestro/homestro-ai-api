@@ -16,7 +16,9 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .creative_factory import BrandKit, CreativeFactory, HistoricalWin, OpenAIProvider
+from .daemon import PilotDaemon
 from .feed_manager import Channel, ProductFeedManager
+from .github_reporter import GitHubPRReporter
 from .media_buyer import (
     AdExecutionEngine,
     MetaAdLibraryClient,
@@ -97,6 +99,7 @@ def create_app(
         Path(os.getenv("PILOT_AUDIT_DB_PATH", "/tmp/homestro-adtech/audit.sqlite3"))
     )
     tasks: set[asyncio.Task] = set()
+    stop_daemon = asyncio.Event()
 
     async def require_admin(provided: str | None = Security(ADMIN_HEADER)) -> None:
         if provided is None or not hmac.compare_digest(provided, admin_key):
@@ -104,6 +107,32 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if os.getenv("PILOT_DAEMON_ENABLED", "true").lower() == "true":
+            github_token = os.getenv("PILOT_GITHUB_TOKEN", "")
+            reporter = (
+                GitHubPRReporter(
+                    github_token,
+                    repository=os.getenv(
+                        "PILOT_GITHUB_REPOSITORY", "homestro/homestro-ai-api"
+                    ),
+                    pull_request=int(os.getenv("PILOT_GITHUB_PR_NUMBER", "104")),
+                )
+                if github_token
+                else None
+            )
+            daemon = PilotDaemon(
+                audit,
+                feed_interval_hours=int(os.getenv("PILOT_FEED_INTERVAL_HOURS", "6")),
+                competitor_interval_hours=int(
+                    os.getenv("PILOT_COMPETITOR_INTERVAL_HOURS", "24")
+                ),
+                metrics_interval_hours=int(
+                    os.getenv("PILOT_METRICS_INTERVAL_HOURS", "12")
+                ),
+                reporter=reporter,
+            )
+            task = asyncio.create_task(daemon.run(stop_daemon), name="pilot-daemon")
+            tasks.add(task)
         if (
             os.getenv("PILOT_AUTOPILOT_ENABLED", "false").lower() == "true"
             and metrics_loader is not None
@@ -131,6 +160,7 @@ def create_app(
             )
             tasks.add(task)
         yield
+        stop_daemon.set()
         for task in tasks:
             task.cancel()
         if tasks:
@@ -160,6 +190,8 @@ def create_app(
             "dry_run": execution.dry_run,
             "max_budget_limit_eur": execution.max_budget_limit,
             "mutations_enabled": bool(adapters) and not execution.dry_run,
+            "daemon_enabled": os.getenv("PILOT_DAEMON_ENABLED", "true").lower()
+            == "true",
         }
 
     @app.post("/feed/validate", dependencies=[Depends(require_admin)])
@@ -244,7 +276,7 @@ def create_app(
             image_editor=provider,
             brand=brand,
             output_dir=Path(os.getenv("PILOT_CREATIVE_DIR", "/data/adtech-creatives")),
-            minimum_score=int(os.getenv("PILOT_CREATIVE_MIN_SCORE", "75")),
+            minimum_score=int(os.getenv("PILOT_CREATIVE_MIN_SCORE", "85")),
         )
         try:
             result = await factory.create(
