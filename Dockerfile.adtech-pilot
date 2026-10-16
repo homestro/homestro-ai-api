@@ -1,0 +1,27 @@
+# Build context is the repository root.
+FROM python:3.12-slim AS builder
+ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN python -m venv "$VIRTUAL_ENV"
+WORKDIR /build
+COPY homestro-marketing-pilot/adtech_pilot/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+FROM python:3.12-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/app
+WORKDIR /app
+RUN groupadd --system --gid 10001 pilot \
+    && useradd --system --uid 10001 --gid pilot --home-dir /nonexistent \
+       --shell /usr/sbin/nologin pilot \
+    && mkdir -p /data/adtech-pilot /data/adtech-creatives \
+    && chown -R pilot:pilot /data
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/ /app/adtech_pilot/
+USER 10001:10001
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"
+CMD ["uvicorn", "adtech_pilot.main_pilot:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
