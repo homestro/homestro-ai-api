@@ -19,7 +19,12 @@ RUN groupadd --system --gid 10001 pilot \
     && mkdir -p /data/adtech-pilot /data/adtech-creatives \
     && chown -R pilot:pilot /data
 COPY --from=builder /opt/venv /opt/venv
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/ /app/adtech_pilot/
+RUN mkdir -p /app/adtech_pilot
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/__init__.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/feed_manager.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/creative_factory.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/media_buyer.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/main_pilot.py /app/adtech_pilot/
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
