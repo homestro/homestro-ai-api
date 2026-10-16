@@ -629,7 +629,7 @@ class MetaPublisher:
         config = self._configuration()
         if isinstance(config, dict):
             return {"status": "blocked", **config}
-        account_id, page_id, pixel_id, token, version = config
+        account_id, page_id, pixel_id, token, version, beneficiary, payor = config
         product_id = str(product.get("id", ""))
         if not self._creative_approved(creative, product_id):
             return {"status": "blocked", "reason": "CREATIVE_NOT_APPROVED_OR_PRODUCT_MISMATCH"}
@@ -729,6 +729,8 @@ class MetaPublisher:
                     "promoted_object": json.dumps(
                         {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
                     ),
+                    "dsa_beneficiary": beneficiary,
+                    "dsa_payor": payor,
                     "targeting": json.dumps(
                         {
                             "geo_locations": {"countries": ["DE"]},
@@ -826,7 +828,9 @@ class MetaPublisher:
             if own_client:
                 await client.aclose()
 
-    def _configuration(self) -> tuple[str, str, str, str, str] | dict[str, str]:
+    def _configuration(
+        self,
+    ) -> tuple[str, str, str, str, str, str, str] | dict[str, str]:
         if self.env.get("ALLOW_MICRO_BUDGET", "false").lower() != "true":
             return {"reason": "MICRO_BUDGET_NOT_ENABLED"}
         if self.env.get("DRY_RUN", "true").lower() != "false":
@@ -839,6 +843,8 @@ class MetaPublisher:
         account_id = self.env.get("META_AD_ACCOUNT_ID", "").strip()
         pixel_id = self.env.get("META_PIXEL_ID", "").strip()
         page_id = self.env.get("META_PAGE_ID", "").strip()
+        beneficiary = self.env.get("META_DSA_BENEFICIARY", "").strip()
+        payor = self.env.get("META_DSA_PAYOR", "").strip()
         version = self.env.get("META_API_VERSION", "v26.0").strip()
         if not token:
             return {"reason": "META_ACCESS_TOKEN_MISSING"}
@@ -846,9 +852,13 @@ class MetaPublisher:
             return {"reason": "META_AD_ACCOUNT_ID_INVALID"}
         if not self.ID_PATTERN.fullmatch(pixel_id) or not self.ID_PATTERN.fullmatch(page_id):
             return {"reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
+        if not beneficiary or not payor:
+            return {"reason": "META_EU_BENEFICIARY_OR_PAYER_MISSING"}
+        if len(beneficiary) > 200 or len(payor) > 200:
+            return {"reason": "META_EU_BENEFICIARY_OR_PAYER_TOO_LONG"}
         if not self.API_VERSION_PATTERN.fullmatch(version):
             return {"reason": "META_API_VERSION_INVALID"}
-        return account_id, page_id, pixel_id, token, version
+        return account_id, page_id, pixel_id, token, version, beneficiary, payor
 
     @staticmethod
     def _creative_approved(creative: GeneratedCreative, product_id: str) -> bool:
