@@ -20,7 +20,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/homestro/homestro-ai-api
+  IMAGE_NAME: ghcr.io/homestro/homestro-adtech-pilot
 
 jobs:
   verify-build-publish:
