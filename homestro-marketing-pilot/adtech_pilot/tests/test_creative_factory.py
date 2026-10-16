@@ -28,6 +28,9 @@ class FakeLLM:
             return CreativeBrief(
                 product_id="sku1",
                 platform="meta",
+                hook="Mehr Freude im Alltag",
+                problem="Die tägliche Fütterung ist oft hastig.",
+                solution="Der Napf macht die Routine spielerischer.",
                 headline="Mehr Freude zuhause",
                 primary_text="Praktische Hilfe für den Alltag mit deinem Haustier.",
                 description="Jetzt entdecken",
