@@ -58,6 +58,8 @@ class MetaPublisherTests(unittest.TestCase):
             "META_AD_ACCOUNT_ID": "act_12345",
             "META_PIXEL_ID": "5555",
             "META_PAGE_ID": "4444",
+            "META_DSA_BENEFICIARY": "Homestro legal entity",
+            "META_DSA_PAYOR": "Homestro legal entity",
             "META_API_VERSION": "v26.0",
             "META_BILLING_VERIFIED": "true",
             "META_PURCHASE_EVENT_VERIFIED": "true",
