@@ -33,6 +33,27 @@ jobs:
       - name: Run marketing pilot tests
         if: always()
         run: npm run test:marketing
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: homestro-marketing-pilot/adtech_pilot/requirements.txt
+      - name: Install AdTech Pilot dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r homestro-marketing-pilot/adtech_pilot/requirements.txt ruff mypy
+      - name: Test AdTech Pilot
+        working-directory: homestro-marketing-pilot
+        env:
+          PILOT_ADMIN_KEY: ci-test-only-key-with-at-least-32-characters
+        run: python -m unittest discover -s adtech_pilot/tests -v
+      - name: Lint AdTech Pilot
+        run: python -m ruff check --select E,F,I --ignore E501 homestro-marketing-pilot/adtech_pilot
+      - name: Type-check AdTech Pilot
+        run: python -m mypy --ignore-missing-imports --follow-imports=silent homestro-marketing-pilot/adtech_pilot
+      - name: Build AdTech Pilot image
+        if: always()
+        run: docker build --file Dockerfile.adtech-pilot --tag homestro-adtech-pilot:ci .
       - name: Build production image
         if: always()
         run: docker build --file Dockerfile.homestro-fixed --tag homestro-ai-api:ci .
