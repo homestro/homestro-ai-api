@@ -153,7 +153,17 @@ class MetaPublisherTests(unittest.TestCase):
 
             def handler(request):
                 requests.append(request.method)
-                return httpx.Response(400, json={"error": {"message": "secret body"}})
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "message": "secret body",
+                            "type": "OAuthException",
+                            "code": 200,
+                            "error_subcode": 10,
+                        }
+                    },
+                )
 
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             publisher = MetaPublisher(
@@ -172,7 +182,12 @@ class MetaPublisherTests(unittest.TestCase):
 
         result, requests = asyncio.run(run())
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error_type"], "HTTPStatusError")
+        self.assertEqual(result["error_type"], "MetaHTTPError")
+        self.assertEqual(result["http_status"], 400)
+        self.assertEqual(result["stage"], "account")
+        self.assertEqual(result["meta_error_code"], 200)
+        self.assertEqual(result["meta_error_subcode"], 10)
+        self.assertEqual(result["meta_error_type"], "OAuthException")
         self.assertEqual(requests, ["GET"])
         self.assertNotIn("secret body", str(result))
         self.assertNotIn("do-not-return-this-token", str(result))

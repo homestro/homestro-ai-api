@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 11645)
+Total output lines: 1138
+
 """Performance analysis, competitor intelligence and budget-safe media execution."""
 
 from __future__ import annotations
@@ -519,146 +522,21 @@ class AdExecutionEngine:
 
 
 class CompetitorAd(BaseModel):
-    library_id: str
-    page_name: str
-    ad_copy: list[str] = Field(default_factory=list)
-    platforms: list[str] = Field(default_factory=list)
-    started_at: str | None = None
-    snapshot_url: str | None = None
-    intel_kind: str = "public_ad_structure_only_no_performance_data"
-
-
-class MetaAdLibraryClient:
-    """Official Meta Ad Library API only; deliberately no browser scraping."""
-
-    ENDPOINT = "https://graph.facebook.com"
-
-    def __init__(
-        self,
-        access_token: str,
-        *,
-        api_version: str = "v26.0",
-        client: httpx.AsyncClient | None = None,
-    ):
-        if not access_token or not api_version.startswith("v"):
-            raise ValueError("Meta Ad Library credentials and API version are required")
-        self.access_token, self.api_version, self.client = (
-            access_token,
-            api_version,
-            client,
-        )
-
-    async def search(
-        self, terms: list[str], *, country: str = "DE", limit: int = 25
-    ) -> list[CompetitorAd]:
-        if country not in {"DE", "AT", "CH", "US", "GB", "FR", "IT", "ES", "NL"}:
-            raise ValueError("Unsupported country code")
-        bounded_terms = " ".join(" ".join(terms).split())[:200]
-        if not bounded_terms or not 1 <= limit <= 50:
-            raise ValueError("Search terms and a limit from 1 to 50 are required")
-        client = self.client or httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5))
-        own_client = self.client is None
-        try:
-            response = await client.get(
-                f"{self.ENDPOINT}/{self.api_version}/ads_archive",
-                headers={"Authorization": f"Bearer {self.access_token}"},
-                params={
-                    "search_terms": bounded_terms,
-                    "ad_type": "ALL",
-                    "ad_reached_countries": json.dumps([country]),
-                    "fields": "id,page_name,ad_creative_bodies,publisher_platforms,ad_delivery_start_time,ad_snapshot_url",
-                    "limit": limit,
-                },
-            )
-            response.raise_for_status()
-            rows = response.json().get("data", [])
-        finally:
-            if own_client:
-                await client.aclose()
-        return [
-            CompetitorAd(
-                library_id=str(x.get("id", "")),
-                page_name=str(x.get("page_name", "")),
-                ad_copy=[
-                    str(s)[:1000] for s in (x.get("ad_creative_bodies") or [])[:4]
-                ],
-                platforms=[str(s) for s in (x.get("publisher_platforms") or [])[:8]],
-                started_at=x.get("ad_delivery_start_time"),
-                snapshot_url=x.get("ad_snapshot_url"),
-            )
-            for x in rows[:limit]
-            if x.get("id")
-        ]
-
-
-class MetaPublisher:
-    """Single-use Meta website-sales publisher with a €5/day, seven-day plan.
-
-    Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
-    account/assets pass preflight, the selected product is in the validated feed,
-    the creative passes its 85/100 quality checks, and the persistent one-shot
-    claim is acquired. New objects stay PAUSED until the final activation step.
-    The configured daily budget is €5 for a seven-day schedule. Meta may spend
-    more than the daily target on an individual day; the seven-day planned spend
-    is €35 before any platform delivery variance.
-    """
-
-    ENDPOINT = "https://graph.facebook.com"
-    DAILY_BUDGET_CENTS = 500
-    API_VERSION_PATTERN = re.compile(r"^v\d+\.\d+$")
-    ID_PATTERN = re.compile(r"^\d{4,30}$")
-    ACCOUNT_PATTERN = re.compile(r"^act_\d{4,30}$")
-
-    def __init__(
-        self,
-        audit: PlanAuditStore,
-        *,
-        client: httpx.AsyncClient | None = None,
-        env: dict[str, str] | None = None,
-    ):
-        self.audit = audit
-        self.client = client
-        self.env = env if env is not None else os.environ
-
-    async def check_readiness(self) -> dict[str, Any]:
-        """Read Meta account, Page and Pixel access without creating ad objects.
-
-        This deliberately does not require the spend switches, DSA labels, billing
-        confirmation or Purchase-event confirmation. Those are evaluated by the
-        separate micro-budget gate before any campaign write.
-        """
-        required = {
-            "META_ACCESS_TOKEN": self.env.get("META_ACCESS_TOKEN", "").strip(),
-            "META_AD_ACCOUNT_ID": self.env.get("META_AD_ACCOUNT_ID", "").strip(),
-            "META_PIXEL_ID": self.env.get("META_PIXEL_ID", "").strip(),
-            "META_PAGE_ID": self.env.get("META_PAGE_ID", "").strip(),
-        }
-        missing = [name for name, value in required.items() if not value]
-        if missing:
-            return {"status": "blocked", "missing": missing}
-        account_id = required["META_AD_ACCOUNT_ID"]
-        page_id = required["META_PAGE_ID"]
-        pixel_id = required["META_PIXEL_ID"]
-        if not self.ACCOUNT_PATTERN.fullmatch(account_id):
-            return {"status": "blocked", "reason": "META_AD_ACCOUNT_ID_INVALID"}
-        if not self.ID_PATTERN.fullmatch(pixel_id) or not self.ID_PATTERN.fullmatch(page_id):
-            return {"status": "blocked", "reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
-
-        own_client = self.client is None
-        client = self.client or httpx.AsyncClient(
-            timeout=httpx.Timeout(30, connect=8), follow_redirects=False
-        )
-        try:
-            readiness = await self._preflight(
-                client,
-                headers={"Authorization": f"Bearer {required['META_ACCESS_TOKEN']}"},
-                account_id=account_id,
-                page_id=page_id,
-                pixel_id=pixel_id,
-            )
-            return {"status": "checked", "account": readiness.model_dump(mode="json")}
-        except asyncio.CancelledError:
-            raise
+    libra…1645 tokens truncated…              "error_type": "MetaHTTPError",
+                "http_status": response.status_code,
+                "stage": stage,
+            }
+            for source, target in (
+                ("code", "meta_error_code"),
+                ("error_subcode", "meta_error_subcode"),
+            ):
+                value = error.get(source)
+                if isinstance(value, int):
+                    details[target] = value
+            error_type = error.get("type")
+            if isinstance(error_type, str):
+                details["meta_error_type"] = error_type[:80]
+            return details
         except Exception as exc:
             # Provider bodies and request headers may contain sensitive data.
             return {"status": "failed", "error_type": type(exc).__name__}
