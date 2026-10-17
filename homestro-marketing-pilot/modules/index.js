@@ -29,6 +29,7 @@ import {buildSeoContentPlan} from './content-plan.js';
 import {parseTrackedLink,trackedDestination} from './tracking.js';
 import {syncSeoGuides} from './seo-guides.js';
 import {refreshPerformance,readPerformance} from './performance.js';
+import {buildAdsReadiness} from './ads-readiness.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -217,6 +218,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       if(!cfg.seoBlogId)fail('SEO_BLOG_NOT_CONFIGURED');
       const result=await createSeoArticleDraft({pool,graphql,blogId:cfg.seoBlogId,author:cfg.seoAuthor,input:req.body});
       res.json(result);
+    }));
+    // Paid media readiness is deliberately read-only; campaign creation/spend stays disabled.
+    router.get('/ads/readiness',route(async(req,res)=>{
+      const products=(await pool.query('SELECT document,status FROM marketing_products ORDER BY id LIMIT 5000')).rows;
+      res.json(buildAdsReadiness({products,feedEnabled:cfg.feedEnabled,
+        // Current operating brief records all Homestro Merchant Center items rejected.
+        merchantApprovalConfirmed:false}));
     }));
     router.get('/growth/report',route(async(req,res)=>{
       const days=reportWindow(req.query.days);

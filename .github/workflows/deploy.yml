@@ -1,0 +1,110 @@
+name: AdTech Pilot deployment
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adtech-pilot-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/homestro/homestro-adtech-pilot
+
+jobs:
+  verify-build-publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: homestro-marketing-pilot/adtech_pilot/requirements*.txt
+      - name: Install Pilot dependencies and quality tools
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          python -m pip install --upgrade pip
+          python -m pip install -r homestro-marketing-pilot/adtech_pilot/requirements.txt
+          python -m pip install ruff mypy
+      - name: Run Pilot tests
+        run: |
+          npm test
+          npm run test:marketing
+          cd homestro-marketing-pilot
+          python -m unittest discover -s adtech_pilot/tests -v
+        env:
+          PILOT_ADMIN_KEY: ci-test-only-key-with-at-least-32-characters
+      - name: Lint
+        run: python -m ruff check --select E,F,I --ignore E501 homestro-marketing-pilot/adtech_pilot
+      - name: Type check
+        run: python -m mypy --ignore-missing-imports --follow-imports=silent homestro-marketing-pilot/adtech_pilot
+      - name: Build image for verification
+        run: docker build --file Dockerfile.adtech-pilot --tag homestro-adtech-pilot:ci .
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push immutable production image
+        run: |
+          docker tag homestro-adtech-pilot:ci "${IMAGE_NAME}:${GITHUB_SHA}"
+          docker push "${IMAGE_NAME}:${GITHUB_SHA}"
+
+  deploy:
+    needs: verify-build-publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.PILOT_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PILOT_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Deploy on the configured Docker host
+        env:
+          DEPLOY_HOST: ${{ secrets.PILOT_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PILOT_DEPLOY_USER }}
+          DEPLOY_DIR: ${{ secrets.PILOT_DEPLOY_DIR }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER" && test -n "$DEPLOY_DIR"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_DIR'"
+          scp docker-compose.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker-compose.yml"
+          printf '%s' "$GHCR_READ_TOKEN" | ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$DEPLOY_DIR' && OLD_ID=\$(docker compose ps -q adtech-pilot 2>/dev/null || true) && OLD_IMAGE=\$(test -n \"\$OLD_ID\" && docker inspect -f '{{.Config.Image}}' \"\$OLD_ID\" || true) && PILOT_IMAGE='$IMAGE' docker compose pull adtech-pilot && PILOT_IMAGE='$IMAGE' docker compose up -d --no-deps adtech-pilot && for i in \$(seq 1 30); do CID=\$(PILOT_IMAGE='$IMAGE' docker compose ps -q adtech-pilot); STATE=\$(docker inspect -f '{{.State.Health.Status}}' \"\$CID\" 2>/dev/null || true); test \"\$STATE\" = healthy && exit 0; sleep 2; done; if test -n \"\$OLD_IMAGE\"; then PILOT_IMAGE=\"\$OLD_IMAGE\" docker compose up -d --no-deps adtech-pilot; fi; docker compose logs --tail=100 adtech-pilot; exit 1"
+      - name: Verify deployed health endpoint
+        env:
+          DEPLOY_HOST: ${{ secrets.PILOT_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PILOT_DEPLOY_USER }}
+          DEPLOY_DIR: ${{ secrets.PILOT_DEPLOY_DIR }}
+          PILOT_HTTP_PORT: ${{ secrets.PILOT_HTTP_PORT }}
+        run: |
+          PORT="${PILOT_HTTP_PORT:-8080}"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$DEPLOY_DIR' && CID=\$(PILOT_IMAGE='${{ env.IMAGE_NAME }}:${{ github.sha }}' docker compose ps -q adtech-pilot) && docker exec \$CID python -c \"import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=5)); assert d['dry_run'] is True and d['max_budget_limit_eur'] == 0.0 and d['mutations_enabled'] is False, d; print(json.dumps(d))\""
