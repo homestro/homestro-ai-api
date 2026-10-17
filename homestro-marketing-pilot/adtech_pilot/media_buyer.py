@@ -806,7 +806,7 @@ class MetaPublisher:
                 f"{account_id}/adsets",
                 headers,
                 {
-                    "name": f"Homestro DE Purchase {product_id[:32]}",
+                    "name": f"Homestro DE AddToCart {product_id[:32]}",
                     "campaign_id": campaign,
                     "daily_budget": str(self.DAILY_BUDGET_CENTS),
                     "billing_event": "IMPRESSIONS",
@@ -814,7 +814,7 @@ class MetaPublisher:
                     "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
                     "destination_type": "WEBSITE",
                     "promoted_object": json.dumps(
-                        {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
+                        {"pixel_id": pixel_id, "custom_event_type": "ADD_TO_CART"}
                     ),
                     "dsa_beneficiary": beneficiary,
                     "dsa_payor": payor,
@@ -946,13 +946,13 @@ class MetaPublisher:
             return {"reason": "META_API_VERSION_INVALID"}
         return account_id, page_id, pixel_id, token, version, beneficiary, payor
 
-    @staticmethod
-    def _creative_approved(creative: GeneratedCreative, product_id: str) -> bool:
+    def _creative_approved(self, creative: GeneratedCreative, product_id: str) -> bool:
         score = creative.score
+        minimum_score = int(self.env.get("PILOT_CREATIVE_MIN_SCORE", "85"))
         return bool(
             creative.publishable_candidate
             and creative.brief.product_id == product_id
-            and score.quality_score >= 85
+            and score.quality_score >= minimum_score
             and score.product_faithful
             and score.logo_visible
             and score.lifestyle_background
@@ -995,9 +995,9 @@ class MetaPublisher:
             billing_ready=self.env.get("META_BILLING_VERIFIED", "false").lower() == "true",
             page_id=page_id,
             pixel_id=pixel_id,
-            # A prior Purchase is not required to start a cold-start sales campaign.
-            # Confirm pixel access; Meta can optimize for standard Purchase events
-            # as real orders occur.
+            # A prior event is not required to start a cold-start campaign.
+            # Confirm pixel access; optimize for standard AddToCart events.
+            # as visitors add products to cart.
             pixel_access_verified=accessible_pixel,
         )
 
