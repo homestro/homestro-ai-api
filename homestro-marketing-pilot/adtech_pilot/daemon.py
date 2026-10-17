@@ -27,6 +27,39 @@ logger = logging.getLogger("uvicorn.error")
 Job = Callable[[], Awaitable[dict[str, Any]]]
 
 
+def _openai_error_metadata(exc: httpx.HTTPStatusError) -> dict[str, Any]:
+    """Return a safe, bounded summary of an OpenAI HTTP error (never its body)."""
+    path = exc.request.url.path
+    model = (
+        os.getenv("PILOT_IMAGE_MODEL", "gpt-image-1")
+        if path.startswith("/v1/images/")
+        else os.getenv("PILOT_LLM_MODEL", "gpt-4.1-mini")
+    )
+    try:
+        payload = exc.response.json()
+    except (ValueError, json.JSONDecodeError):
+        payload = {}
+    error = payload.get("error", {}) if isinstance(payload, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+
+    def safe_label(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        label = "".join(
+            char for char in value
+            if char.isascii() and (char.isalnum() or char in "._-")
+        )[:80]
+        return label or None
+
+    return {
+        "api_endpoint": path[:100],
+        "model": safe_label(model),
+        "provider_error_type": safe_label(error.get("type")),
+        "provider_error_code": safe_label(error.get("code")),
+    }
+
+
 class PilotDaemon:
     """Runs each job independently; a failed provider cannot terminate the scheduler."""
 
@@ -307,6 +340,7 @@ class PilotDaemon:
                 "stage": stage,
                 "http_status": exc.response.status_code,
                 "host": exc.request.url.host,
+                **_openai_error_metadata(exc),
             }
         await self.audit.record("daemon_creative_candidate", candidate)
         publisher_result = {"status": "not_submitted"}
