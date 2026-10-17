@@ -2,6 +2,7 @@ import asyncio
 import unittest
 
 import httpx
+
 from adtech_pilot.gmc_diagnostics import MerchantDiagnosticsClient
 
 
