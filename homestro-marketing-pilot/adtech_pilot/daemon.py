@@ -21,9 +21,9 @@ from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
 from .media_buyer import MetaAdLibraryClient, MetaPublisher, PlanAuditStore
-from .micro_budget import MetaAccountReadiness, MicroBudgetGate
+from .micro_budget import MicroBudgetGate
 
-logger = logging.getLogger("uvicorn.error")
+logger = logging.getLogger("homestro.adtech.daemon")
 Job = Callable[[], Awaitable[dict[str, Any]]]
 
 
@@ -106,7 +106,7 @@ class PilotDaemon:
                     self._last_results[name] = {"status": "completed", **result}
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:  # module-level recovery boundary
+                except Exception as exc:  # noqa: BLE001 - module-level recovery boundary
                     self._failures[name] += 1
                     base_delay = min(
                         3600.0, 30.0 * (2 ** min(self._failures[name] - 1, 7))
@@ -256,8 +256,20 @@ class PilotDaemon:
         if not candidates or not logo_url:
             return {"status": "blocked", "reason": "VERIFIED_PRODUCT_IMAGE_OR_LOGO_MISSING"}
         product = candidates[0]
-        product_image = await self._fetch_brand_image(product["image_link"])
-        logo_image = await self._fetch_brand_image(logo_url)
+        stage = "product_image_download"
+        try:
+            product_image = await self._fetch_brand_image(product["image_link"])
+            stage = "logo_download"
+            logo_image = await self._fetch_brand_image(logo_url)
+        except httpx.HTTPStatusError as exc:
+            request = exc.request
+            return {
+                "status": "blocked",
+                "reason": "CREATIVE_ASSET_HTTP_ERROR",
+                "stage": stage,
+                "http_status": exc.response.status_code,
+                "host": request.url.host,
+            }
         product["facts"] = [
             value.strip()
             for value in product["description"].split(".")
@@ -281,12 +293,23 @@ class PilotDaemon:
             output_dir=Path(os.getenv("PILOT_CREATIVE_DIR", "/data/adtech-creatives")),
             minimum_score=int(os.getenv("PILOT_CREATIVE_MIN_SCORE", "85")),
         )
-        candidate = await factory.create(
-            product=product,
-            platform="meta",
-            product_image=product_image,
-            logo_image=logo_image,
-        )
+        stage = "openai_copy_and_image_generation"
+        try:
+            candidate = await factory.create(
+                product=product,
+                platform="meta",
+                product_image=product_image,
+                logo_image=logo_image,
+            )
+        except httpx.HTTPStatusError as exc:
+            request = exc.request
+            return {
+                "status": "blocked",
+                "reason": "CREATIVE_PROVIDER_HTTP_ERROR",
+                "stage": stage,
+                "http_status": exc.response.status_code,
+                "host": request.url.host,
+            }
         await self.audit.record("daemon_creative_candidate", candidate)
         publisher_result = {"status": "not_submitted"}
         if candidate.publishable_candidate:
@@ -330,29 +353,16 @@ class PilotDaemon:
             return response.content
 
     async def _metrics_job(self) -> dict[str, Any]:
-        meta_preflight = await MetaPublisher(self.audit).check_readiness()
-        account = (
-            MetaAccountReadiness.model_validate(meta_preflight["account"])
-            if meta_preflight.get("status") == "checked"
-            else None
-        )
         micro_budget = MicroBudgetGate().evaluate(
-            account=account,
+            account=None,
             product_id=os.getenv("MICRO_BUDGET_PRODUCT_ID"),
             product_ids_in_feed={str(p.get("id")) for p in self._latest_products},
-            # This scheduled pass is intentionally read-only. It never creates ads.
-            dry_run=True,
         )
         return {
             "status": "blocked",
             "reason": "NO_VERIFIED_CHANNEL_METRICS_LOADER",
             "execution": "DRY_RUN_ONLY",
             "budget_limit_eur": 0.0,
-            "meta_ads_preflight": meta_preflight,
             "micro_budget_preflight": micro_budget.model_dump(mode="json"),
-            "micro_budget_execution": (
-                "READ_ONLY_PREFLIGHT_ONLY"
-                if meta_preflight.get("status") == "checked"
-                else "BLOCKED_META_PREFLIGHT"
-            ),
+            "micro_budget_execution": "NOT_CONNECTED_NO_META_PUBLISHER",
         }
