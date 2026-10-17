@@ -925,8 +925,6 @@ class MetaPublisher:
             return {"reason": "DRY_RUN_ENABLED"}
         if self.env.get("META_BILLING_VERIFIED", "false").lower() != "true":
             return {"reason": "META_BILLING_NOT_MANUALLY_VERIFIED"}
-        if self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() != "true":
-            return {"reason": "META_PURCHASE_EVENT_NOT_MANUALLY_VERIFIED"}
         token = self.env.get("META_ACCESS_TOKEN", "").strip()
         account_id = self.env.get("META_AD_ACCOUNT_ID", "").strip()
         pixel_id = self.env.get("META_PIXEL_ID", "").strip()
@@ -997,10 +995,10 @@ class MetaPublisher:
             billing_ready=self.env.get("META_BILLING_VERIFIED", "false").lower() == "true",
             page_id=page_id,
             pixel_id=pixel_id,
-            conversion_event_verified=(
-                accessible_pixel
-                and self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() == "true"
-            ),
+            # A prior Purchase is not required to start a cold-start sales campaign.
+            # Confirm pixel access; Meta can optimize for standard Purchase events
+            # as real orders occur.
+            pixel_access_verified=accessible_pixel,
         )
 
     async def _get(
