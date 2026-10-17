@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import ValidationError
 
 from .creative_factory import BrandKit, CreativeFactory, OpenAIProvider
 from .feed_manager import ProductFeedManager
@@ -341,6 +342,21 @@ class PilotDaemon:
                 "http_status": exc.response.status_code,
                 "host": exc.request.url.host,
                 **_openai_error_metadata(exc),
+            }
+        except ValidationError as exc:
+            invalid_fields = [
+                {
+                    "field": ".".join(str(part) for part in item.get("loc", ()))[:100],
+                    "error": str(item.get("type", "validation_error"))[:80],
+                }
+                for item in exc.errors(
+                    include_input=False, include_context=False, include_url=False
+                )[:10]
+            ]
+            return {
+                "status": "blocked",
+                "reason": "CREATIVE_OUTPUT_VALIDATION_FAILED",
+                "invalid_fields": invalid_fields,
             }
         await self.audit.record("daemon_creative_candidate", candidate)
         publisher_result = {"status": "not_submitted"}
