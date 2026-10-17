@@ -62,7 +62,6 @@ class MetaPublisherTests(unittest.TestCase):
             "META_DSA_PAYOR": "Homestro legal entity",
             "META_API_VERSION": "v26.0",
             "META_BILLING_VERIFIED": "true",
-            "META_PURCHASE_EVENT_VERIFIED": "true",
             "MICRO_BUDGET_PRODUCT_ID": "sku-1",
             "PILOT_CREATIVE_DIR": str(self.root),
         }
@@ -131,7 +130,6 @@ class MetaPublisherTests(unittest.TestCase):
                     "META_PIXEL_ID": "5555",
                     "META_PAGE_ID": "4444",
                     "META_BILLING_VERIFIED": "false",
-                    "META_PURCHASE_EVENT_VERIFIED": "false",
                 },
             )
             result = await publisher.check_readiness()
@@ -143,7 +141,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertEqual(result["account"]["account_status"], "active")
         self.assertEqual(result["account"]["currency"], "EUR")
         self.assertFalse(result["account"]["billing_ready"])
-        self.assertFalse(result["account"]["conversion_event_verified"])
+        self.assertTrue(result["account"]["pixel_access_verified"])
         self.assertTrue(all(method == "GET" for method, _ in requests))
         self.assertNotIn("do-not-return-this-token", str(result))
 
