@@ -37,7 +37,7 @@ class MetaPublisherTests(unittest.TestCase):
                 factual_claims=["Hundespielzeug"],
             ),
             score=CreativeScore(
-                quality_score=91,
+                quality_score=80,
                 product_faithful=True,
                 logo_visible=True,
                 lifestyle_background=True,
@@ -64,6 +64,7 @@ class MetaPublisherTests(unittest.TestCase):
             "META_BILLING_VERIFIED": "true",
             "MICRO_BUDGET_PRODUCT_ID": "sku-1",
             "PILOT_CREATIVE_DIR": str(self.root),
+            "PILOT_CREATIVE_MIN_SCORE": "80",
         }
 
     def tearDown(self):
@@ -244,6 +245,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
         self.assertEqual(adset_form["daily_budget"], ["500"])
+        self.assertIn('"custom_event_type": "ADD_TO_CART"', adset_form["promoted_object"][0])
 
 
 if __name__ == "__main__":
