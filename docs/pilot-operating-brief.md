@@ -14,7 +14,7 @@ configured ad account, Page and Pixel during its scheduled metrics check and put
 the result into the heartbeat. It never creates campaign objects during this check.
 The spend gate remains closed (`DRY_RUN=true`, `ALLOW_MICRO_BUDGET=false`); an actual
 campaign remains limited to one DE test at a €5/day target for seven days after all account,
-billing, Purchase-event, feed-product, creative and DSA checks pass. Do not claim
+billing, accessible-Pixel, feed-product, creative and DSA checks pass. A historical Purchase event is not required for a cold-start campaign optimized for Purchase. Do not claim
 paid delivery until a real campaign and Meta review are verified.
 
 ## Organic publication blockers — 13 October 2026
