@@ -5,14 +5,13 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
-from PIL import Image
-
 from adtech_pilot.creative_factory import (
     CreativeBrief,
     CreativeScore,
     GeneratedCreative,
 )
 from adtech_pilot.media_buyer import MetaPublisher, PlanAuditStore
+from PIL import Image
 
 
 class MetaPublisherTests(unittest.TestCase):
