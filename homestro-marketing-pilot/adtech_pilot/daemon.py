@@ -21,7 +21,7 @@ from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
 from .media_buyer import MetaAdLibraryClient, MetaPublisher, PlanAuditStore
-from .micro_budget import MicroBudgetGate
+from .micro_budget import MetaAccountReadiness, MicroBudgetGate
 
 logger = logging.getLogger("uvicorn.error")
 Job = Callable[[], Awaitable[dict[str, Any]]]
@@ -330,16 +330,29 @@ class PilotDaemon:
             return response.content
 
     async def _metrics_job(self) -> dict[str, Any]:
+        meta_preflight = await MetaPublisher(self.audit).check_readiness()
+        account = (
+            MetaAccountReadiness.model_validate(meta_preflight["account"])
+            if meta_preflight.get("status") == "checked"
+            else None
+        )
         micro_budget = MicroBudgetGate().evaluate(
-            account=None,
+            account=account,
             product_id=os.getenv("MICRO_BUDGET_PRODUCT_ID"),
             product_ids_in_feed={str(p.get("id")) for p in self._latest_products},
+            # This scheduled pass is intentionally read-only. It never creates ads.
+            dry_run=True,
         )
         return {
             "status": "blocked",
             "reason": "NO_VERIFIED_CHANNEL_METRICS_LOADER",
             "execution": "DRY_RUN_ONLY",
             "budget_limit_eur": 0.0,
+            "meta_ads_preflight": meta_preflight,
             "micro_budget_preflight": micro_budget.model_dump(mode="json"),
-            "micro_budget_execution": "NOT_CONNECTED_NO_META_PUBLISHER",
+            "micro_budget_execution": (
+                "READ_ONLY_PREFLIGHT_ONLY"
+                if meta_preflight.get("status") == "checked"
+                else "BLOCKED_META_PREFLIGHT"
+            ),
         }

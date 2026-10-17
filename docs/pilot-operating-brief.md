@@ -1,3 +1,22 @@
+Warning: truncated output (original token count: 13966)
+Total output lines: 411
+
+## Meta Ads readiness diagnosis — 17 October 2026
+
+The existing Homestro Pilot's organic Meta publisher is separate from the AdTech
+Pilot's paid-ad path. A heartbeat value `blocked_access_token_missing` belongs to
+the optional public Meta Ad Library competitor scan (`META_AD_LIBRARY_ACCESS_TOKEN`);
+it is not evidence that the paid-ad system-user token (`META_ACCESS_TOKEN`) is missing.
+The prior diagnosis conflated these two credentials.
+
+The AdTech scheduler now performs a read-only Meta Marketing API preflight for the
+configured ad account, Page and Pixel during its scheduled metrics check and puts
+the result into the heartbeat. It never creates campaign objects during this check.
+The spend gate remains closed (`DRY_RUN=true`, `ALLOW_MICRO_BUDGET=false`); an actual
+campaign remains limited to one DE test at a €5/day target for seven days after all account,
+billing, Purchase-event, feed-product, creative and DSA checks pass. Do not claim
+paid delivery until a real campaign and Meta review are verified.
+
 ## Organic publication blockers — 13 October 2026
 
 Owner requests repairs that bring real shop traffic and sales, with paid ads at EUR0.
@@ -137,101 +156,7 @@ Mirko nemusí každý den zadávat nic. Občas dodá nové dokončené zakázky,
 
 ## Co ukládat a kam
 - Soukromé proměnné hostingu: app/client secrets a stabilní šifrovací klíč. Ne do chatu ani veřejného GitHubu.
-- PostgreSQL: šifrované přístupy podle značky a platformy, účty, souhlasy/pravidla, podklady ke schválení a historii skutečných publikací.
-- Trvalé úložiště médií: originály a publikovatelné varianty s adresami, které nepřestanou fungovat po restartu.
-- Repozitář: kód, tento provozní brief a popis konfigurace bez tajných hodnot.
-- Tento průběžně aktualizovaný soubor: známé skutečnosti, úkoly a výsledky. Uložení dokumentu samo o sobě nezapne workera ani nedává konektoru chybějící oprávnění.
-
-## Co mohu udělat samostatně a kde je hranice
-Mohu implementovat, testovat, ukládat kód a nastavení v povoleném rozsahu, připravovat obsah, udržovat frontu a ověřovat výsledky dostupnými přístupy. Pilot na serveru musí nést běžnou automatizaci; tato konverzace neběží nepřetržitě sama.
-
-Nemohu za majitele dokončit 2FA, bezpečnostní výzvu nebo souhlas s účtem. Nemohu slíbit, že Meta/Google nikdy přístup neodvolají, ani obejít schválení Google API či obchodu. V takové výjimce má Pilot jasně ukázat „znovu připojit“ a znovu nepoptávat všechny firemní údaje.
-
-## Pořadí dokončení a průkazné testy
-1. Dokončit a nasadit PR 68 + správně nakonfigurovat Meta aplikaci; ověřit Facebook i Instagram Homestro veřejnými odkazy.
-2. Zajistit trvalé uložení médií, spojení po restartu a uložené schvalovací/provozní limity.
-3. Rozšířit účty a frontu pro MS Service, připojit jeho Meta.
-4. Vyřešit aktuální shipping a Misrepresentation v Merchant Center 5447184929; doložit schválené free listings.
-5. Připojit Google Business Profile MS, jakmile splňuje podmínky API, a ověřit skutečný příspěvek.
-6. Zapnout plánovaný běh, ověřit jej bez otevřeného chatu a po restartu. U každé značky uložit skutečný platformní příspěvek/odkaz a poslední úspěšný běh.
-7. Jednotný přehled má ukazovat: běží / čeká na obsah / chybí kredit / znovu připojit / platforma blokuje / nejasná publikace k ověření.
-
-Dnešní stav je audit a uložené zadání, nikoli prohlášení, že všechna propojení již automaticky fungují.
-
-## Technické identifikátory pro pokračování
-Repo: homestro/homestro-ai-api. PR 68 branch: codex/meta-persistent-connection-20261006.
-Railway project: 75e35227-3a04-439f-9c53-fc78556dd6e8.
-Production environment: a543780b-7075-4693-bb1c-8dc437649ff8.
-Canonical service: homestro-ai-api-fixed-current, ID 3ee64de3-7855-4b84-a866-43cc79bc56d1.
-API origin: https://homestro-ai-api-fixed-current-production.up.railway.app.
-Google feed v1: /feeds/google-organic.xml (výchozí limit 50 položek variant).
-Google feed v2: /feeds/google-organic-v2.xml (vyžaduje připravené produkty a konfiguraci).
-Meta OAuth callback PR 68: /auth/meta/callback; setup page: /connect/meta.
-Hodnoty ID účtů MS a schválení Google API jsou dosud nedoložené; nevyplňovat vymyšlená ID.
-
-## Zdroje a omezení dnešní kontroly
-Railway environment status, názvy proměnných, startup log aktuálního deploymentu; GitHub PR/kód/schéma; živá diagnostika obou Merchant Center účtů; seznam připojených Search Console webů. Historické odpovědi o zveřejněném Google příspěvku MS nejsou dokladem dnešního API napojení.
-
-- https://developers.google.com/my-business/content/prereqs
-- https://developers.google.com/my-business/content/posts-data
-- https://developers.google.com/identity/protocols/oauth2/web-server
-- https://support.google.com/merchants/answer/13692890?hl=en
-
-
-## Original editorial fallback — 6 October 2026
-The owner explicitly requested a workable alternative to uncertain supplier media. PILOT_BRAND_EDITORIAL_ENABLED=true enables 14 original German household tips, each with an original typographic JPEG generated by ffmpeg (no supplier image, product likeness, prices, reviews or invented service claims). The original manifest is validated again immediately before publication. This lane uses the existing persisted queue, Meta credentials, global/channel quotas, Berlin hours, history verification and recovery hold. It does not approve supplier media or enter Merchant product feeds. Copies are not endlessly repeated; after all 14 topics have been published on both channels, this batch is exhausted and needs more original content. No paid AI or Ads call is added.
-
-Before claiming live operation, check EDITORIAL_READY, approval count, worker status and actual remote publication links. Existing posts consume the 24-hour quota; queued editorial content is not proof of new live publication. MS Service stays separate and Merchant suspension is not fixed by editorial posts.
-
-# Organic social implementation — 10 October 2026
-
-The owner authorized implementation of the free additional-channel route.
-TikTok and Pinterest connector code is prepared against main
-86c3ac3946a71685571cd25a8f122b436e7e4f39. It uses a separate durable
-marketing_social_posts queue, existing product media/copy, revision checks,
-deduplication, Berlin hours and one post per channel per rolling 24 hours.
-No additional AI/video generator or Ads endpoint is used. Default social flags are
-off; missing credentials must not disable existing Meta publishing.
-
-TikTok requires genuine per-post preview and express consent. The owner review
-page implements these; global autopilot authorization must never fabricate them.
-Pinterest can reuse the existing reviewed-organic autonomy policy. Accepted remote
-posts without public URLs remain pending. Draft delivery and ambiguous writes are
-held for recovery and never reported as public publication.
-
-Implementation tests are local verification only. Owner Zernio signup/OAuth,
-provider secrets, deployment, PostgreSQL migration and real public platform links
-are not yet verified. No claim of live TikTok/Pinterest operation is made.
-Setup and exact variables: docs/social-organic-setup.md.
-Reviewable GitHub change: https://github.com/homestro/homestro-ai-api/pull/79
-(merged and deployed successfully on 10 October 2026; merge commit
-7c71f474041e0a621a097d0273e009db440ae6b3). The initial commit is
-6d790e994ed1282965e474ee1eb07d67c404cd2e. Local marketing regression tests passed
-89/89, including real FFmpeg rendering; subsequent read-failure regression raises
-the suite to 90 tests. This PR is implementation evidence, not a live post link.
-Zernio currently advertises two connected accounts free; do not add a card or third
-account. Existing Railway/OpenAI running costs remain.
-
-Owner screenshots confirm TikTok @homestroo and Pinterest @homestro0684 connected,
-with public board Homestro – Ideen für Zuhause selected as current. Railway
-confirms ZERNIO_API_KEY exists; OAuth tools redact its value. Social publishing
-is still disabled. A copied Pinterest account ID is malformed (25 characters);
-the opt-in PILOT_SOCIAL_CHECK_CONNECTION startup check reads accounts and boards
-using the server-held key and logs only public IDs, names and privacy. It performs
-no writes and emits sanitized failure codes. Two targeted diagnostic tests pass.
-
-10 October, 20:33 Berlin: owner review screenshot shows individual TikTok consent
-and an approved queue entry. Connection check confirmed @homestroo, @homestro0684
-and public board 1094585953125321154. Corrected Pinterest account ID to
-6aca3f628a43e7f438cb0f87; social integration and publishing variables enabled,
-deployment fb4cd590-deec-4872-989d-e73c4e793dce succeeded. Review UI now displays
-smaller linked photo previews, collapses successfully approved cards, scrolls to
-the next card and shows remaining approvals. Per-post consent is unchanged;
-generated browser script syntax checked. A queued approval is not a public link.
-
-10 October, 20:40 Berlin: owner explicitly requested every-four-hour publishing
-on all four connected networks and batch TikTok approval. Added validated
-PILOT_PUBLISH_EVERY_HOURS and PILOT_PUBLISH_AROUND_CLOCK configuration, persisted
+- PostgreSQL: šifrované přístupy podle značky a …1966 tokens truncated…H_AROUND_CLOCK configuration, persisted
 per-channel timestamp spacing, six-post rolling per-channel caps and a 12-post
 Meta total cap. Night publishing is opt-in; duplicate/recovery/stock guards remain.
 TikTok batch UI selects displayed drafts, requires an explicit common privacy and

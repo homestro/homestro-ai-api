@@ -1,7 +1,9 @@
 import asyncio
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from adtech_pilot.daemon import PilotDaemon
+from adtech_pilot.micro_budget import MetaAccountReadiness
 
 
 class MemoryAudit:
@@ -19,6 +21,41 @@ class FakeReporter:
 
 
 class DaemonTests(unittest.TestCase):
+    def test_metrics_job_runs_read_only_meta_ads_preflight_and_keeps_spend_blocked(self):
+        async def run():
+            readiness = MetaAccountReadiness(
+                account_id="act_12345",
+                account_status="active",
+                currency="EUR",
+                billing_ready=False,
+                page_id="4444",
+                pixel_id="5555",
+                conversion_event_verified=False,
+            )
+            with patch.dict(
+                "os.environ",
+                {
+                    "ALLOW_MICRO_BUDGET": "false",
+                    "DRY_RUN": "true",
+                    "META_ACCESS_TOKEN": "test-token",
+                    "META_AD_ACCOUNT_ID": "act_12345",
+                    "META_PAGE_ID": "4444",
+                    "META_PIXEL_ID": "5555",
+                },
+                clear=False,
+            ), patch("adtech_pilot.daemon.MetaPublisher") as publisher_cls:
+                publisher_cls.return_value.check_readiness = AsyncMock(
+                    return_value={"status": "checked", "account": readiness.model_dump()}
+                )
+                result = await PilotDaemon(MemoryAudit())._metrics_job()
+            publisher_cls.return_value.check_readiness.assert_awaited_once()
+            self.assertEqual(result["meta_ads_preflight"]["status"], "checked")
+            self.assertIn("DRY_RUN_ENABLED", result["micro_budget_preflight"]["blockers"])
+            self.assertFalse(result["micro_budget_preflight"]["live_submission_enabled"])
+            self.assertEqual(result["micro_budget_execution"], "READ_ONLY_PREFLIGHT_ONLY")
+
+        asyncio.run(run())
+
     def test_one_cycle_runs_independent_jobs_and_records_zero_spend_heartbeat(self):
         async def run():
             stop = asyncio.Event()
