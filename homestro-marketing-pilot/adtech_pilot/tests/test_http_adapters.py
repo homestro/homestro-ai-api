@@ -20,6 +20,9 @@ class HttpAdapterTests(unittest.TestCase):
             data = {
                 "product_id": "sku1",
                 "platform": "meta",
+                "hook": "Praktisch im Alltag",
+                "problem": "Kleine Alltagsaufgaben kosten Zeit.",
+                "solution": "Dieses Produkt hilft dabei.",
                 "headline": "Gutes Produkt",
                 "primary_text": "Entdecke hilfreiche Produkte für den Alltag.",
                 "description": "Jetzt ansehen",
