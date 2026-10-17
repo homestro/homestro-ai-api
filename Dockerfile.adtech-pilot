@@ -29,8 +29,8 @@ COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/daemon.py /app/ad
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/github_reporter.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/gmc_diagnostics.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/micro_budget.py /app/adtech_pilot/
-USER 10001:10001
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/entrypoint.py /app/entrypoint.py
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"
-CMD ["uvicorn", "adtech_pilot.main_pilot:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
+ENTRYPOINT ["python", "/app/entrypoint.py"]
