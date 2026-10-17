@@ -8,7 +8,6 @@ os.environ.setdefault("PILOT_ADMIN_KEY", "test-admin-key-with-at-least-32-charac
 os.environ.setdefault("PILOT_AUDIT_DB_PATH", tempfile.mktemp(suffix=".sqlite3"))
 
 import httpx
-
 from adtech_pilot.main_pilot import create_app
 
 
