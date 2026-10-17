@@ -30,7 +30,7 @@ class DaemonTests(unittest.TestCase):
                 billing_ready=False,
                 page_id="4444",
                 pixel_id="5555",
-                conversion_event_verified=False,
+                pixel_access_verified=False,
             )
             with patch.dict(
                 "os.environ",
