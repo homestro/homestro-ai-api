@@ -5,13 +5,14 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
+from PIL import Image
+
 from adtech_pilot.creative_factory import (
     CreativeBrief,
     CreativeScore,
     GeneratedCreative,
 )
 from adtech_pilot.media_buyer import MetaPublisher, PlanAuditStore
-from PIL import Image
 
 
 class MetaPublisherTests(unittest.TestCase):
@@ -95,6 +96,87 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertEqual(result["reason"], "MICRO_BUDGET_NOT_ENABLED")
         self.assertEqual(requests, [])
 
+    def test_scheduled_readiness_checks_meta_account_page_pixel_without_writes(self):
+        async def run():
+            requests = []
+
+            def handler(request):
+                requests.append((request.method, request.url.path))
+                path = request.url.path.rsplit("/", 1)[-1]
+                if path == "act_12345":
+                    return httpx.Response(
+                        200,
+                        json={
+                            "id": "act_12345",
+                            "account_status": 1,
+                            "currency": "EUR",
+                        },
+                    )
+                if path == "adspixels":
+                    return httpx.Response(
+                        200,
+                        json={"data": [{"id": "5555", "is_unavailable": False}]},
+                    )
+                if path == "4444":
+                    return httpx.Response(200, json={"id": "4444", "name": "Homestro"})
+                return httpx.Response(404, json={"error": {"message": "secret body"}})
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            publisher = MetaPublisher(
+                PlanAuditStore(self.root / "readiness.sqlite3"),
+                client=client,
+                env={
+                    "META_ACCESS_TOKEN": "do-not-return-this-token",
+                    "META_AD_ACCOUNT_ID": "act_12345",
+                    "META_PIXEL_ID": "5555",
+                    "META_PAGE_ID": "4444",
+                    "META_BILLING_VERIFIED": "false",
+                    "META_PURCHASE_EVENT_VERIFIED": "false",
+                },
+            )
+            result = await publisher.check_readiness()
+            await client.aclose()
+            return result, requests
+
+        result, requests = asyncio.run(run())
+        self.assertEqual(result["status"], "checked")
+        self.assertEqual(result["account"]["account_status"], "active")
+        self.assertEqual(result["account"]["currency"], "EUR")
+        self.assertFalse(result["account"]["billing_ready"])
+        self.assertFalse(result["account"]["conversion_event_verified"])
+        self.assertTrue(all(method == "GET" for method, _ in requests))
+        self.assertNotIn("do-not-return-this-token", str(result))
+
+    def test_scheduled_readiness_fails_closed_without_echoing_provider_body(self):
+        async def run():
+            requests = []
+
+            def handler(request):
+                requests.append(request.method)
+                return httpx.Response(400, json={"error": {"message": "secret body"}})
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            publisher = MetaPublisher(
+                PlanAuditStore(self.root / "readiness-failed.sqlite3"),
+                client=client,
+                env={
+                    "META_ACCESS_TOKEN": "do-not-return-this-token",
+                    "META_AD_ACCOUNT_ID": "act_12345",
+                    "META_PIXEL_ID": "5555",
+                    "META_PAGE_ID": "4444",
+                },
+            )
+            result = await publisher.check_readiness()
+            await client.aclose()
+            return result, requests
+
+        result, requests = asyncio.run(run())
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_type"], "HTTPStatusError")
+        self.assertEqual(requests, ["GET"])
+        self.assertNotIn("secret body", str(result))
+        self.assertNotIn("do-not-return-this-token", str(result))
+
     def test_publisher_preflights_creates_paused_objects_then_activates_one_capped_test(self):
         async def run():
             events = []
@@ -135,8 +217,9 @@ class MetaPublisherTests(unittest.TestCase):
 
         result, repeat, events = asyncio.run(run())
         self.assertEqual(result["status"], "ACTIVE_PENDING_REVIEW")
-        self.assertEqual(result["budget_cap_eur"], 5.0)
-        self.assertEqual(result["budget_type"], "lifetime")
+        self.assertEqual(result["daily_budget_eur"], 5.0)
+        self.assertEqual(result["planned_total_eur"], 35.0)
+        self.assertEqual(result["budget_type"], "daily")
         self.assertEqual(repeat["reason"], "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED")
         self.assertEqual(sum(event[1] == "campaigns" for event in events), 1)
         self.assertEqual(sum(event[1] == "ads" for event in events), 1)
@@ -147,7 +230,7 @@ class MetaPublisherTests(unittest.TestCase):
         ]
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
-        self.assertEqual(adset_form["lifetime_budget"], ["500"])
+        self.assertEqual(adset_form["daily_budget"], ["500"])
 
 
 if __name__ == "__main__":

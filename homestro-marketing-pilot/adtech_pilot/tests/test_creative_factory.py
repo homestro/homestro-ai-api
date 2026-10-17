@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from adtech_pilot.creative_factory import (
     BrandKit,
     CreativeBrief,
@@ -11,7 +13,6 @@ from adtech_pilot.creative_factory import (
     CreativeScore,
     HistoricalWin,
 )
-from PIL import Image
 
 
 def png(color):

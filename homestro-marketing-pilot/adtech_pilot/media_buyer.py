@@ -592,18 +592,19 @@ class MetaAdLibraryClient:
 
 
 class MetaPublisher:
-    """Single-use Meta website-sales publisher with a €5 lifetime ceiling.
+    """Single-use Meta website-sales publisher with a €5/day, seven-day plan.
 
     Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
     account/assets pass preflight, the selected product is in the validated feed,
     the creative passes its 85/100 quality checks, and the persistent one-shot
     claim is acquired. New objects stay PAUSED until the final activation step.
-    The cap is lifetime (not a daily-budget target), so this first test cannot
-    spend more than €5 total even if Meta over-delivers on a particular day.
+    The configured daily budget is €5 for a seven-day schedule. Meta may spend
+    more than the daily target on an individual day; the seven-day planned spend
+    is €35 before any platform delivery variance.
     """
 
     ENDPOINT = "https://graph.facebook.com"
-    LIFETIME_BUDGET_CENTS = 500
+    DAILY_BUDGET_CENTS = 500
     API_VERSION_PATTERN = re.compile(r"^v\d+\.\d+$")
     ID_PATTERN = re.compile(r"^\d{4,30}$")
     ACCOUNT_PATTERN = re.compile(r"^act_\d{4,30}$")
@@ -618,6 +619,52 @@ class MetaPublisher:
         self.audit = audit
         self.client = client
         self.env = env if env is not None else os.environ
+
+    async def check_readiness(self) -> dict[str, Any]:
+        """Read Meta account, Page and Pixel access without creating ad objects.
+
+        This deliberately does not require the spend switches, DSA labels, billing
+        confirmation or Purchase-event confirmation. Those are evaluated by the
+        separate micro-budget gate before any campaign write.
+        """
+        required = {
+            "META_ACCESS_TOKEN": self.env.get("META_ACCESS_TOKEN", "").strip(),
+            "META_AD_ACCOUNT_ID": self.env.get("META_AD_ACCOUNT_ID", "").strip(),
+            "META_PIXEL_ID": self.env.get("META_PIXEL_ID", "").strip(),
+            "META_PAGE_ID": self.env.get("META_PAGE_ID", "").strip(),
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            return {"status": "blocked", "missing": missing}
+        account_id = required["META_AD_ACCOUNT_ID"]
+        page_id = required["META_PAGE_ID"]
+        pixel_id = required["META_PIXEL_ID"]
+        if not self.ACCOUNT_PATTERN.fullmatch(account_id):
+            return {"status": "blocked", "reason": "META_AD_ACCOUNT_ID_INVALID"}
+        if not self.ID_PATTERN.fullmatch(pixel_id) or not self.ID_PATTERN.fullmatch(page_id):
+            return {"status": "blocked", "reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
+
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(
+            timeout=httpx.Timeout(30, connect=8), follow_redirects=False
+        )
+        try:
+            readiness = await self._preflight(
+                client,
+                headers={"Authorization": f"Bearer {required['META_ACCESS_TOKEN']}"},
+                account_id=account_id,
+                page_id=page_id,
+                pixel_id=pixel_id,
+            )
+            return {"status": "checked", "account": readiness.model_dump(mode="json")}
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Provider bodies and request headers may contain sensitive data.
+            return {"status": "failed", "error_type": type(exc).__name__}
+        finally:
+            if own_client:
+                await client.aclose()
 
     async def publish_one(
         self,
@@ -694,7 +741,13 @@ class MetaPublisher:
 
             await self.audit.record(
                 "meta_micro_budget_claim",
-                {"account_id": account_id, "product_id": product_id, "budget_cap_eur": 5.0},
+                {
+                    "account_id": account_id,
+                    "product_id": product_id,
+                    "daily_budget_eur": 5.0,
+                    "planned_days": 7,
+                    "planned_total_eur": 35.0,
+                },
             )
             campaign = await self._post(
                 client,
@@ -721,7 +774,7 @@ class MetaPublisher:
                 {
                     "name": f"Homestro DE Purchase {product_id[:32]}",
                     "campaign_id": campaign,
-                    "lifetime_budget": str(self.LIFETIME_BUDGET_CENTS),
+                    "daily_budget": str(self.DAILY_BUDGET_CENTS),
                     "billing_event": "IMPRESSIONS",
                     "optimization_goal": "OFFSITE_CONVERSIONS",
                     "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
@@ -802,8 +855,9 @@ class MetaPublisher:
                 "adset_id": adset,
                 "ad_id": ad,
                 "product_id": product_id,
-                "budget_type": "lifetime",
-                "budget_cap_eur": 5.0,
+                "budget_type": "daily",
+                "daily_budget_eur": 5.0,
+                "planned_total_eur": 35.0,
                 "scheduled_window_days": 7,
                 "dry_run": False,
                 "note": "Meta review must approve the ad; a campaign does not guarantee impressions or sales.",

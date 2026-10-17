@@ -196,7 +196,9 @@ def create_app(
                 os.getenv("ALLOW_MICRO_BUDGET", "false").lower() == "true"
                 and os.getenv("DRY_RUN", "true").lower() == "false"
             ),
-            "micro_budget_lifetime_cap_eur": 5.0,
+            "micro_budget_daily_budget_eur": 5.0,
+            "micro_budget_window_days": 7,
+            "micro_budget_planned_total_eur": 35.0,
         }
 
     @app.post("/feed/validate", dependencies=[Depends(require_admin)])

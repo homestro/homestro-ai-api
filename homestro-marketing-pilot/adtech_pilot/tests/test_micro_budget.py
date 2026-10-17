@@ -22,7 +22,7 @@ class MicroBudgetGateTests(unittest.TestCase):
             product_ids_in_feed={"sku-1"},
         )
         self.assertFalse(result.eligible)
-        self.assertEqual(result.budget_cap_eur, 0)
+        self.assertEqual(result.daily_budget_eur, 0)
         self.assertFalse(result.live_submission_enabled)
 
     def test_verified_configuration_is_limited_to_one_five_euro_meta_campaign(self):
@@ -34,8 +34,10 @@ class MicroBudgetGateTests(unittest.TestCase):
         )
         self.assertTrue(result.eligible)
         self.assertEqual(result.platform, "meta")
-        self.assertEqual(result.budget_cap_eur, 5.0)
-        self.assertEqual(result.budget_type, "lifetime")
+        self.assertEqual(result.daily_budget_eur, 5.0)
+        self.assertEqual(result.planned_days, 7)
+        self.assertEqual(result.planned_total_eur, 35.0)
+        self.assertEqual(result.budget_type, "daily")
         self.assertEqual(result.max_campaigns, 1)
         self.assertTrue(result.live_submission_enabled)
 
@@ -49,7 +51,7 @@ class MicroBudgetGateTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs):
                 result = MicroBudgetGate(enabled=True).evaluate(**kwargs)
                 self.assertFalse(result.eligible)
-                self.assertEqual(result.budget_cap_eur, 0.0)
+                self.assertEqual(result.daily_budget_eur, 0.0)
 
     def test_even_ready_account_is_blocked_while_global_dry_run_is_on(self):
         result = MicroBudgetGate(enabled=True).evaluate(
