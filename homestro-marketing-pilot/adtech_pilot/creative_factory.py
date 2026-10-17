@@ -7,7 +7,7 @@ import io
 import json
 import re
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 import httpx
@@ -32,7 +32,7 @@ class CreativeBrief(BaseModel):
     headline: str = Field(min_length=4, max_length=40)
     primary_text: str = Field(min_length=10, max_length=500)
     description: str = Field(min_length=4, max_length=120)
-    call_to_action: str = Field(pattern="^(Shop Now|Learn More|Get Offer|Buy Now)$")
+    call_to_action: Literal["Shop Now", "Learn More", "Get Offer", "Buy Now"]
     visual_prompt: str = Field(min_length=20, max_length=1200)
     factual_claims: list[str] = Field(max_length=12)
 
@@ -317,6 +317,7 @@ class CreativeFactory:
                 "rules": [
                     "Use only supplied verified facts; no invented guarantees, discounts, ratings or shipping promises.",
                     "Write natural German copy: an attention hook, a relatable problem, a product-supported solution, then a clear action.",
+                    "Set call_to_action to exactly one platform API value: Shop Now, Learn More, Get Offer, or Buy Now.",
                     "Stage an emotionally warm, realistic everyday lifestyle scene and replace any plain white product background.",
                     "Preserve the product's actual shape, color, quantity and features from the reference image.",
                     "Do not ask the image model to draw text or a logo; logo is composited from the supplied official asset.",
