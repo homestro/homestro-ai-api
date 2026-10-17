@@ -23,7 +23,7 @@ from .gmc_diagnostics import MerchantDiagnosticsClient
 from .media_buyer import MetaAdLibraryClient, MetaPublisher, PlanAuditStore
 from .micro_budget import MicroBudgetGate
 
-logger = logging.getLogger("homestro.adtech.daemon")
+logger = logging.getLogger("uvicorn.error")
 Job = Callable[[], Awaitable[dict[str, Any]]]
 
 
