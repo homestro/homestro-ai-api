@@ -24,7 +24,7 @@ class MetaAccountReadiness(BaseModel):
     billing_ready: bool
     page_id: str = Field(min_length=1)
     pixel_id: str = Field(min_length=1)
-    conversion_event_verified: bool
+    pixel_access_verified: bool
 
 
 class MicroBudgetDecision(BaseModel):
@@ -74,8 +74,8 @@ class MicroBudgetGate:
                 blockers.append("META_ACCOUNT_CURRENCY_MUST_BE_EUR")
             if not account.billing_ready:
                 blockers.append("META_BILLING_NOT_READY")
-            if not account.conversion_event_verified:
-                blockers.append("META_CONVERSION_EVENT_NOT_VERIFIED")
+            if not account.pixel_access_verified:
+                blockers.append("META_PIXEL_ACCESS_NOT_VERIFIED")
         if not product_id:
             blockers.append("MICRO_BUDGET_PRODUCT_ID_MISSING")
         elif product_id not in product_ids_in_feed:

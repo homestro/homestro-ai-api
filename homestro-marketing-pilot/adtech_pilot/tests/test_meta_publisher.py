@@ -37,7 +37,7 @@ class MetaPublisherTests(unittest.TestCase):
                 factual_claims=["Hundespielzeug"],
             ),
             score=CreativeScore(
-                quality_score=91,
+                quality_score=80,
                 product_faithful=True,
                 logo_visible=True,
                 lifestyle_background=True,
@@ -62,9 +62,9 @@ class MetaPublisherTests(unittest.TestCase):
             "META_DSA_PAYOR": "Homestro legal entity",
             "META_API_VERSION": "v26.0",
             "META_BILLING_VERIFIED": "true",
-            "META_PURCHASE_EVENT_VERIFIED": "true",
             "MICRO_BUDGET_PRODUCT_ID": "sku-1",
             "PILOT_CREATIVE_DIR": str(self.root),
+            "PILOT_CREATIVE_MIN_SCORE": "80",
         }
 
     def tearDown(self):
@@ -131,7 +131,6 @@ class MetaPublisherTests(unittest.TestCase):
                     "META_PIXEL_ID": "5555",
                     "META_PAGE_ID": "4444",
                     "META_BILLING_VERIFIED": "false",
-                    "META_PURCHASE_EVENT_VERIFIED": "false",
                 },
             )
             result = await publisher.check_readiness()
@@ -143,7 +142,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertEqual(result["account"]["account_status"], "active")
         self.assertEqual(result["account"]["currency"], "EUR")
         self.assertFalse(result["account"]["billing_ready"])
-        self.assertFalse(result["account"]["conversion_event_verified"])
+        self.assertTrue(result["account"]["pixel_access_verified"])
         self.assertTrue(all(method == "GET" for method, _ in requests))
         self.assertNotIn("do-not-return-this-token", str(result))
 
@@ -246,6 +245,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
         self.assertEqual(adset_form["daily_budget"], ["500"])
+        self.assertIn('"custom_event_type": "ADD_TO_CART"', adset_form["promoted_object"][0])
 
 
 if __name__ == "__main__":
