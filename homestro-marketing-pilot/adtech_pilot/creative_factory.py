@@ -119,6 +119,29 @@ def _openai_strict_schema(value: Any) -> Any:
     return result
 
 
+def _fit_output_to_schema(value: Any, schema: dict[str, Any]) -> Any:
+    """Apply local JSON Schema length/count ceilings before Pydantic validation."""
+    schema_type = schema.get("type")
+    if schema_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        return {
+            key: _fit_output_to_schema(item, properties.get(key, {}))
+            for key, item in value.items()
+        }
+    if schema_type == "array" and isinstance(value, list):
+        maximum = schema.get("maxItems")
+        items = value[:maximum] if isinstance(maximum, int) else value
+        return [_fit_output_to_schema(item, schema.get("items", {})) for item in items]
+    if schema_type == "string" and isinstance(value, str):
+        maximum = schema.get("maxLength")
+        if isinstance(maximum, int) and len(value) > maximum:
+            clipped = value[:maximum]
+            if " " in clipped:
+                clipped = clipped.rsplit(" ", 1)[0]
+            return clipped.rstrip(" ,.;:-")
+    return value
+
+
 class OpenAIProvider:
     """Minimal HTTPX adapter using Responses Structured Outputs and Images edits."""
 
@@ -204,7 +227,9 @@ class OpenAIProvider:
         ]
         if not texts:
             raise RuntimeError("LLM returned no structured output")
-        return schema.model_validate_json("".join(texts))
+        raw_output = json.loads("".join(texts))
+        raw_output = _fit_output_to_schema(raw_output, schema.model_json_schema())
+        return schema.model_validate(raw_output)
 
     async def edit(
         self, *, source_image: bytes, prompt: str, size: str = "1024x1024"
@@ -318,6 +343,7 @@ class CreativeFactory:
                     "Use only supplied verified facts; no invented guarantees, discounts, ratings or shipping promises.",
                     "Write natural German copy: an attention hook, a relatable problem, a product-supported solution, then a clear action.",
                     "Set call_to_action to exactly one platform API value: Shop Now, Learn More, Get Offer, or Buy Now.",
+                    "Respect field lengths exactly: hook <=120, problem <=240, solution <=240, headline <=40, primary_text <=500, description <=120, visual_prompt <=1200 characters; factual_claims <=12 items.",
                     "Stage an emotionally warm, realistic everyday lifestyle scene and replace any plain white product background.",
                     "Preserve the product's actual shape, color, quantity and features from the reference image.",
                     "Do not ask the image model to draw text or a logo; logo is composited from the supplied official asset.",
