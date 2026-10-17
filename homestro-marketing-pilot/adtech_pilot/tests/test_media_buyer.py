@@ -1,6 +1,8 @@
 import asyncio
 import unittest
 
+from pydantic import ValidationError
+
 from adtech_pilot.media_buyer import (
     ActionType,
     AdExecutionEngine,
@@ -10,9 +12,6 @@ from adtech_pilot.media_buyer import (
     Platform,
     build_optimization_plan,
 )
-
-from pydantic import ValidationError
-
 
 class RecordingAdapter:
     def __init__(self):
