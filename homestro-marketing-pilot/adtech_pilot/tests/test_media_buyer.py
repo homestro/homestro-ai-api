@@ -13,6 +13,7 @@ from adtech_pilot.media_buyer import (
     build_optimization_plan,
 )
 
+
 class RecordingAdapter:
     def __init__(self):
         self.calls = []
