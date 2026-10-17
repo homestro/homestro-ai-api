@@ -86,6 +86,39 @@ class ImageEditProvider(Protocol):
     ) -> bytes: ...
 
 
+_OPENAI_UNSUPPORTED_SCHEMA_KEYS = {
+    "title",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minItems",
+    "maxItems",
+}
+
+
+def _openai_strict_schema(value: Any) -> Any:
+    """Normalize Pydantic JSON Schema to OpenAI Structured Outputs' strict subset.
+
+    Pydantic still validates generated objects locally, so length, pattern, and
+    collection bounds remain enforced after the API response is parsed.
+    """
+    if isinstance(value, list):
+        return [_openai_strict_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {
+        key: _openai_strict_schema(item)
+        for key, item in value.items()
+        if key not in _OPENAI_UNSUPPORTED_SCHEMA_KEYS
+    }
+    if result.get("type") == "object":
+        properties = result.get("properties", {})
+        result["properties"] = properties
+        result["required"] = list(properties)
+        result["additionalProperties"] = False
+    return result
+
+
 class OpenAIProvider:
     """Minimal HTTPX adapter using Responses Structured Outputs and Images edits."""
 
@@ -146,7 +179,7 @@ class OpenAIProvider:
                     "type": "json_schema",
                     "name": schema_name,
                     "strict": True,
-                    "schema": schema.model_json_schema(),
+                    "schema": _openai_strict_schema(schema.model_json_schema()),
                 }
             },
         }
