@@ -231,9 +231,10 @@ class MetaPublisherTests(unittest.TestCase):
 
         result, repeat, events = asyncio.run(run())
         self.assertEqual(result["status"], "ACTIVE_PENDING_REVIEW")
-        self.assertEqual(result["daily_budget_eur"], 5.0)
-        self.assertEqual(result["planned_total_eur"], 35.0)
-        self.assertEqual(result["budget_type"], "daily")
+        self.assertEqual(result["daily_budget_eur"], 0.0)
+        self.assertEqual(result["lifetime_budget_eur"], 5.0)
+        self.assertEqual(result["planned_total_eur"], 5.0)
+        self.assertEqual(result["budget_type"], "lifetime")
         self.assertEqual(repeat["reason"], "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED")
         self.assertEqual(sum(event[1] == "campaigns" for event in events), 1)
         self.assertEqual(sum(event[1] == "ads" for event in events), 1)
@@ -244,7 +245,7 @@ class MetaPublisherTests(unittest.TestCase):
         ]
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
-        self.assertEqual(adset_form["daily_budget"], ["500"])
+        self.assertEqual(adset_form["lifetime_budget"], ["500"])
         self.assertIn('"custom_event_type": "ADD_TO_CART"', adset_form["promoted_object"][0])
 
 

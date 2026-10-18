@@ -31,9 +31,10 @@ class MicroBudgetDecision(BaseModel):
     eligible: bool
     platform: Literal["meta"] = "meta"
     daily_budget_eur: float = 0.0
+    lifetime_budget_eur: float = 0.0
     planned_days: int = 7
     planned_total_eur: float = 0.0
-    budget_type: Literal["daily"] = "daily"
+    budget_type: Literal["lifetime"] = "lifetime"
     max_campaigns: int = 1
     product_id: str | None = None
     blockers: list[str] = Field(default_factory=list)
@@ -43,7 +44,7 @@ class MicroBudgetDecision(BaseModel):
 class MicroBudgetGate:
     """Checks one campaign's readiness; never relaxes the global dry-run lock."""
 
-    DAILY_BUDGET_EUR = 5.0
+    TOTAL_BUDGET_EUR = 5.0
     PLANNED_DAYS = 7
 
     def __init__(self, *, enabled: bool | None = None):
@@ -85,10 +86,9 @@ class MicroBudgetGate:
 
         return MicroBudgetDecision(
             eligible=not blockers,
-            daily_budget_eur=self.DAILY_BUDGET_EUR if not blockers else 0.0,
-            planned_total_eur=(
-                self.DAILY_BUDGET_EUR * self.PLANNED_DAYS if not blockers else 0.0
-            ),
+            daily_budget_eur=0.0,
+            lifetime_budget_eur=self.TOTAL_BUDGET_EUR if not blockers else 0.0,
+            planned_total_eur=self.TOTAL_BUDGET_EUR if not blockers else 0.0,
             product_id=product_id,
             blockers=blockers,
             live_submission_enabled=not blockers,

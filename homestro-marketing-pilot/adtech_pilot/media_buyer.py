@@ -592,19 +592,17 @@ class MetaAdLibraryClient:
 
 
 class MetaPublisher:
-    """Single-use Meta website-sales publisher with a €5/day, seven-day plan.
+    """Single-use Meta website-sales publisher capped at €5 total over seven days.
 
     Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
     account/assets pass preflight, the selected product is in the validated feed,
-    the creative passes its 85/100 quality checks, and the persistent one-shot
-    claim is acquired. New objects stay PAUSED until the final activation step.
-    The configured daily budget is €5 for a seven-day schedule. Meta may spend
-    more than the daily target on an individual day; the seven-day planned spend
-    is €35 before any platform delivery variance.
+    the creative passes its quality checks, and the persistent one-shot claim is
+    acquired. The ad set uses Meta's lifetime budget field, capping its total
+    allocation at €5 across the seven-day schedule.
     """
 
     ENDPOINT = "https://graph.facebook.com"
-    DAILY_BUDGET_CENTS = 500
+    LIFETIME_BUDGET_CENTS = 500
     API_VERSION_PATTERN = re.compile(r"^v\d+\.\d+$")
     ID_PATTERN = re.compile(r"^\d{4,30}$")
     ACCOUNT_PATTERN = re.compile(r"^act_\d{4,30}$")
@@ -753,6 +751,7 @@ class MetaPublisher:
         )
         headers = {"Authorization": f"Bearer {token}"}
         created_ids: dict[str, str] = {}
+        claim_acquired = False
         try:
             readiness = await self._preflight(
                 client,
@@ -772,15 +771,17 @@ class MetaPublisher:
                 return {"status": "blocked", "reason": "MICRO_BUDGET_PREFLIGHT_FAILED", "blockers": gate.blockers}
             if not await self.audit.claim_meta_micro_campaign(account_id, product_id):
                 return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
+            claim_acquired = True
 
             await self.audit.record(
                 "meta_micro_budget_claim",
                 {
                     "account_id": account_id,
                     "product_id": product_id,
-                    "daily_budget_eur": 5.0,
+                    "daily_budget_eur": 0.0,
+                    "lifetime_budget_eur": 5.0,
                     "planned_days": 7,
-                    "planned_total_eur": 35.0,
+                    "planned_total_eur": 5.0,
                 },
             )
             campaign = await self._post(
@@ -808,7 +809,7 @@ class MetaPublisher:
                 {
                     "name": f"Homestro DE AddToCart {product_id[:32]}",
                     "campaign_id": campaign,
-                    "daily_budget": str(self.DAILY_BUDGET_CENTS),
+                    "lifetime_budget": str(self.LIFETIME_BUDGET_CENTS),
                     "billing_event": "IMPRESSIONS",
                     "optimization_goal": "OFFSITE_CONVERSIONS",
                     "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
@@ -889,9 +890,10 @@ class MetaPublisher:
                 "adset_id": adset,
                 "ad_id": ad,
                 "product_id": product_id,
-                "budget_type": "daily",
-                "daily_budget_eur": 5.0,
-                "planned_total_eur": 35.0,
+                "budget_type": "lifetime",
+                "daily_budget_eur": 0.0,
+                "lifetime_budget_eur": 5.0,
+                "planned_total_eur": 5.0,
                 "scheduled_window_days": 7,
                 "dry_run": False,
                 "note": "Meta review must approve the ad; a campaign does not guarantee impressions or sales.",
@@ -905,13 +907,43 @@ class MetaPublisher:
         except Exception as exc:
             await self._pause_created(client, created_ids, headers)
             await self.audit.update_meta_micro_campaign(status=f"FAILED_{type(exc).__name__}", campaign_id=created_ids.get("campaign_id"))
-            # Never expose provider response bodies, request details, or tokens in logs/reports.
-            return {
+            # Keep provider details bounded and non-secret so a failure can be diagnosed.
+            details: dict[str, Any] = {
                 "status": "failed_closed",
                 "error_type": type(exc).__name__,
                 "created_objects_paused": bool(created_ids),
-                "one_campaign_allowance_consumed": bool(created_ids),
+                "one_campaign_allowance_consumed": claim_acquired,
             }
+            if isinstance(exc, httpx.HTTPStatusError):
+                response = exc.response
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = {}
+                error = body.get("error", {}) if isinstance(body, dict) else {}
+                if not isinstance(error, dict):
+                    error = {}
+                tail = urlsplit(str(exc.request.url)).path.rstrip("/").rsplit("/", 1)[-1]
+                details["error_type"] = "MetaHTTPError"
+                details["http_status"] = response.status_code
+                details["stage"] = {
+                    "campaigns": "campaign_create",
+                    "adsets": "adset_create",
+                    "adimages": "image_upload",
+                    "adcreatives": "creative_create",
+                    "ads": "ad_create",
+                }.get(tail, "preflight_or_activation")
+                for source, target in (
+                    ("code", "meta_error_code"),
+                    ("error_subcode", "meta_error_subcode"),
+                ):
+                    value = error.get(source)
+                    if isinstance(value, int):
+                        details[target] = value
+                error_type = error.get("type")
+                if isinstance(error_type, str):
+                    details["meta_error_type"] = error_type[:80]
+            return details
         finally:
             if own_client:
                 await client.aclose()
