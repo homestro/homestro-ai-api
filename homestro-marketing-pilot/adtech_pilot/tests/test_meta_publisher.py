@@ -204,6 +204,8 @@ class MetaPublisherTests(unittest.TestCase):
                     return httpx.Response(200, json={"data": [{"id": "5555", "is_unavailable": False}]})
                 if request.method == "GET" and path == "4444":
                     return httpx.Response(200, json={"id": "4444", "name": "Homestro"})
+                if request.method == "GET" and path == "campaigns":
+                    return httpx.Response(200, json={"data": []})
                 if path == "adimages":
                     return httpx.Response(200, json={"images": {"approved.png": {"hash": "imagehash"}}})
                 ids = {"campaigns": "campaign-1", "adsets": "adset-1", "adcreatives": "creative-1", "ads": "ad-1"}
@@ -215,6 +217,8 @@ class MetaPublisherTests(unittest.TestCase):
 
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             audit = PlanAuditStore(self.root / "audit-live.sqlite3")
+            await audit.claim_meta_micro_campaign("act_12345", "sku-1")
+            await audit.update_meta_micro_campaign(status="FAILED_HTTPStatusError")
             publisher = MetaPublisher(audit, client=client, env=self.env)
             result = await publisher.publish_one(
                 creative=self.creative,

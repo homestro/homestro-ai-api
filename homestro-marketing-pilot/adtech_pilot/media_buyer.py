@@ -336,16 +336,34 @@ class PlanAuditStore:
 
         await asyncio.to_thread(update)
 
-    async def has_meta_micro_campaign_claim(self) -> bool:
-        def read() -> bool:
+    async def get_meta_micro_campaign_claim(self) -> dict[str, str | None] | None:
+        def read() -> dict[str, str | None] | None:
             with closing(self._connect()) as connection:
                 row = connection.execute(
-                    "SELECT 1 FROM meta_micro_campaign_claim WHERE slot=?",
+                    "SELECT status,campaign_id FROM meta_micro_campaign_claim WHERE slot=?",
                     ("single_live_meta_campaign",),
                 ).fetchone()
-            return row is not None
+            if row is None:
+                return None
+            return {"status": str(row[0]), "campaign_id": row[1]}
 
         return await asyncio.to_thread(read)
+
+    async def release_failed_claim_without_campaign(self) -> bool:
+        """Release only a known failed HTTP attempt that produced no campaign ID."""
+        def delete() -> bool:
+            with closing(self._connect()) as connection, connection:
+                cursor = connection.execute(
+                    "DELETE FROM meta_micro_campaign_claim "
+                    "WHERE slot=? AND status='FAILED_HTTPStatusError' AND campaign_id IS NULL",
+                    ("single_live_meta_campaign",),
+                )
+            return cursor.rowcount == 1
+
+        return await asyncio.to_thread(delete)
+
+    async def has_meta_micro_campaign_claim(self) -> bool:
+        return await self.get_meta_micro_campaign_claim() is not None
 
     async def record(self, kind: str, payload: BaseModel | dict[str, Any]) -> str:
         serialized = (
@@ -742,9 +760,6 @@ class MetaPublisher:
             return {"status": "blocked", "reason": "PRODUCT_NOT_IN_VALIDATED_FEED"}
         if str(self.env.get("MICRO_BUDGET_PRODUCT_ID", "")).strip() != product_id:
             return {"status": "blocked", "reason": "PRODUCT_IS_NOT_EXPLICITLY_SELECTED"}
-        if await self.audit.has_meta_micro_campaign_claim():
-            return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
-
         own_client = self.client is None
         client = self.client or httpx.AsyncClient(
             timeout=httpx.Timeout(35, connect=8), follow_redirects=False
@@ -753,6 +768,35 @@ class MetaPublisher:
         created_ids: dict[str, str] = {}
         claim_acquired = False
         try:
+            prior_claim = await self.audit.get_meta_micro_campaign_claim()
+            if prior_claim is not None:
+                if (
+                    prior_claim["status"] == "FAILED_HTTPStatusError"
+                    and prior_claim["campaign_id"] is None
+                ):
+                    reconciliation = await self._reconcile_failed_claim(
+                        client, account_id, headers, product_id
+                    )
+                    if reconciliation == "not_found":
+                        released = await self.audit.release_failed_claim_without_campaign()
+                        if not released:
+                            return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
+                        await self.audit.record(
+                            "meta_micro_campaign_claim_released",
+                            {"reason": "Meta confirmed no campaign exists", "product_id": product_id},
+                        )
+                    else:
+                        return {
+                            "status": "blocked",
+                            "reason": (
+                                "PRIOR_META_CAMPAIGN_FOUND"
+                                if reconciliation == "found"
+                                else "PRIOR_CAMPAIGN_RECONCILIATION_INCOMPLETE"
+                            ),
+                        }
+                else:
+                    return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
+
             readiness = await self._preflight(
                 client,
                 headers=headers,
@@ -947,6 +991,39 @@ class MetaPublisher:
         finally:
             if own_client:
                 await client.aclose()
+
+    async def _reconcile_failed_claim(
+        self,
+        client: httpx.AsyncClient,
+        account_id: str,
+        headers: dict[str, str],
+        product_id: str,
+    ) -> str:
+        """Read Meta's campaign list before releasing an ambiguous local claim."""
+        result = await self._get(
+            client,
+            f"{account_id}/campaigns",
+            headers,
+            {"fields": "id,name,status", "limit": "100"},
+        )
+        rows = result.get("data")
+        if not isinstance(rows, list):
+            return "incomplete"
+        expected_name = f"Homestro Micro Test {product_id[:40]}"
+        for row in rows:
+            if not isinstance(row, dict) or row.get("name") != expected_name:
+                continue
+            campaign_id = str(row.get("id", ""))
+            if not campaign_id:
+                return "incomplete"
+            await self.audit.update_meta_micro_campaign(
+                status="RECONCILED_EXISTING_CAMPAIGN", campaign_id=campaign_id
+            )
+            return "found"
+        paging = result.get("paging")
+        if isinstance(paging, dict) and paging.get("next"):
+            return "incomplete"
+        return "not_found"
 
     def _configuration(
         self,

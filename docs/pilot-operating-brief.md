@@ -14,8 +14,11 @@ Commit `f6c36c74eee3823828c7bfaa4d8977d3cb06f85d` changes the one-shot Germany t
 campaign from €5/day (€35 nominal over seven days) to a €5 lifetime budget over seven
 days. Railway production deployment `3c371e1a-5be8-40e8-9fe7-59eaac8f777d` is SUCCESS
 and online. `ALLOW_MICRO_BUDGET` is enabled for the requested test; a campaign or
-delivery has not yet been confirmed. The earlier publisher error and persistent
-single-use claim must be reconciled before claiming a successful launch.
+delivery has not yet been confirmed. The previous publisher error left a single-use claim without a returned campaign ID.
+The new publisher performs a read-only exact-name campaign lookup and releases that
+claim only if Meta confirms no such campaign exists. If a campaign is found or Meta's
+lookup is incomplete, it keeps the claim and blocks another creation. No campaign or
+delivery is yet confirmed.
 
 The scheduler's `NO_VERIFIED_CHANNEL_METRICS_LOADER` status applies to the separate
 campaign-optimization path, which remains read-only. The campaign creation path uses
