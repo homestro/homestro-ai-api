@@ -896,7 +896,7 @@ class MetaPublisher:
                             "geo_locations": {"countries": ["DE"]},
                             "age_min": 18,
                             "publisher_platforms": ["facebook", "instagram"],
-                            "facebook_positions": ["feed", "marketplace", "story", "reels"],
+                            "facebook_positions": ["feed", "marketplace", "story", "facebook_reels"],
                             "instagram_positions": ["stream", "story", "reels"],
                         }
                     ),
