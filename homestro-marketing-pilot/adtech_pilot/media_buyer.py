@@ -767,6 +767,7 @@ class MetaPublisher:
         headers = {"Authorization": f"Bearer {token}"}
         created_ids: dict[str, str] = {}
         claim_acquired = False
+        resumed_campaign: str | None = None
         try:
             prior_claim = await self.audit.get_meta_micro_campaign_claim()
             if prior_claim is not None:
@@ -794,6 +795,21 @@ class MetaPublisher:
                                 else "PRIOR_CAMPAIGN_RECONCILIATION_INCOMPLETE"
                             ),
                         }
+                elif (
+                    prior_claim["status"] == "FAILED_HTTPStatusError"
+                    and prior_claim["campaign_id"] is not None
+                ):
+                    resumed_campaign = str(prior_claim["campaign_id"])
+                    reconciliation = await self._reconcile_failed_campaign(
+                        client, headers, resumed_campaign
+                    )
+                    if reconciliation != "ready":
+                        return {
+                            "status": "blocked",
+                            "reason": "PRIOR_CAMPAIGN_NOT_SAFE_TO_RESUME",
+                            "campaign_id": resumed_campaign,
+                            "reconciliation": reconciliation,
+                        }
                 else:
                     return {
                         "status": "blocked",
@@ -818,33 +834,39 @@ class MetaPublisher:
             )
             if not gate.eligible:
                 return {"status": "blocked", "reason": "MICRO_BUDGET_PREFLIGHT_FAILED", "blockers": gate.blockers}
-            if not await self.audit.claim_meta_micro_campaign(account_id, product_id):
-                return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
             claim_acquired = True
-
-            await self.audit.record(
-                "meta_micro_budget_claim",
-                {
-                    "account_id": account_id,
-                    "product_id": product_id,
-                    "daily_budget_eur": 0.0,
-                    "lifetime_budget_eur": 5.0,
-                    "planned_days": 7,
-                    "planned_total_eur": 5.0,
-                },
-            )
-            campaign = await self._post(
-                client,
-                f"{account_id}/campaigns",
-                headers,
-                {
-                    "name": f"Homestro Micro Test {product_id[:40]}",
-                    "objective": "OUTCOME_SALES",
-                    "status": "PAUSED",
-                    "special_ad_categories": "[]",
-                    "is_adset_budget_sharing_enabled": "false",
-                },
-            )
+            if resumed_campaign is None:
+                if not await self.audit.claim_meta_micro_campaign(account_id, product_id):
+                    return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
+                await self.audit.record(
+                    "meta_micro_budget_claim",
+                    {
+                        "account_id": account_id,
+                        "product_id": product_id,
+                        "daily_budget_eur": 0.0,
+                        "lifetime_budget_eur": 5.0,
+                        "planned_days": 7,
+                        "planned_total_eur": 5.0,
+                    },
+                )
+                campaign = await self._post(
+                    client,
+                    f"{account_id}/campaigns",
+                    headers,
+                    {
+                        "name": f"Homestro Micro Test {product_id[:40]}",
+                        "objective": "OUTCOME_SALES",
+                        "status": "PAUSED",
+                        "special_ad_categories": "[]",
+                        "is_adset_budget_sharing_enabled": "false",
+                    },
+                )
+            else:
+                campaign = resumed_campaign
+                await self.audit.record(
+                    "meta_micro_campaign_resume",
+                    {"campaign_id": campaign, "product_id": product_id, "status": "paused"},
+                )
             created_ids["campaign_id"] = campaign
             await self.audit.update_meta_micro_campaign(status="CAMPAIGN_CREATED_PAUSED", campaign_id=campaign)
 
@@ -993,10 +1015,48 @@ class MetaPublisher:
                 error_type = error.get("type")
                 if isinstance(error_type, str):
                     details["meta_error_type"] = error_type[:80]
+                for source, target in (
+                    ("error_user_title", "meta_error_title"),
+                    ("error_user_msg", "meta_error_message"),
+                    ("message", "meta_error_summary"),
+                ):
+                    value = error.get(source)
+                    if isinstance(value, str):
+                        details[target] = " ".join(value.split())[:240]
             return details
         finally:
             if own_client:
                 await client.aclose()
+
+    async def _reconcile_failed_campaign(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        campaign_id: str,
+    ) -> str:
+        """Resume only a confirmed paused campaign that has no ad sets yet."""
+        campaign = await self._get(
+            client, campaign_id, headers, {"fields": "id,status"}
+        )
+        if str(campaign.get("id", "")) != campaign_id:
+            return "campaign_mismatch"
+        if str(campaign.get("status", "")).upper() != "PAUSED":
+            return "campaign_not_paused"
+        adsets = await self._get(
+            client,
+            f"{campaign_id}/adsets",
+            headers,
+            {"fields": "id,name,status", "limit": "100"},
+        )
+        rows = adsets.get("data")
+        if not isinstance(rows, list):
+            return "adsets_incomplete"
+        if rows:
+            return "adsets_already_exist"
+        paging = adsets.get("paging")
+        if isinstance(paging, dict) and paging.get("next"):
+            return "adsets_incomplete"
+        return "ready"
 
     async def _reconcile_failed_claim(
         self,
