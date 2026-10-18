@@ -610,7 +610,7 @@ class MetaAdLibraryClient:
 
 
 class MetaPublisher:
-    """Single-use Meta website-sales publisher capped at €5 total over seven days.
+    """Single-use Meta website-sales publisher capped at €5 total over five days.
 
     Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
     account/assets pass preflight, the selected product is in the validated feed,
@@ -845,7 +845,7 @@ class MetaPublisher:
                         "product_id": product_id,
                         "daily_budget_eur": 0.0,
                         "lifetime_budget_eur": 5.0,
-                        "planned_days": 7,
+                        "planned_days": MicroBudgetGate.PLANNED_DAYS,
                         "planned_total_eur": 5.0,
                     },
                 )
@@ -873,7 +873,7 @@ class MetaPublisher:
             from datetime import timedelta
 
             starts = datetime.now(timezone.utc) + timedelta(minutes=15)
-            ends = starts + timedelta(days=7)
+            ends = starts + timedelta(days=MicroBudgetGate.PLANNED_DAYS)
             adset = await self._post(
                 client,
                 f"{account_id}/adsets",
@@ -966,7 +966,7 @@ class MetaPublisher:
                 "daily_budget_eur": 0.0,
                 "lifetime_budget_eur": 5.0,
                 "planned_total_eur": 5.0,
-                "scheduled_window_days": 7,
+                "scheduled_window_days": MicroBudgetGate.PLANNED_DAYS,
                 "dry_run": False,
                 "note": "Meta review must approve the ad; a campaign does not guarantee impressions or sales.",
             }
