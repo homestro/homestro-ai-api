@@ -837,6 +837,7 @@ class MetaPublisher:
                     "objective": "OUTCOME_SALES",
                     "status": "PAUSED",
                     "special_ad_categories": "[]",
+                    "is_adset_budget_sharing_enabled": "false",
                 },
             )
             created_ids["campaign_id"] = campaign
