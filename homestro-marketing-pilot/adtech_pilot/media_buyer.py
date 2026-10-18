@@ -795,7 +795,12 @@ class MetaPublisher:
                             ),
                         }
                 else:
-                    return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
+                    return {
+                        "status": "blocked",
+                        "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED",
+                        "campaign_id": prior_claim["campaign_id"],
+                        "claim_status": prior_claim["status"],
+                    }
 
             readiness = await self._preflight(
                 client,
