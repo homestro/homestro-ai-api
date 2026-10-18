@@ -20,7 +20,12 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from .creative_factory import CreativeFactory, GeneratedCreative
-from .micro_budget import MetaAccountReadiness, MicroBudgetGate
+from .micro_budget import (
+    MetaAccountReadiness,
+    MicroBudgetGate,
+    configured_daily_budget_limit_eur,
+    live_ads_dry_run,
+)
 
 
 class Platform(StrEnum):
@@ -1125,11 +1130,18 @@ class MetaPublisher:
 
     def _configuration(
         self,
-    ) -> tuple[str, str, str, str, str, str, str] | dict[str, str]:
+    ) -> tuple[str, str, str, str, str, str, str] | dict[str, Any]:
         if self.env.get("ALLOW_MICRO_BUDGET", "false").lower() != "true":
             return {"reason": "MICRO_BUDGET_NOT_ENABLED"}
-        if self.env.get("DRY_RUN", "true").lower() != "false":
+        if live_ads_dry_run(self.env):
             return {"reason": "DRY_RUN_ENABLED"}
+        daily_budget_limit = configured_daily_budget_limit_eur(self.env)
+        if daily_budget_limit < MicroBudgetGate.DAILY_BUDGET_EUR:
+            return {
+                "reason": "MICRO_BUDGET_DAILY_LIMIT_TOO_LOW",
+                "required_daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                "configured_daily_budget_limit_eur": daily_budget_limit,
+            }
         if self.env.get("META_BILLING_VERIFIED", "false").lower() != "true":
             return {"reason": "META_BILLING_NOT_MANUALLY_VERIFIED"}
         token = self.env.get("META_ACCESS_TOKEN", "").strip()

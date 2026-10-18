@@ -54,6 +54,8 @@ class MetaPublisherTests(unittest.TestCase):
         self.env = {
             "ALLOW_MICRO_BUDGET": "true",
             "DRY_RUN": "false",
+            "PILOT_AD_DRY_RUN": "false",
+            "PILOT_AD_MAX_BUDGET_EUR": "5.0",
             "META_ACCESS_TOKEN": "test-token",
             "META_AD_ACCOUNT_ID": "act_12345",
             "META_PIXEL_ID": "5555",
@@ -69,6 +71,22 @@ class MetaPublisherTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_live_publisher_requires_both_kill_switches_and_full_daily_cap(self):
+        audit = PlanAuditStore(self.root / "gate-check.sqlite3")
+        publisher = MetaPublisher(audit, env=self.env)
+        self.assertNotIsInstance(publisher._configuration(), dict)
+
+        switches_only = {**self.env, "PILOT_AD_DRY_RUN": "true"}
+        self.assertEqual(
+            MetaPublisher(audit, env=switches_only)._configuration()["reason"],
+            "DRY_RUN_ENABLED",
+        )
+
+        no_budget = {**self.env, "PILOT_AD_MAX_BUDGET_EUR": "0"}
+        blocked = MetaPublisher(audit, env=no_budget)._configuration()
+        self.assertEqual(blocked["reason"], "MICRO_BUDGET_DAILY_LIMIT_TOO_LOW")
+        self.assertEqual(blocked["configured_daily_budget_limit_eur"], 0.0)
 
     def test_defaults_block_without_any_meta_api_request(self):
         async def run():
@@ -206,6 +224,8 @@ class MetaPublisherTests(unittest.TestCase):
                     return httpx.Response(200, json={"id": "4444", "name": "Homestro"})
                 if request.method == "GET" and path == "campaigns":
                     return httpx.Response(200, json={"data": []})
+                if request.method == "GET" and path == "adsets":
+                    return httpx.Response(200, json={"data": []})
                 if path == "adimages":
                     return httpx.Response(200, json={"images": {"approved.png": {"hash": "imagehash"}}})
                 ids = {"campaigns": "campaign-1", "adsets": "adset-1", "adcreatives": "creative-1", "ads": "ad-1"}
@@ -235,21 +255,24 @@ class MetaPublisherTests(unittest.TestCase):
 
         result, repeat, events = asyncio.run(run())
         self.assertEqual(result["status"], "ACTIVE_PENDING_REVIEW")
-        self.assertEqual(result["daily_budget_eur"], 0.0)
-        self.assertEqual(result["lifetime_budget_eur"], 5.0)
-        self.assertEqual(result["planned_total_eur"], 5.0)
-        self.assertEqual(result["budget_type"], "lifetime")
+        self.assertEqual(result["daily_budget_eur"], 5.0)
+        self.assertEqual(result["lifetime_budget_eur"], 0.0)
+        self.assertEqual(result["planned_total_eur"], 35.0)
+        self.assertEqual(result["budget_type"], "daily")
         self.assertEqual(repeat["reason"], "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED")
-        self.assertEqual(sum(event[1] == "campaigns" for event in events), 1)
-        self.assertEqual(sum(event[1] == "ads" for event in events), 1)
+        self.assertEqual(
+            sum(event[0] == "POST" and event[1] == "campaigns" for event in events),
+            1,
+        )
+        self.assertEqual(sum(event[0] == "POST" and event[1] == "ads" for event in events), 1)
         created_forms = [
             (event, parse_qs(event[2]))
             for event in events
-            if event[1] in {"campaigns", "adsets", "ads"}
+            if event[0] == "POST" and event[1] in {"campaigns", "adsets", "ads"}
         ]
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
-        self.assertEqual(adset_form["lifetime_budget"], ["500"])
+        self.assertEqual(adset_form["daily_budget"], ["500"])
         self.assertIn('"custom_event_type": "ADD_TO_CART"', adset_form["promoted_object"][0])
 
 

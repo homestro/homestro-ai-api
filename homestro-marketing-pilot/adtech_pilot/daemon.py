@@ -22,7 +22,12 @@ from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
 from .media_buyer import MetaAdLibraryClient, MetaPublisher, PlanAuditStore
-from .micro_budget import MetaAccountReadiness, MicroBudgetGate
+from .micro_budget import (
+    MetaAccountReadiness,
+    MicroBudgetGate,
+    configured_daily_budget_limit_eur,
+    live_ads_dry_run,
+)
 
 logger = logging.getLogger("uvicorn.error")
 Job = Callable[[], Awaitable[dict[str, Any]]]
@@ -160,11 +165,27 @@ class PilotDaemon:
                         delay,
                     )
 
+            daily_budget_limit = configured_daily_budget_limit_eur()
             report = {
                 "generated_at": datetime.now(UTC).isoformat(),
                 "cycle_started_at": cycle_started,
-                "dry_run": True,
-                "budget_limit_eur": 0.0,
+                "dry_run": live_ads_dry_run(),
+                "budget_limit_eur": daily_budget_limit,
+                "budget_type": "daily",
+                "scheduled_window_days": MicroBudgetGate.PLANNED_DAYS,
+                "planned_total_budget_eur": round(
+                    daily_budget_limit * MicroBudgetGate.PLANNED_DAYS, 2
+                ),
+                "micro_budget_submission_enabled": (
+                    os.getenv("ALLOW_MICRO_BUDGET", "false").strip().lower() == "true"
+                    and not live_ads_dry_run()
+                    and daily_budget_limit >= MicroBudgetGate.DAILY_BUDGET_EUR
+                ),
+                "optimizer": {
+                    "dry_run": True,
+                    "budget_limit_eur": 0.0,
+                    "execution": "READ_ONLY",
+                },
                 "jobs": self._last_results,
             }
             try:
@@ -411,16 +432,34 @@ class PilotDaemon:
             account=account,
             product_id=os.getenv("MICRO_BUDGET_PRODUCT_ID"),
             product_ids_in_feed={str(p.get("id")) for p in self._latest_products},
-            # This scheduled pass is intentionally read-only. It never creates ads.
+            # This optimization pass is intentionally read-only and cannot publish.
             dry_run=True,
         )
+        daily_budget_limit = configured_daily_budget_limit_eur()
         return {
             "status": "blocked",
             "reason": "NO_VERIFIED_CHANNEL_METRICS_LOADER",
-            "execution": "DRY_RUN_ONLY",
-            "budget_limit_eur": 0.0,
+            "execution": "READ_ONLY_PREFLIGHT_ONLY",
+            "optimizer_dry_run": True,
+            "optimizer_budget_limit_eur": 0.0,
+            "campaign_submission_config": {
+                "dry_run": live_ads_dry_run(),
+                "daily_budget_limit_eur": daily_budget_limit,
+                "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                "scheduled_window_days": MicroBudgetGate.PLANNED_DAYS,
+                "planned_total_budget_eur": round(
+                    MicroBudgetGate.DAILY_BUDGET_EUR
+                    * MicroBudgetGate.PLANNED_DAYS,
+                    2,
+                ),
+                "enabled_by_config": (
+                    os.getenv("ALLOW_MICRO_BUDGET", "false").strip().lower() == "true"
+                    and not live_ads_dry_run()
+                    and daily_budget_limit >= MicroBudgetGate.DAILY_BUDGET_EUR
+                ),
+            },
             "meta_ads_preflight": meta_preflight,
-            "micro_budget_preflight": micro_budget.model_dump(mode="json"),
+            "optimizer_micro_budget_preflight": micro_budget.model_dump(mode="json"),
             "micro_budget_execution": (
                 "READ_ONLY_PREFLIGHT_ONLY"
                 if meta_preflight.get("status") == "checked"

@@ -50,13 +50,13 @@ class DaemonTests(unittest.TestCase):
                 result = await PilotDaemon(MemoryAudit())._metrics_job()
             publisher_cls.return_value.check_readiness.assert_awaited_once()
             self.assertEqual(result["meta_ads_preflight"]["status"], "checked")
-            self.assertIn("DRY_RUN_ENABLED", result["micro_budget_preflight"]["blockers"])
-            self.assertFalse(result["micro_budget_preflight"]["live_submission_enabled"])
+            self.assertIn("DRY_RUN_ENABLED", result["optimizer_micro_budget_preflight"]["blockers"])
+            self.assertFalse(result["optimizer_micro_budget_preflight"]["live_submission_enabled"])
             self.assertEqual(result["micro_budget_execution"], "READ_ONLY_PREFLIGHT_ONLY")
 
         asyncio.run(run())
 
-    def test_one_cycle_runs_independent_jobs_and_records_zero_spend_heartbeat(self):
+    def test_one_cycle_reports_campaign_budget_separately_from_optimizer(self):
         async def run():
             stop = asyncio.Event()
             audit = MemoryAudit()
@@ -66,20 +66,34 @@ class DaemonTests(unittest.TestCase):
                     stop.set()
                 return {"status": "ok", "job": name}
 
-            daemon = PilotDaemon(
-                audit,
-                heartbeat_interval_seconds=1,
-                reporter=FakeReporter(),
-                feed_job=lambda: done("feed"),
-                merchant_job=lambda: done("merchant"),
-                competitor_job=lambda: done("competitor"),
-                creative_job=lambda: done("creative"),
-                metrics_job=lambda: done("metrics"),
-            )
-            await daemon.run(stop)
+            with patch.dict(
+                "os.environ",
+                {
+                    "DRY_RUN": "false",
+                    "PILOT_AD_DRY_RUN": "false",
+                    "PILOT_AD_MAX_BUDGET_EUR": "5.0",
+                    "ALLOW_MICRO_BUDGET": "true",
+                },
+                clear=False,
+            ):
+                daemon = PilotDaemon(
+                    audit,
+                    heartbeat_interval_seconds=1,
+                    reporter=FakeReporter(),
+                    feed_job=lambda: done("feed"),
+                    merchant_job=lambda: done("merchant"),
+                    competitor_job=lambda: done("competitor"),
+                    creative_job=lambda: done("creative"),
+                    metrics_job=lambda: done("metrics"),
+                )
+                await daemon.run(stop)
             heartbeat = audit.records[-1][1]
-            self.assertEqual(heartbeat["budget_limit_eur"], 0.0)
-            self.assertTrue(heartbeat["dry_run"])
+            self.assertEqual(heartbeat["budget_limit_eur"], 5.0)
+            self.assertFalse(heartbeat["dry_run"])
+            self.assertEqual(heartbeat["planned_total_budget_eur"], 35.0)
+            self.assertTrue(heartbeat["micro_budget_submission_enabled"])
+            self.assertTrue(heartbeat["optimizer"]["dry_run"])
+            self.assertEqual(heartbeat["optimizer"]["budget_limit_eur"], 0.0)
             self.assertEqual(len(heartbeat["jobs"]), 5)
 
         asyncio.run(run())

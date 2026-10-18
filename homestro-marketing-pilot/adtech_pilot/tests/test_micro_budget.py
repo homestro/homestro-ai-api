@@ -1,6 +1,11 @@
 import unittest
 
-from adtech_pilot.micro_budget import MetaAccountReadiness, MicroBudgetGate
+from adtech_pilot.micro_budget import (
+    MetaAccountReadiness,
+    MicroBudgetGate,
+    configured_daily_budget_limit_eur,
+    live_ads_dry_run,
+)
 
 
 class MicroBudgetGateTests(unittest.TestCase):
@@ -13,6 +18,31 @@ class MicroBudgetGateTests(unittest.TestCase):
             page_id="123",
             pixel_id="456",
             pixel_access_verified=True,
+        )
+
+    def test_runtime_controls_require_both_switches_and_honor_hard_cap(self):
+        self.assertTrue(live_ads_dry_run({"DRY_RUN": "false"}))
+        self.assertTrue(
+            live_ads_dry_run(
+                {"DRY_RUN": "false", "PILOT_AD_DRY_RUN": "true"}
+            )
+        )
+        self.assertFalse(
+            live_ads_dry_run(
+                {"DRY_RUN": "false", "PILOT_AD_DRY_RUN": "false"}
+            )
+        )
+        self.assertEqual(
+            configured_daily_budget_limit_eur(
+                {"PILOT_AD_MAX_BUDGET_EUR": "1000"}
+            ),
+            5.0,
+        )
+        self.assertEqual(
+            configured_daily_budget_limit_eur(
+                {"PILOT_AD_MAX_BUDGET_EUR": "invalid"}
+            ),
+            0.0,
         )
 
     def test_default_gate_is_closed_and_spend_is_zero(self):
@@ -34,11 +64,11 @@ class MicroBudgetGateTests(unittest.TestCase):
         )
         self.assertTrue(result.eligible)
         self.assertEqual(result.platform, "meta")
-        self.assertEqual(result.daily_budget_eur, 0.0)
-        self.assertEqual(result.lifetime_budget_eur, 5.0)
+        self.assertEqual(result.daily_budget_eur, 5.0)
+        self.assertEqual(result.lifetime_budget_eur, 0.0)
         self.assertEqual(result.planned_days, 7)
-        self.assertEqual(result.planned_total_eur, 5.0)
-        self.assertEqual(result.budget_type, "lifetime")
+        self.assertEqual(result.planned_total_eur, 35.0)
+        self.assertEqual(result.budget_type, "daily")
         self.assertEqual(result.max_campaigns, 1)
         self.assertTrue(result.live_submission_enabled)
 

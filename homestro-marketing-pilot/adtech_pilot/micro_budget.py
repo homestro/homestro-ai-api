@@ -1,16 +1,39 @@
-"""Fail-closed readiness gate for a single, capped Meta test campaign.
-
-This module deliberately does not submit ads. Campaign creation is a multi-object
-Meta API mutation and no approved publisher/account configuration is present yet.
-It produces a readiness decision for an explicitly configured, verified account.
-"""
+"""Readiness helpers and a hard-capped gate for the Meta test campaign."""
 
 from __future__ import annotations
 
+import math
 import os
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+MAX_MICRO_DAILY_BUDGET_EUR = 5.0
+
+
+def live_ads_dry_run(env: Mapping[str, str] | None = None) -> bool:
+    """Require both live-ad kill switches to be explicitly set to false."""
+    values = os.environ if env is None else env
+    global_value = values.get("DRY_RUN", "true").strip().lower()
+    pilot_value = values.get("PILOT_AD_DRY_RUN", "true").strip().lower()
+    return global_value != "false" or pilot_value != "false"
+
+
+def configured_daily_budget_limit_eur(env: Mapping[str, str] | None = None) -> float:
+    """Read the daily cap; malformed values fail closed and the cap is €5."""
+    values = os.environ if env is None else env
+    raw_value = values.get(
+        "PILOT_AD_MAX_BUDGET_EUR",
+        values.get("MARKETING_BUDGET_LIMIT", "0"),
+    ).strip()
+    try:
+        amount = float(raw_value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(amount) or amount < 0:
+        return 0.0
+    return min(amount, MAX_MICRO_DAILY_BUDGET_EUR)
 
 
 class MetaAccountReadiness(BaseModel):
@@ -42,9 +65,9 @@ class MicroBudgetDecision(BaseModel):
 
 
 class MicroBudgetGate:
-    """Checks one campaign's readiness; never relaxes the global dry-run lock."""
+    """Checks one campaign's readiness under the fixed €5 daily ceiling."""
 
-    DAILY_BUDGET_EUR = 5.0
+    DAILY_BUDGET_EUR = MAX_MICRO_DAILY_BUDGET_EUR
     PLANNED_DAYS = 7
     TOTAL_BUDGET_EUR = DAILY_BUDGET_EUR * PLANNED_DAYS
 

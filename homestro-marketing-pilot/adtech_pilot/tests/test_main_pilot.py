@@ -75,8 +75,8 @@ class MainPilotTests(unittest.TestCase):
         self.assertEqual(response.json()["max_budget_limit_eur"], 0)
         self.assertFalse(response.json()["mutations_enabled"])
 
-    def test_spend_guards_cannot_be_overridden_by_environment(self):
-        os.environ["DRY_RUN"] = "False"
+    def test_health_reads_explicit_live_controls_and_keeps_five_euro_cap(self):
+        os.environ["DRY_RUN"] = "false"
         os.environ["MARKETING_BUDGET_LIMIT"] = "1000"
         os.environ["PILOT_AD_DRY_RUN"] = "false"
         os.environ["PILOT_AD_MAX_BUDGET_EUR"] = "1000"
@@ -89,8 +89,25 @@ class MainPilotTests(unittest.TestCase):
                 return await client.get("/healthz")
 
         response = asyncio.run(run())
+        self.assertFalse(response.json()["dry_run"])
+        self.assertEqual(response.json()["max_budget_limit_eur"], 5.0)
+        # No optimizer adapter is configured, so this does not claim a mutation.
+        self.assertFalse(response.json()["mutations_enabled"])
+
+    def test_either_kill_switch_keeps_optimizer_dry(self):
+        os.environ["DRY_RUN"] = "false"
+        os.environ["PILOT_AD_DRY_RUN"] = "true"
+        os.environ["PILOT_AD_MAX_BUDGET_EUR"] = "5"
+        app = create_app(admin_key="test-admin-key-with-at-least-32-characters")
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get("/healthz")
+
+        response = asyncio.run(run())
         self.assertTrue(response.json()["dry_run"])
-        self.assertEqual(response.json()["max_budget_limit_eur"], 0.0)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from .media_buyer import (
     autopilot_loop,
     build_optimization_plan,
 )
+from .micro_budget import configured_daily_budget_limit_eur, live_ads_dry_run
 
 ADMIN_HEADER = APIKeyHeader(name="X-Pilot-Admin-Key", auto_error=False)
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
@@ -90,9 +91,10 @@ def create_app(
     if len(admin_key) < 32:
         raise RuntimeError("PILOT_ADMIN_KEY must contain at least 32 characters")
     product_feed = ProductFeedManager()
-    # This PR is permanently fail-closed. Deployment variables cannot raise spend.
-    dry_run = True
-    max_budget = 0.0
+    # Live execution requires both Railway kill switches off and remains capped
+    # at the explicitly configured daily limit (hard-capped at €5).
+    dry_run = live_ads_dry_run()
+    max_budget = configured_daily_budget_limit_eur()
     execution = AdExecutionEngine(dry_run=dry_run, max_budget_limit=max_budget)
     adapters = platform_adapters or {}
     audit = PlanAuditStore(
@@ -193,9 +195,11 @@ def create_app(
             "daemon_enabled": os.getenv("PILOT_DAEMON_ENABLED", "true").lower()
             == "true",
             "micro_budget_arm_requested": (
-                os.getenv("ALLOW_MICRO_BUDGET", "false").lower() == "true"
-                and os.getenv("DRY_RUN", "true").lower() == "false"
+                os.getenv("ALLOW_MICRO_BUDGET", "false").strip().lower() == "true"
+                and not live_ads_dry_run()
+                and max_budget >= 5.0
             ),
+            "micro_budget_daily_budget_limit_eur": max_budget,
             "micro_budget_daily_budget_eur": 5.0,
             "micro_budget_window_days": 7,
             "micro_budget_planned_total_eur": 35.0,
