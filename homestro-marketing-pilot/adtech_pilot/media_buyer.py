@@ -610,17 +610,16 @@ class MetaAdLibraryClient:
 
 
 class MetaPublisher:
-    """Single-use Meta website-sales publisher capped at €5 total over five days.
+    """Single-use Meta website-sales pilot with a €5/day, seven-day allowance.
 
     Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
     account/assets pass preflight, the selected product is in the validated feed,
     the creative passes its quality checks, and the persistent one-shot claim is
-    acquired. The ad set uses Meta's lifetime budget field, capping its total
-    allocation at €5 across the seven-day schedule.
+    acquired. The ad set uses a €5 daily budget and a seven-day schedule.
     """
 
     ENDPOINT = "https://graph.facebook.com"
-    LIFETIME_BUDGET_CENTS = 500
+    DAILY_BUDGET_CENTS = 500
     API_VERSION_PATTERN = re.compile(r"^v\d+\.\d+$")
     ID_PATTERN = re.compile(r"^\d{4,30}$")
     ACCOUNT_PATTERN = re.compile(r"^act_\d{4,30}$")
@@ -843,10 +842,10 @@ class MetaPublisher:
                     {
                         "account_id": account_id,
                         "product_id": product_id,
-                        "daily_budget_eur": 0.0,
-                        "lifetime_budget_eur": 5.0,
+                        "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                        "lifetime_budget_eur": 0.0,
                         "planned_days": MicroBudgetGate.PLANNED_DAYS,
-                        "planned_total_eur": 5.0,
+                        "planned_total_eur": MicroBudgetGate.TOTAL_BUDGET_EUR,
                     },
                 )
                 campaign = await self._post(
@@ -874,14 +873,45 @@ class MetaPublisher:
 
             starts = datetime.now(timezone.utc) + timedelta(minutes=15)
             ends = starts + timedelta(days=MicroBudgetGate.PLANNED_DAYS)
-            adset = await self._post(
+            existing_adsets = await self._get(
                 client,
-                f"{account_id}/adsets",
+                f"{campaign}/adsets",
                 headers,
-                {
-                    "name": f"Homestro DE AddToCart {product_id[:32]}",
-                    "campaign_id": campaign,
-                    "lifetime_budget": str(self.LIFETIME_BUDGET_CENTS),
+                {"fields": "id,name,status,daily_budget,lifetime_budget", "limit": "100"},
+            )
+            existing_rows = existing_adsets.get("data")
+            if not isinstance(existing_rows, list):
+                return {"status": "blocked", "reason": "ADSET_RECONCILIATION_INCOMPLETE", "campaign_id": campaign}
+            if isinstance(existing_adsets.get("paging"), dict) and existing_adsets["paging"].get("next"):
+                return {"status": "blocked", "reason": "ADSET_RECONCILIATION_INCOMPLETE", "campaign_id": campaign}
+            daily_adsets = [
+                row for row in existing_rows
+                if isinstance(row, dict) and str(row.get("daily_budget", "")) == str(self.DAILY_BUDGET_CENTS)
+            ]
+            if len(daily_adsets) > 1:
+                return {"status": "blocked", "reason": "MULTIPLE_DAILY_ADSETS_FOUND", "campaign_id": campaign}
+            if daily_adsets:
+                existing = daily_adsets[0]
+                if str(existing.get("status", "")).upper() != "PAUSED" or not existing.get("id"):
+                    return {"status": "blocked", "reason": "DAILY_ADSET_NOT_SAFE_TO_RESUME", "campaign_id": campaign}
+                existing_ads = await self._get(
+                    client, f"{existing['id']}/ads", headers,
+                    {"fields": "id,status", "limit": "100"},
+                )
+                ads = existing_ads.get("data")
+                if not isinstance(ads, list) or ads or (isinstance(existing_ads.get("paging"), dict) and existing_ads["paging"].get("next")):
+                    return {"status": "blocked", "reason": "DAILY_ADSET_ALREADY_HAS_ADS_OR_INCOMPLETE", "campaign_id": campaign, "adset_id": str(existing["id"])}
+                adset = str(existing["id"])
+                await self.audit.record("meta_micro_adset_resume", {"campaign_id": campaign, "adset_id": adset})
+            else:
+                adset = await self._post(
+                    client,
+                    f"{account_id}/adsets",
+                    headers,
+                    {
+                        "name": f"Homestro DE AddToCart {product_id[:32]}",
+                        "campaign_id": campaign,
+                        "daily_budget": str(self.DAILY_BUDGET_CENTS),
                     "billing_event": "IMPRESSIONS",
                     "optimization_goal": "OFFSITE_CONVERSIONS",
                     "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
@@ -903,8 +933,8 @@ class MetaPublisher:
                     "start_time": starts.isoformat(),
                     "end_time": ends.isoformat(),
                     "status": "PAUSED",
-                },
-            )
+                    },
+                )
             created_ids["adset_id"] = adset
             await self.audit.record("meta_micro_campaign_partial", {"campaign_id": campaign, "adset_id": adset})
             image_hash = await self._upload_image(
@@ -962,10 +992,10 @@ class MetaPublisher:
                 "adset_id": adset,
                 "ad_id": ad,
                 "product_id": product_id,
-                "budget_type": "lifetime",
-                "daily_budget_eur": 0.0,
-                "lifetime_budget_eur": 5.0,
-                "planned_total_eur": 5.0,
+                "budget_type": "daily",
+                "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                "lifetime_budget_eur": 0.0,
+                "planned_total_eur": MicroBudgetGate.TOTAL_BUDGET_EUR,
                 "scheduled_window_days": MicroBudgetGate.PLANNED_DAYS,
                 "dry_run": False,
                 "note": "Meta review must approve the ad; a campaign does not guarantee impressions or sales.",
@@ -1034,7 +1064,7 @@ class MetaPublisher:
         headers: dict[str, str],
         campaign_id: str,
     ) -> str:
-        """Resume only a confirmed paused campaign that has no ad sets yet."""
+        """Resume only a confirmed paused campaign with no active ad sets."""
         campaign = await self._get(
             client, campaign_id, headers, {"fields": "id,status"}
         )
@@ -1046,13 +1076,15 @@ class MetaPublisher:
             client,
             f"{campaign_id}/adsets",
             headers,
-            {"fields": "id,name,status", "limit": "100"},
+            {"fields": "id,name,status,daily_budget,lifetime_budget", "limit": "100"},
         )
         rows = adsets.get("data")
         if not isinstance(rows, list):
             return "adsets_incomplete"
-        if rows:
-            return "adsets_already_exist"
+        if any(str(row.get("status", "")).upper() != "PAUSED" for row in rows if isinstance(row, dict)):
+            return "adsets_not_all_paused"
+        if any(not isinstance(row, dict) for row in rows):
+            return "adsets_incomplete"
         paging = adsets.get("paging")
         if isinstance(paging, dict) and paging.get("next"):
             return "adsets_incomplete"
