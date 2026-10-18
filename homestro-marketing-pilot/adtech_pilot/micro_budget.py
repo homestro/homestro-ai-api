@@ -32,7 +32,7 @@ class MicroBudgetDecision(BaseModel):
     platform: Literal["meta"] = "meta"
     daily_budget_eur: float = 0.0
     lifetime_budget_eur: float = 0.0
-    planned_days: int = 7
+    planned_days: int = 5
     planned_total_eur: float = 0.0
     budget_type: Literal["lifetime"] = "lifetime"
     max_campaigns: int = 1
@@ -45,7 +45,7 @@ class MicroBudgetGate:
     """Checks one campaign's readiness; never relaxes the global dry-run lock."""
 
     TOTAL_BUDGET_EUR = 5.0
-    PLANNED_DAYS = 7
+    PLANNED_DAYS = 5
 
     def __init__(self, *, enabled: bool | None = None):
         if enabled is None:
