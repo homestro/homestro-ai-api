@@ -1,21 +1,26 @@
 Warning: truncated output (original token count: 13966)
 Total output lines: 411
 
-## Meta Ads readiness diagnosis — 17 October 2026
+## Meta Ads status update — 18 October 2026
 
-The existing Homestro Pilot's organic Meta publisher is separate from the AdTech
-Pilot's paid-ad path. A heartbeat value `blocked_access_token_missing` belongs to
-the optional public Meta Ad Library competitor scan (`META_AD_LIBRARY_ACCESS_TOKEN`);
-it is not evidence that the paid-ad system-user token (`META_ACCESS_TOKEN`) is missing.
-The prior diagnosis conflated these two credentials.
+Railway's read-only Meta preflight verified the active ad account and billing and
+returned `pixel_access_verified=true` for Pixel `432750866484297`. No Meta Business
+Manager Pixel permission change is currently indicated. A previous campaign attempt
+failed with an HTTP status error; the publisher now records only the safe HTTP status,
+request stage, and Meta error code/subcode so the cause can be diagnosed without
+logging tokens or response bodies.
 
-The AdTech scheduler now performs a read-only Meta Marketing API preflight for the
-configured ad account, Page and Pixel during its scheduled metrics check and puts
-the result into the heartbeat. It never creates campaign objects during this check.
-The spend gate remains closed (`DRY_RUN=true`, `ALLOW_MICRO_BUDGET=false`); an actual
-campaign remains limited to one DE test at a €5/day target for seven days after all account,
-billing, accessible-Pixel, feed-product, creative and DSA checks pass. A historical Purchase event is not required for a cold-start campaign optimized for Purchase. Do not claim
-paid delivery until a real campaign and Meta review are verified.
+Commit `f6c36c74eee3823828c7bfaa4d8977d3cb06f85d` changes the one-shot Germany test
+campaign from €5/day (€35 nominal over seven days) to a €5 lifetime budget over seven
+days. Railway production deployment `3c371e1a-5be8-40e8-9fe7-59eaac8f777d` is SUCCESS
+and online. `ALLOW_MICRO_BUDGET` is enabled for the requested test; a campaign or
+delivery has not yet been confirmed. The earlier publisher error and persistent
+single-use claim must be reconciled before claiming a successful launch.
+
+The scheduler's `NO_VERIFIED_CHANNEL_METRICS_LOADER` status applies to the separate
+campaign-optimization path, which remains read-only. The campaign creation path uses
+its own one-campaign, €5 lifetime-budget gate. Do not report a paid campaign as live
+until Meta's campaign state and review status are verified.
 
 ## Organic publication blockers — 13 October 2026
 
