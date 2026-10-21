@@ -50,3 +50,16 @@ This deployment starts the daemon and its available diagnostics. It does not rep
 ## Validation scope and production prerequisites
 
 The tests cover feed parsing/validation, read-only GMC diagnostics, output normalization, structured model and image API handling through mocks, Meta account preflight and one-time campaign creation against a mock Graph API, scoring and micro-budget gates, attribution requirements, budget-cap reconciliation and API authentication. Live Meta OAuth approval, billing, Pixel access, ad review and real campaign delivery remain account-specific prerequisites. A historical Purchase event is not required for the first cold-start campaign. Feed corrections cannot by themselves resolve Merchant Center account-policy or shipping setup issues.
+
+
+## Product intent ranking
+
+`product_intent.py` ranks the full supplied product set using fresh, verified
+ViewContent, AddToCart, InitiateCheckout and Purchase aggregates. Scores are
+transparent prioritization points, not predicted ROAS or purchase probability.
+Views alone cannot qualify a product: candidates need a checkout or at least
+three cart additions, verified event ingestion, current stock and known positive
+contribution margin. Missing, stale or future-dated evidence fails closed.
+This is a decision module; it does not claim to collect Shopify events by itself.
+The production event source and end-to-end Purchase verification remain release
+gates before any paid campaign can run.
