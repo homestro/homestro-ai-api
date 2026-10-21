@@ -20,6 +20,7 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from .creative_factory import CreativeFactory, GeneratedCreative
+from .product_intent import ProductIntentRank
 from .micro_budget import (
     MetaAccountReadiness,
     MicroBudgetGate,
@@ -726,6 +727,7 @@ class MetaPublisher:
         creative: GeneratedCreative,
         product: dict[str, Any],
         product_ids_in_feed: set[str],
+        intent: ProductIntentRank | None = None,
     ) -> dict[str, Any]:
         config = self._configuration()
         if isinstance(config, dict):
@@ -833,6 +835,7 @@ class MetaPublisher:
                 account=readiness,
                 product_id=product_id,
                 product_ids_in_feed=product_ids_in_feed,
+                intent=intent,
                 previously_submitted_campaigns=0,
                 dry_run=False,
             )
