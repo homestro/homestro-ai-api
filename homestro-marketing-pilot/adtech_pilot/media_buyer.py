@@ -734,6 +734,12 @@ class MetaPublisher:
             return {"status": "blocked", **config}
         account_id, page_id, pixel_id, token, version, beneficiary, payor = config
         product_id = str(product.get("id", ""))
+        if intent is None:
+            return {"status": "blocked", "reason": "PRODUCT_INTENT_NOT_VERIFIED"}
+        if intent.product_id != product_id:
+            return {"status": "blocked", "reason": "PRODUCT_INTENT_PRODUCT_MISMATCH"}
+        if not intent.eligible_for_review:
+            return {"status": "blocked", "reason": "PRODUCT_INTENT_NOT_ELIGIBLE"}
         if not self._creative_approved(creative, product_id):
             return {"status": "blocked", "reason": "CREATIVE_NOT_APPROVED_OR_PRODUCT_MISMATCH"}
         try:
@@ -764,8 +770,6 @@ class MetaPublisher:
             return {"status": "blocked", "reason": "PRODUCT_URL_NOT_ALLOWED"}
         if product_id not in product_ids_in_feed:
             return {"status": "blocked", "reason": "PRODUCT_NOT_IN_VALIDATED_FEED"}
-        if str(self.env.get("MICRO_BUDGET_PRODUCT_ID", "")).strip() != product_id:
-            return {"status": "blocked", "reason": "PRODUCT_IS_NOT_EXPLICITLY_SELECTED"}
         own_client = self.client is None
         client = self.client or httpx.AsyncClient(
             timeout=httpx.Timeout(35, connect=8), follow_redirects=False
