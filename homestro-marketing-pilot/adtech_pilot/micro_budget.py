@@ -11,6 +11,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 MAX_MICRO_LIFETIME_BUDGET_EUR = 5.0
 
+PORTFOLIO_DAILY_BUDGET_CAP_EUR = 5.0
+
+
+def configured_daily_budget_limit_eur(env: Mapping[str, str] | None = None) -> float:
+    """Portfolio daily ceiling; malformed or negative settings fail closed."""
+    values = os.environ if env is None else env
+    raw_value = values.get("PILOT_AD_MAX_BUDGET_EUR", values.get("MARKETING_BUDGET_LIMIT", "0")).strip()
+    try:
+        amount = float(raw_value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(amount) or amount < 0:
+        return 0.0
+    return min(amount, PORTFOLIO_DAILY_BUDGET_CAP_EUR)
+
 
 def live_ads_dry_run(env: Mapping[str, str] | None = None) -> bool:
     """Require both live-ad kill switches to be explicitly set to false."""
@@ -69,6 +84,8 @@ class MicroBudgetGate:
     """Checks one campaign under a fixed €5 lifetime ceiling."""
 
     LIFETIME_BUDGET_EUR = MAX_MICRO_LIFETIME_BUDGET_EUR
+    # Compatibility for the daemon's portfolio-level daily status/readiness view.
+    DAILY_BUDGET_EUR = PORTFOLIO_DAILY_BUDGET_CAP_EUR
     PLANNED_DAYS = 7
     TOTAL_BUDGET_EUR = LIFETIME_BUDGET_EUR
 
