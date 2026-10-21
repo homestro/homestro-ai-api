@@ -64,6 +64,7 @@ class MetaPublisherTests(unittest.TestCase):
             "META_DSA_PAYOR": "Homestro legal entity",
             "META_API_VERSION": "v26.0",
             "META_BILLING_VERIFIED": "true",
+            "META_PURCHASE_EVENT_VERIFIED": "true",
             "MICRO_BUDGET_PRODUCT_ID": "sku-1",
             "PILOT_CREATIVE_DIR": str(self.root),
             "PILOT_CREATIVE_MIN_SCORE": "80",
@@ -72,7 +73,7 @@ class MetaPublisherTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_live_publisher_requires_both_kill_switches_and_full_daily_cap(self):
+    def test_live_publisher_requires_both_kill_switches_and_full_lifetime_cap(self):
         audit = PlanAuditStore(self.root / "gate-check.sqlite3")
         publisher = MetaPublisher(audit, env=self.env)
         self.assertNotIsInstance(publisher._configuration(), dict)
@@ -85,8 +86,8 @@ class MetaPublisherTests(unittest.TestCase):
 
         no_budget = {**self.env, "PILOT_AD_MAX_BUDGET_EUR": "0"}
         blocked = MetaPublisher(audit, env=no_budget)._configuration()
-        self.assertEqual(blocked["reason"], "MICRO_BUDGET_DAILY_LIMIT_TOO_LOW")
-        self.assertEqual(blocked["configured_daily_budget_limit_eur"], 0.0)
+        self.assertEqual(blocked["reason"], "MICRO_BUDGET_LIFETIME_LIMIT_TOO_LOW")
+        self.assertEqual(blocked["configured_lifetime_budget_limit_eur"], 0.0)
 
     def test_defaults_block_without_any_meta_api_request(self):
         async def run():
@@ -255,10 +256,10 @@ class MetaPublisherTests(unittest.TestCase):
 
         result, repeat, events = asyncio.run(run())
         self.assertEqual(result["status"], "ACTIVE_PENDING_REVIEW")
-        self.assertEqual(result["daily_budget_eur"], 5.0)
-        self.assertEqual(result["lifetime_budget_eur"], 0.0)
-        self.assertEqual(result["planned_total_eur"], 35.0)
-        self.assertEqual(result["budget_type"], "daily")
+        self.assertEqual(result["daily_budget_eur"], 0.0)
+        self.assertEqual(result["lifetime_budget_eur"], 5.0)
+        self.assertEqual(result["planned_total_eur"], 5.0)
+        self.assertEqual(result["budget_type"], "lifetime")
         self.assertEqual(repeat["reason"], "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED")
         self.assertEqual(
             sum(event[0] == "POST" and event[1] == "campaigns" for event in events),
@@ -272,8 +273,11 @@ class MetaPublisherTests(unittest.TestCase):
         ]
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
-        self.assertEqual(adset_form["daily_budget"], ["500"])
-        self.assertIn('"custom_event_type": "ADD_TO_CART"', adset_form["promoted_object"][0])
+        self.assertEqual(adset_form["lifetime_budget"], ["500"])
+        self.assertNotIn("daily_budget", adset_form)
+        self.assertIn('"custom_event_type": "PURCHASE"', adset_form["promoted_object"][0])
+        self.assertIn('"countries": ["DE", "AT"]', adset_form["targeting"][0])
+        self.assertNotIn("publisher_platforms", adset_form["targeting"][0])
 
 
 if __name__ == "__main__":
