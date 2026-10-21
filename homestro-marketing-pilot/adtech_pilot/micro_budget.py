@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-MAX_MICRO_DAILY_BUDGET_EUR = 5.0
+MAX_MICRO_LIFETIME_BUDGET_EUR = 5.0
 
 
 def live_ads_dry_run(env: Mapping[str, str] | None = None) -> bool:
@@ -20,8 +20,8 @@ def live_ads_dry_run(env: Mapping[str, str] | None = None) -> bool:
     return global_value != "false" or pilot_value != "false"
 
 
-def configured_daily_budget_limit_eur(env: Mapping[str, str] | None = None) -> float:
-    """Read the daily cap; malformed values fail closed and the cap is €5."""
+def configured_lifetime_budget_limit_eur(env: Mapping[str, str] | None = None) -> float:
+    """Read the lifetime cap; malformed values fail closed and the hard cap is €5."""
     values = os.environ if env is None else env
     raw_value = values.get(
         "PILOT_AD_MAX_BUDGET_EUR",
@@ -33,7 +33,7 @@ def configured_daily_budget_limit_eur(env: Mapping[str, str] | None = None) -> f
         return 0.0
     if not math.isfinite(amount) or amount < 0:
         return 0.0
-    return min(amount, MAX_MICRO_DAILY_BUDGET_EUR)
+    return min(amount, MAX_MICRO_LIFETIME_BUDGET_EUR)
 
 
 class MetaAccountReadiness(BaseModel):
@@ -48,6 +48,7 @@ class MetaAccountReadiness(BaseModel):
     page_id: str = Field(min_length=1)
     pixel_id: str = Field(min_length=1)
     pixel_access_verified: bool
+    purchase_event_verified: bool
 
 
 class MicroBudgetDecision(BaseModel):
@@ -57,7 +58,7 @@ class MicroBudgetDecision(BaseModel):
     lifetime_budget_eur: float = 0.0
     planned_days: int = 7
     planned_total_eur: float = 0.0
-    budget_type: Literal["daily"] = "daily"
+    budget_type: Literal["lifetime"] = "lifetime"
     max_campaigns: int = 1
     product_id: str | None = None
     blockers: list[str] = Field(default_factory=list)
@@ -65,11 +66,11 @@ class MicroBudgetDecision(BaseModel):
 
 
 class MicroBudgetGate:
-    """Checks one campaign's readiness under the fixed €5 daily ceiling."""
+    """Checks one campaign under a fixed €5 lifetime ceiling."""
 
-    DAILY_BUDGET_EUR = MAX_MICRO_DAILY_BUDGET_EUR
+    LIFETIME_BUDGET_EUR = MAX_MICRO_LIFETIME_BUDGET_EUR
     PLANNED_DAYS = 7
-    TOTAL_BUDGET_EUR = DAILY_BUDGET_EUR * PLANNED_DAYS
+    TOTAL_BUDGET_EUR = LIFETIME_BUDGET_EUR
 
     def __init__(self, *, enabled: bool | None = None):
         if enabled is None:
@@ -101,6 +102,8 @@ class MicroBudgetGate:
                 blockers.append("META_BILLING_NOT_READY")
             if not account.pixel_access_verified:
                 blockers.append("META_PIXEL_ACCESS_NOT_VERIFIED")
+            if not account.purchase_event_verified:
+                blockers.append("META_PURCHASE_EVENT_NOT_VERIFIED")
         if not product_id:
             blockers.append("MICRO_BUDGET_PRODUCT_ID_MISSING")
         elif product_id not in product_ids_in_feed:
@@ -110,8 +113,8 @@ class MicroBudgetGate:
 
         return MicroBudgetDecision(
             eligible=not blockers,
-            daily_budget_eur=self.DAILY_BUDGET_EUR if not blockers else 0.0,
-            lifetime_budget_eur=0.0,
+            daily_budget_eur=0.0,
+            lifetime_budget_eur=self.LIFETIME_BUDGET_EUR if not blockers else 0.0,
             planned_total_eur=self.TOTAL_BUDGET_EUR if not blockers else 0.0,
             product_id=product_id,
             blockers=blockers,
