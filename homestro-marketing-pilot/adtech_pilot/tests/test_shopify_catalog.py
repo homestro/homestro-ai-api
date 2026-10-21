@@ -193,7 +193,7 @@ class ShopifyCatalogTests(unittest.TestCase):
                 transport=httpx.MockTransport(
                     lambda _request: httpx.Response(
                         200,
-                        json={"errors": [{"message": "ACCESS_DENIED"}]},
+                        json={"errors": [{"message": "ACCESS_DENIED", "extensions": None}]},
                     )
                 )
             )
