@@ -1,5 +1,6 @@
 import unittest
 
+from adtech_pilot.product_intent import ProductIntentRank
 from adtech_pilot.micro_budget import (
     MetaAccountReadiness,
     MicroBudgetGate,
@@ -11,6 +12,10 @@ from adtech_pilot.micro_budget import (
 
 class MicroBudgetGateTests(unittest.TestCase):
     def setUp(self):
+        self.intent = ProductIntentRank(
+            product_id="sku-1", score=15.0, eligible_for_review=True,
+            blockers=[], evidence={"views": 0, "add_to_cart": 3, "initiate_checkout": 0, "purchases": 0},
+        )
         self.active_account = MetaAccountReadiness(
             account_id="act_123",
             account_status="active",
@@ -72,6 +77,7 @@ class MicroBudgetGateTests(unittest.TestCase):
             account=self.active_account,
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
+            intent=self.intent,
             dry_run=False,
         )
         self.assertTrue(result.eligible)
@@ -96,14 +102,15 @@ class MicroBudgetGateTests(unittest.TestCase):
                 self.assertFalse(result.eligible)
                 self.assertEqual(result.daily_budget_eur, 0.0)
 
-    def test_campaign_can_start_before_a_sale_when_purchase_tracking_is_verified(self):
+    def test_campaign_requires_fresh_high_intent_even_when_purchase_tracking_is_verified(self):
         result = MicroBudgetGate(enabled=True).evaluate(
             account=self.active_account,
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
             dry_run=False,
         )
-        self.assertTrue(result.eligible)
+        self.assertFalse(result.eligible)
+        self.assertIn("PRODUCT_INTENT_NOT_VERIFIED", result.blockers)
 
     def test_campaign_stays_blocked_when_purchase_tracking_is_not_verified(self):
         account = self.active_account.model_copy(update={"purchase_event_verified": False})
@@ -111,6 +118,7 @@ class MicroBudgetGateTests(unittest.TestCase):
             account=account,
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
+            intent=self.intent,
             dry_run=False,
         )
         self.assertFalse(result.eligible)
