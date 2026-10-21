@@ -310,7 +310,14 @@ class ShopifyCatalogClient:
                 throttled = any(
                     isinstance(error, dict)
                     and (
-                        "THROTTL" in str(error.get("extensions", {}).get("code", "")).upper()
+                        "THROTTL"
+                        in str(
+                            (
+                                error.get("extensions")
+                                if isinstance(error.get("extensions"), dict)
+                                else {}
+                            ).get("code", "")
+                        ).upper()
                         or "THROTTL" in str(error.get("message", "")).upper()
                     )
                     for error in errors
