@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .product_intent import ProductIntentRank
+
 MAX_MICRO_LIFETIME_BUDGET_EUR = 5.0
 
 PORTFOLIO_DAILY_BUDGET_CAP_EUR = 5.0
@@ -100,6 +102,7 @@ class MicroBudgetGate:
         account: MetaAccountReadiness | None,
         product_id: str | None,
         product_ids_in_feed: set[str],
+        intent: ProductIntentRank | None = None,
         previously_submitted_campaigns: int = 0,
         dry_run: bool = True,
     ) -> MicroBudgetDecision:
@@ -125,6 +128,12 @@ class MicroBudgetGate:
             blockers.append("MICRO_BUDGET_PRODUCT_ID_MISSING")
         elif product_id not in product_ids_in_feed:
             blockers.append("MICRO_BUDGET_PRODUCT_NOT_IN_VALIDATED_FEED")
+        if intent is None:
+            blockers.append("PRODUCT_INTENT_NOT_VERIFIED")
+        elif intent.product_id != product_id:
+            blockers.append("PRODUCT_INTENT_PRODUCT_MISMATCH")
+        elif not intent.eligible_for_review:
+            blockers.append("PRODUCT_INTENT_NOT_ELIGIBLE")
         if previously_submitted_campaigns >= 1:
             blockers.append("SINGLE_CAMPAIGN_ALLOWANCE_ALREADY_USED")
 
