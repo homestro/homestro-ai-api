@@ -93,8 +93,11 @@ class DaemonTests(unittest.TestCase):
             heartbeat = audit.records[-1][1]
             self.assertEqual(heartbeat["budget_limit_eur"], 5.0)
             self.assertFalse(heartbeat["dry_run"])
-            self.assertEqual(heartbeat["planned_total_budget_eur"], 35.0)
-            self.assertTrue(heartbeat["micro_budget_submission_enabled"])
+            self.assertEqual(heartbeat["planned_total_budget_eur"], 5.0)
+            self.assertEqual(heartbeat["budget_type"], "lifetime")
+            self.assertEqual(heartbeat["portfolio_daily_ceiling_eur"], 5.0)
+            self.assertFalse(heartbeat["micro_budget_submission_enabled"])
+            self.assertEqual(heartbeat["submission_blocker"], "PRODUCT_INTENT_SOURCE_NOT_CONNECTED")
             self.assertTrue(heartbeat["optimizer"]["dry_run"])
             self.assertEqual(heartbeat["optimizer"]["budget_limit_eur"], 0.0)
             self.assertEqual(len(heartbeat["jobs"]), 6)
@@ -132,6 +135,36 @@ class DaemonTests(unittest.TestCase):
             self.assertFalse(result["ad_mutations_performed"])
             self.assertEqual(daemon._latest_catalog_variants[0]["sku"], "SKU-2")
             self.assertEqual(audit.records[0][0], "shopify_catalog_diagnostics")
+
+        asyncio.run(run())
+
+    def test_creative_job_does_not_select_first_feed_product_or_spend_without_intent(self):
+        async def run():
+            with patch.dict(
+                "os.environ",
+                {
+                    "PILOT_CREATIVE_ENABLED": "true",
+                    "OPENAI_API_KEY": "test-key",
+                    "HOMESTRO_LOGO_URL": "https://homestro.de/logo.png",
+                },
+                clear=False,
+            ), patch("adtech_pilot.daemon.OpenAIProvider") as provider, patch(
+                "adtech_pilot.daemon.MetaPublisher"
+            ) as publisher:
+                daemon = PilotDaemon(MemoryAudit())
+                daemon._latest_products = [
+                    {
+                        "id": "first-product",
+                        "description": "Product description.",
+                        "image_link": "https://cdn.shopify.com/image.png",
+                    }
+                ]
+                result = await daemon._creative_job()
+            provider.assert_not_called()
+            publisher.assert_not_called()
+            self.assertEqual(result["reason"], "PRODUCT_INTENT_SOURCE_NOT_CONNECTED")
+            self.assertFalse(result["creative_generation_performed"])
+            self.assertFalse(result["ad_mutations_performed"])
 
         asyncio.run(run())
 
