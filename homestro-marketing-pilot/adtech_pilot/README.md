@@ -5,6 +5,7 @@ This is a separate FastAPI service alongside the existing Node/Shopify Pilot. It
 ## Current safety state
 
 - `PILOT_AD_DRY_RUN=true` and `PILOT_AD_MAX_BUDGET_EUR=0` are the defaults.
+- The scheduled Shopify GraphQL catalog check is read-only. Missing scopes, unavailable product costs, API errors, and incomplete pagination fail closed; it never treats unknown cost as a passing margin.
 - The daemon starts with the API by default, runs feed and Merchant Center diagnostics every six hours, public Meta Ad Library discovery and creative generation every 24 hours, and reports a heartbeat hourly. Each task has its own bounded retry/backoff; one provider failure does not stop the other tasks.
 - GitHub reporting is optional. When `PILOT_GITHUB_TOKEN` is configured, the daemon updates one rolling status comment on PR #104 rather than creating hourly comment spam.
 - Google/TikTok/Pinterest/Microsoft/Sklik publishing and optimizer mutations are not wired in. `/feed/prepare/*` creates normalized payloads only; it never uploads them.
@@ -18,6 +19,7 @@ This is a separate FastAPI service alongside the existing Node/Shopify Pilot. It
 ## Modules
 
 - `feed_manager.py`: bounded JSON/XML parsing, GTIN/EAN check digit, canonical product URL, price, description, image, availability and category checks; provider-neutral product payloads for six channel families.
+- `shopify_catalog.py`: authenticated Admin GraphQL cursor pagination for active products and every variant; exact gross margin uses `price` and `InventoryItem.unitCost`, and only in-stock variants with known cost and at least 20% gross margin qualify. It is read-only and does not yet supply customer-intent events or update Meta catalog/product sets.
 - `creative_factory.py`: OpenAI Responses structured output, image edits from supplied product photography, official-logo compositing, visual review, history-informed quality score. The score is a quality review, not a sales forecast.
 - `gmc_diagnostics.py`: OAuth service-account token refresh and bounded, read-only Merchant API account/product issue diagnostics.
 - `micro_budget.py`: fail-closed one-campaign/€5-lifetime, seven-day readiness gate that requires verified Purchase tracking.
