@@ -3,6 +3,7 @@ import unittest
 from adtech_pilot.micro_budget import (
     MetaAccountReadiness,
     MicroBudgetGate,
+    configured_daily_budget_limit_eur,
     configured_lifetime_budget_limit_eur,
     live_ads_dry_run,
 )
@@ -43,6 +44,16 @@ class MicroBudgetGateTests(unittest.TestCase):
             configured_lifetime_budget_limit_eur(
                 {"PILOT_AD_MAX_BUDGET_EUR": "invalid"}
             ),
+            0.0,
+        )
+
+    def test_daily_portfolio_budget_is_capped_and_invalid_values_fail_closed(self):
+        self.assertEqual(
+            configured_daily_budget_limit_eur({"PILOT_AD_MAX_BUDGET_EUR": "100"}),
+            5.0,
+        )
+        self.assertEqual(
+            configured_daily_budget_limit_eur({"PILOT_AD_MAX_BUDGET_EUR": "invalid"}),
             0.0,
         )
 
