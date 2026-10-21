@@ -343,6 +343,16 @@ class PilotDaemon:
         return report
 
     async def _creative_job(self) -> dict[str, Any]:
+        # No Shopify customer-event adapter currently feeds product_intent.py.
+        # Do not spend on image generation or publish a first-in-feed product
+        # until fresh, verified product-level intent is connected.
+        return {
+            "status": "blocked",
+            "reason": "PRODUCT_INTENT_SOURCE_NOT_CONNECTED",
+            "creative_generation_performed": False,
+            "ad_mutations_performed": False,
+        }
+
         if os.getenv("PILOT_CREATIVE_ENABLED", "false").lower() != "true":
             return {"status": "blocked", "reason": "CREATIVE_GENERATION_DISABLED"}
         if not os.getenv("OPENAI_API_KEY"):
@@ -493,18 +503,13 @@ class PilotDaemon:
             "campaign_submission_config": {
                 "dry_run": live_ads_dry_run(),
                 "daily_budget_limit_eur": daily_budget_limit,
-                "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                "budget_type": "lifetime",
+                "daily_budget_eur": 0.0,
+                "lifetime_budget_eur": MicroBudgetGate.LIFETIME_BUDGET_EUR,
                 "scheduled_window_days": MicroBudgetGate.PLANNED_DAYS,
-                "planned_total_budget_eur": round(
-                    MicroBudgetGate.DAILY_BUDGET_EUR
-                    * MicroBudgetGate.PLANNED_DAYS,
-                    2,
-                ),
-                "enabled_by_config": (
-                    os.getenv("ALLOW_MICRO_BUDGET", "false").strip().lower() == "true"
-                    and not live_ads_dry_run()
-                    and daily_budget_limit >= MicroBudgetGate.DAILY_BUDGET_EUR
-                ),
+                "planned_total_budget_eur": MicroBudgetGate.TOTAL_BUDGET_EUR,
+                "enabled_by_config": False,
+                "blocker": "NO_VERIFIED_CHANNEL_METRICS_LOADER",
             },
             "meta_ads_preflight": meta_preflight,
             "optimizer_micro_budget_preflight": micro_budget.model_dump(mode="json"),
