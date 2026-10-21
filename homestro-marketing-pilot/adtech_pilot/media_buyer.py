@@ -23,7 +23,7 @@ from .creative_factory import CreativeFactory, GeneratedCreative
 from .micro_budget import (
     MetaAccountReadiness,
     MicroBudgetGate,
-    configured_daily_budget_limit_eur,
+    configured_lifetime_budget_limit_eur,
     live_ads_dry_run,
 )
 
@@ -615,16 +615,16 @@ class MetaAdLibraryClient:
 
 
 class MetaPublisher:
-    """Single-use Meta website-sales pilot with a €5/day, seven-day allowance.
+    """Single-use Meta Purchase campaign with a €5 lifetime cap over seven days.
 
-    Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
-    account/assets pass preflight, the selected product is in the validated feed,
-    the creative passes its quality checks, and the persistent one-shot claim is
-    acquired. The ad set uses a €5 daily budget and a seven-day schedule.
+    Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, Purchase
+    tracking is explicitly verified, the live account/assets pass preflight, the
+    selected product is in the validated feed, the creative passes quality checks,
+    and the persistent one-shot claim is acquired.
     """
 
     ENDPOINT = "https://graph.facebook.com"
-    DAILY_BUDGET_CENTS = 500
+    LIFETIME_BUDGET_CENTS = 500
     API_VERSION_PATTERN = re.compile(r"^v\d+\.\d+$")
     ID_PATTERN = re.compile(r"^\d{4,30}$")
     ACCOUNT_PATTERN = re.compile(r"^act_\d{4,30}$")
@@ -847,8 +847,8 @@ class MetaPublisher:
                     {
                         "account_id": account_id,
                         "product_id": product_id,
-                        "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
-                        "lifetime_budget_eur": 0.0,
+                        "daily_budget_eur": 0.0,
+                        "lifetime_budget_eur": MicroBudgetGate.LIFETIME_BUDGET_EUR,
                         "planned_days": MicroBudgetGate.PLANNED_DAYS,
                         "planned_total_eur": MicroBudgetGate.TOTAL_BUDGET_EUR,
                     },
@@ -889,23 +889,24 @@ class MetaPublisher:
                 return {"status": "blocked", "reason": "ADSET_RECONCILIATION_INCOMPLETE", "campaign_id": campaign}
             if isinstance(existing_adsets.get("paging"), dict) and existing_adsets["paging"].get("next"):
                 return {"status": "blocked", "reason": "ADSET_RECONCILIATION_INCOMPLETE", "campaign_id": campaign}
-            daily_adsets = [
+            lifetime_adsets = [
                 row for row in existing_rows
-                if isinstance(row, dict) and str(row.get("daily_budget", "")) == str(self.DAILY_BUDGET_CENTS)
+                if isinstance(row, dict)
+                and str(row.get("lifetime_budget", "")) == str(self.LIFETIME_BUDGET_CENTS)
             ]
-            if len(daily_adsets) > 1:
-                return {"status": "blocked", "reason": "MULTIPLE_DAILY_ADSETS_FOUND", "campaign_id": campaign}
-            if daily_adsets:
-                existing = daily_adsets[0]
+            if len(lifetime_adsets) > 1:
+                return {"status": "blocked", "reason": "MULTIPLE_LIFETIME_ADSETS_FOUND", "campaign_id": campaign}
+            if lifetime_adsets:
+                existing = lifetime_adsets[0]
                 if str(existing.get("status", "")).upper() != "PAUSED" or not existing.get("id"):
-                    return {"status": "blocked", "reason": "DAILY_ADSET_NOT_SAFE_TO_RESUME", "campaign_id": campaign}
+                    return {"status": "blocked", "reason": "LIFETIME_ADSET_NOT_SAFE_TO_RESUME", "campaign_id": campaign}
                 existing_ads = await self._get(
                     client, f"{existing['id']}/ads", headers,
                     {"fields": "id,status", "limit": "100"},
                 )
                 ads = existing_ads.get("data")
                 if not isinstance(ads, list) or ads or (isinstance(existing_ads.get("paging"), dict) and existing_ads["paging"].get("next")):
-                    return {"status": "blocked", "reason": "DAILY_ADSET_ALREADY_HAS_ADS_OR_INCOMPLETE", "campaign_id": campaign, "adset_id": str(existing["id"])}
+                    return {"status": "blocked", "reason": "LIFETIME_ADSET_ALREADY_HAS_ADS_OR_INCOMPLETE", "campaign_id": campaign, "adset_id": str(existing["id"])}
                 adset = str(existing["id"])
                 await self.audit.record("meta_micro_adset_resume", {"campaign_id": campaign, "adset_id": adset})
             else:
@@ -914,30 +915,27 @@ class MetaPublisher:
                     f"{account_id}/adsets",
                     headers,
                     {
-                        "name": f"Homestro DE AddToCart {product_id[:32]}",
+                        "name": f"Homestro DACH Purchase {product_id[:32]}",
                         "campaign_id": campaign,
-                        "daily_budget": str(self.DAILY_BUDGET_CENTS),
-                    "billing_event": "IMPRESSIONS",
-                    "optimization_goal": "OFFSITE_CONVERSIONS",
-                    "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
-                    "destination_type": "WEBSITE",
-                    "promoted_object": json.dumps(
-                        {"pixel_id": pixel_id, "custom_event_type": "ADD_TO_CART"}
-                    ),
-                    "dsa_beneficiary": beneficiary,
-                    "dsa_payor": payor,
-                    "targeting": json.dumps(
-                        {
-                            "geo_locations": {"countries": ["DE"]},
-                            "age_min": 18,
-                            "publisher_platforms": ["facebook", "instagram"],
-                            "facebook_positions": ["feed", "marketplace", "story", "facebook_reels"],
-                            "instagram_positions": ["stream", "story", "reels"],
-                        }
-                    ),
-                    "start_time": starts.isoformat(),
-                    "end_time": ends.isoformat(),
-                    "status": "PAUSED",
+                        "lifetime_budget": str(self.LIFETIME_BUDGET_CENTS),
+                        "billing_event": "IMPRESSIONS",
+                        "optimization_goal": "OFFSITE_CONVERSIONS",
+                        "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
+                        "destination_type": "WEBSITE",
+                        "promoted_object": json.dumps(
+                            {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
+                        ),
+                        "dsa_beneficiary": beneficiary,
+                        "dsa_payor": payor,
+                        "targeting": json.dumps(
+                            {
+                                "geo_locations": {"countries": ["DE", "AT"]},
+                                "age_min": 18,
+                            }
+                        ),
+                        "start_time": starts.isoformat(),
+                        "end_time": ends.isoformat(),
+                        "status": "PAUSED",
                     },
                 )
             created_ids["adset_id"] = adset
@@ -997,9 +995,9 @@ class MetaPublisher:
                 "adset_id": adset,
                 "ad_id": ad,
                 "product_id": product_id,
-                "budget_type": "daily",
-                "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
-                "lifetime_budget_eur": 0.0,
+                "budget_type": "lifetime",
+                "daily_budget_eur": 0.0,
+                "lifetime_budget_eur": MicroBudgetGate.LIFETIME_BUDGET_EUR,
                 "planned_total_eur": MicroBudgetGate.TOTAL_BUDGET_EUR,
                 "scheduled_window_days": MicroBudgetGate.PLANNED_DAYS,
                 "dry_run": False,
@@ -1135,12 +1133,12 @@ class MetaPublisher:
             return {"reason": "MICRO_BUDGET_NOT_ENABLED"}
         if live_ads_dry_run(self.env):
             return {"reason": "DRY_RUN_ENABLED"}
-        daily_budget_limit = configured_daily_budget_limit_eur(self.env)
-        if daily_budget_limit < MicroBudgetGate.DAILY_BUDGET_EUR:
+        lifetime_budget_limit = configured_lifetime_budget_limit_eur(self.env)
+        if lifetime_budget_limit < MicroBudgetGate.LIFETIME_BUDGET_EUR:
             return {
-                "reason": "MICRO_BUDGET_DAILY_LIMIT_TOO_LOW",
-                "required_daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
-                "configured_daily_budget_limit_eur": daily_budget_limit,
+                "reason": "MICRO_BUDGET_LIFETIME_LIMIT_TOO_LOW",
+                "required_lifetime_budget_eur": MicroBudgetGate.LIFETIME_BUDGET_EUR,
+                "configured_lifetime_budget_limit_eur": lifetime_budget_limit,
             }
         if self.env.get("META_BILLING_VERIFIED", "false").lower() != "true":
             return {"reason": "META_BILLING_NOT_MANUALLY_VERIFIED"}
@@ -1214,10 +1212,12 @@ class MetaPublisher:
             billing_ready=self.env.get("META_BILLING_VERIFIED", "false").lower() == "true",
             page_id=page_id,
             pixel_id=pixel_id,
-            # A prior event is not required to start a cold-start campaign.
-            # Confirm pixel access; optimize for standard AddToCart events.
-            # as visitors add products to cart.
+            # A live campaign requires both accessible pixel access and an explicit
+            # operator verification that the standard Purchase event was tested.
             pixel_access_verified=accessible_pixel,
+            purchase_event_verified=self.env.get(
+                "META_PURCHASE_EVENT_VERIFIED", "false"
+            ).strip().lower() == "true",
         )
 
     async def _get(
