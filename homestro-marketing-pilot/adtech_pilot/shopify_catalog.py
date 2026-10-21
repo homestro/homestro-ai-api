@@ -6,7 +6,6 @@ Meta catalog retailer IDs, create product sets, or write to an advertising accou
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from decimal import Decimal, InvalidOperation
