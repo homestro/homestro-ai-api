@@ -13,6 +13,7 @@ from adtech_pilot.creative_factory import (
     GeneratedCreative,
 )
 from adtech_pilot.media_buyer import MetaPublisher, PlanAuditStore
+from adtech_pilot.product_intent import ProductIntentRank
 
 
 class MetaPublisherTests(unittest.TestCase):
@@ -51,6 +52,10 @@ class MetaPublisherTests(unittest.TestCase):
             "id": "sku-1",
             "link": "https://homestro.de/products/test-product",
         }
+        self.intent = ProductIntentRank(
+            product_id="sku-1", score=15.0, eligible_for_review=True,
+            blockers=[], evidence={"views": 0, "add_to_cart": 3, "initiate_checkout": 0, "purchases": 0},
+        )
         self.env = {
             "ALLOW_MICRO_BUDGET": "true",
             "DRY_RUN": "false",
@@ -245,11 +250,13 @@ class MetaPublisherTests(unittest.TestCase):
                 creative=self.creative,
                 product=self.product,
                 product_ids_in_feed={"sku-1"},
+                intent=self.intent,
             )
             repeat = await publisher.publish_one(
                 creative=self.creative,
                 product=self.product,
                 product_ids_in_feed={"sku-1"},
+                intent=self.intent,
             )
             await client.aclose()
             return result, repeat, events
