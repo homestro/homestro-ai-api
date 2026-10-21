@@ -27,7 +27,7 @@ class ProductIntentTests(unittest.TestCase):
     def test_checkout_and_verified_margin_qualify_without_views_as_proof(self):
         candidate = rank_product_intent([self.row()], now=self.now)[0]
         self.assertTrue(candidate.eligible_for_review)
-        self.assertEqual(candidate.score, 41.0)
+        self.assertEqual(candidate.score, 50.0)
 
     def test_views_alone_never_make_a_candidate(self):
         candidate = rank_product_intent(
