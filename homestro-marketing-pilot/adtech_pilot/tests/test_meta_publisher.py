@@ -120,6 +120,31 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertEqual(result["reason"], "MICRO_BUDGET_NOT_ENABLED")
         self.assertEqual(requests, [])
 
+    def test_live_publisher_blocks_without_matching_verified_intent_before_api_calls(self):
+        async def run():
+            requests = []
+            client = httpx.AsyncClient(
+                transport=httpx.MockTransport(
+                    lambda request: (requests.append(request.method), httpx.Response(500))[1]
+                )
+            )
+            publisher = MetaPublisher(
+                PlanAuditStore(self.root / "intent-gate.sqlite3"),
+                client=client,
+                env=self.env,
+            )
+            result = await publisher.publish_one(
+                creative=self.creative,
+                product=self.product,
+                product_ids_in_feed={"sku-1"},
+            )
+            await client.aclose()
+            return result, requests
+
+        result, requests = asyncio.run(run())
+        self.assertEqual(result["reason"], "PRODUCT_INTENT_NOT_VERIFIED")
+        self.assertEqual(requests, [])
+
     def test_scheduled_readiness_checks_meta_account_page_pixel_without_writes(self):
         async def run():
             requests = []
