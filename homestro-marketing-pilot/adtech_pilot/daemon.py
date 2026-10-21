@@ -28,6 +28,7 @@ from .micro_budget import (
     configured_daily_budget_limit_eur,
     live_ads_dry_run,
 )
+from .shopify_catalog import ShopifyCatalogClient, ShopifyCatalogConfigError
 
 logger = logging.getLogger("uvicorn.error")
 Job = Callable[[], Awaitable[dict[str, Any]]]
@@ -79,6 +80,7 @@ class PilotDaemon:
         heartbeat_interval_seconds: int = 3600,
         reporter: GitHubPRReporter | None = None,
         feed_job: Job | None = None,
+        shopify_catalog_job: Job | None = None,
         merchant_job: Job | None = None,
         competitor_job: Job | None = None,
         creative_job: Job | None = None,
@@ -103,6 +105,10 @@ class PilotDaemon:
                 feed_interval_hours * 3600,
                 feed_job or self._feed_job,
             ),
+            "shopify_catalog": (
+                feed_interval_hours * 3600,
+                shopify_catalog_job or self._shopify_catalog_job,
+            ),
             "merchant_center_diagnostics": (
                 feed_interval_hours * 3600,
                 merchant_job or self._merchant_diagnostics_job,
@@ -125,6 +131,7 @@ class PilotDaemon:
         self._failures = {name: 0 for name in self.jobs}
         self._last_results: dict[str, dict[str, Any]] = {}
         self._latest_products: list[dict[str, Any]] = []
+        self._latest_catalog_variants: list[dict[str, Any]] = []
 
     async def run(self, stop: asyncio.Event) -> None:
         """Runs immediately, then emits hourly heartbeats until shutdown."""
@@ -212,6 +219,47 @@ class PilotDaemon:
                 )
             except TimeoutError:
                 continue
+
+    async def _shopify_catalog_job(self) -> dict[str, Any]:
+        """Refresh active variants and verified gross margins from Admin GraphQL.
+
+        This is a read-only catalog diagnostic. It does not infer buyer intent or
+        mutate a Meta catalog, product set, campaign, ad set, creative or ad.
+        """
+        shop_domain = os.getenv("SHOPIFY_STORE_URL", "").strip()
+        access_token = os.getenv("SHOPIFY_ACCESS_TOKEN", "").strip()
+        if not shop_domain or not access_token:
+            self._latest_catalog_variants = []
+            return {
+                "status": "blocked",
+                "reason": "SHOPIFY_STORE_URL_OR_ACCESS_TOKEN_NOT_CONFIGURED",
+                "ad_mutations_performed": False,
+            }
+        try:
+            client = ShopifyCatalogClient(
+                shop_domain,
+                access_token,
+                api_version=os.getenv("SHOPIFY_API_VERSION", "2026-10"),
+            )
+        except ShopifyCatalogConfigError:
+            self._latest_catalog_variants = []
+            return {
+                "status": "blocked",
+                "reason": "SHOPIFY_GRAPHQL_CONFIGURATION_INVALID",
+                "ad_mutations_performed": False,
+            }
+        variants = await client.fetch_margin_qualified_variants()
+        self._latest_catalog_variants = [
+            variant.model_dump(mode="json") for variant in variants
+        ]
+        result = {
+            "status": "catalog_loaded",
+            "margin_and_stock_qualified_variants": len(variants),
+            "product_intent_source": "not_connected",
+            "ad_mutations_performed": False,
+        }
+        await self.audit.record("shopify_catalog_diagnostics", result)
+        return result
 
     async def _feed_job(self) -> dict[str, Any]:
         feed_url = os.getenv("HOMESTRO_PRODUCT_FEED_URL", "").strip()
