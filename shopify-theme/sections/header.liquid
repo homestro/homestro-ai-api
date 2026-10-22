@@ -1,2 +1,19 @@
-<header class="header"><div class="page-width header__row"><button type="button" class="mobile-toggle" data-menu-toggle aria-expanded="false" aria-controls="navigation" aria-label="Menü öffnen">☰</button><a class="logo" href="{{ routes.root_url }}">{% if section.settings.logo != blank %}{{ section.settings.logo | image_url: width: 320 | image_tag: widths: '160,240,320', alt: shop.name }}{% else %}HOMESTRO{% endif %}</a><form class="search" action="{{ routes.search_url }}" role="search"><input name="q" type="search" value="{{ search.terms | escape }}" placeholder="Produkte und Kategorien durchsuchen …" aria-label="Shop durchsuchen"><button type="submit" aria-label="Suchen">⌕</button></form><div class="header__actions"><a class="icon-link hide-mobile" href="{{ routes.account_url }}">♙ <span>Konto</span></a><a class="icon-link" href="{{ routes.cart_url }}" aria-label="Warenkorb">▣ <span class="hide-mobile">Warenkorb</span> <span class="cart-count" data-cart-count>{{ cart.item_count }}</span></a></div></div><nav id="navigation" class="nav" data-nav><div class="page-width nav__inner">{% for link in section.settings.menu.links %}<a href="{{ link.url }}">{{ link.title }}</a>{% else %}<a href="{{ routes.all_products_collection_url }}">Alle Produkte</a><a href="{{ routes.collections_url }}">Kollektionen</a><a href="{{ routes.search_url }}">Suche</a>{% endfor %}</div></nav></header>
-{% schema %}{"name":"Header","settings":[{"type":"image_picker","id":"logo","label":"Logo"},{"type":"link_list","id":"menu","label":"Hauptmenü"}]}{% endschema %}
+<header class="header">
+  <div class="page-width header__row">
+    <button type="button" class="mobile-toggle" data-menu-toggle aria-expanded="false" aria-controls="navigation" aria-label="Menü öffnen"><span aria-hidden="true">☰</span></button>
+    <a class="logo" href="{{ routes.root_url }}" aria-label="{{ shop.name }} Startseite">
+      {% if section.settings.logo != blank %}
+        {{ section.settings.logo | image_url: width: 420 | image_tag: widths: '180,260,340,420', sizes: '180px', alt: shop.name }}
+      {% else %}
+        <span class="logo__word">HOMESTRO</span><span class="logo__stroke" aria-hidden="true"></span>
+      {% endif %}
+    </a>
+    <form class="search" action="{{ routes.search_url }}" role="search"><input name="q" type="search" value="{{ search.terms | escape }}" placeholder="Was suchst du?" aria-label="Shop durchsuchen"><button type="submit" aria-label="Suchen"><span aria-hidden="true">⌕</span></button></form>
+    <div class="header__actions"><a class="icon-link hide-mobile" href="{{ routes.account_url }}"><span aria-hidden="true">♙</span><span>Konto</span></a><a class="icon-link" href="{{ routes.cart_url }}" aria-label="Warenkorb"><span aria-hidden="true">▣</span><span class="hide-mobile">Warenkorb</span><span class="cart-count" data-cart-count{% if cart.item_count == 0 %} hidden{% endif %}>{{ cart.item_count }}</span></a></div>
+  </div>
+  <nav id="navigation" class="nav" data-nav aria-label="Hauptnavigation"><div class="page-width nav__inner">{% for link in section.settings.menu.links %}<a href="{{ link.url }}">{{ link.title }}</a>{% else %}<a href="{{ routes.all_products_collection_url }}">Alle Produkte</a><a href="{{ routes.collections_url }}">Kategorien</a>{% assign category_handles = 'kuche-essen,haushalt-wohnen,haustiere-tierpflege,garten-heimwerken,sport-fitness,gesundheit-pflege,outdoor-freizeit,kinder-baby' | split: ',' %}{% for category_handle in category_handles %}{% assign nav_collection = collections[category_handle] %}{% if nav_collection != blank %}<a href="{{ nav_collection.url }}">{{ nav_collection.title }}</a>{% endif %}{% endfor %}<a href="{{ routes.search_url }}">Suche</a>{% endfor %}</div></nav>
+</header>
+{% schema %}
+{"name":"Marketplace-Header","settings":[{"type":"image_picker","id":"logo","label":"Helles HOMESTRO Logo für schwarzen Header"},{"type":"link_list","id":"menu","label":"Hauptmenü"}]}
+{% endschema %}
+
