@@ -44,7 +44,7 @@ export function config(env=process.env) {
   const cfg={publicOrigin,graphVersion:env.META_GRAPH_VERSION||'v26.0',
     pageId:env.META_PAGE_ID||'187533961115946', instagramId:env.META_INSTAGRAM_ACCOUNT_ID||'17841463937458002',
     token:env.META_PAGE_ACCESS_TOKEN||'', adminKey:env.PILOT_ADMIN_KEY||'',
-    dataDir:env.PILOT_DATA_DIR||'/data/marketing',
+    dataDir:env.PILOT_DATA_DIR||'/tmp/homestro-marketing',
     workerEnabled:envBool(env.PILOT_WORKER_ENABLED), publishingEnabled:envBool(env.PILOT_PUBLISH_ENABLED),
     publishOnce:envBool(env.PILOT_PUBLISH_ONCE), syncOnce:envBool(env.PILOT_SYNC_ONCE),
     feedEnabled:envBool(env.PILOT_FEED_ENABLED),
