@@ -11,7 +11,6 @@ from adtech_pilot.creative_factory import (
     CreativeScore,
     HistoricalWin,
 )
-
 from PIL import Image
 
 
