@@ -3,7 +3,6 @@ import json
 import unittest
 
 import httpx
-
 from adtech_pilot.github_reporter import COMMENT_MARKER, GitHubPRReporter
 
 
