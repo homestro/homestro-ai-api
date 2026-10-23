@@ -55,8 +55,8 @@ test('OpenAI failures log only sanitized status and error code, never provider m
   assert.match(text,/"providerParam":"temperature"/);
   assert.doesNotMatch(text,/private provider message|secret-test-key/);
 });
-test('catalog sync includes new Shopify drafts as well as active products',()=>{
-  assert.match(CATALOG_QUERY,/status:active OR status:draft/);
+test('catalog sync includes active, draft, and archived Shopify products',()=>{
+  assert.match(CATALOG_QUERY,/status:active OR status:draft OR status:archived/);
 });
 test('valid generated German copy is saved as reviewed and produces real media drafts',async()=>{
   const saved=[],reviews=[],posts=[];
