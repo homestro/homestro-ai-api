@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {refreshPerformance,parsePerformanceTable,performanceQueries,readPerformance} from '../modules/performance.js';
+import {refreshPerformance,parsePerformanceTable,parsePilotSalesTable,performanceQueries,readPerformance} from '../modules/performance.js';
 
 const table=values=>({shopifyqlQuery:{parseErrors:[],tableData:{columns:Object.keys(values).map(name=>({name})),rows:[values]}}});
 const traffic={sessions:7,online_store_visitors:3,sessions_with_cart_additions:0,sessions_that_reached_checkout:0,sessions_that_completed_checkout:0,conversion_rate:0};
+const pilotRow={campaign_last_non_direct_click_order_count:0,campaign_last_non_direct_click_total_sales:0,utm_source:'facebook',utm_medium:'organic'};
 function fixture({scopes=['read_reports'],failSales=false,cached=null}={}) {
   const writes=[],queries=[];
   const pool={query:async(sql,args)=>{
@@ -14,16 +15,20 @@ function fixture({scopes=['read_reports'],failSales=false,cached=null}={}) {
     queries.push({q,args});
     if(q.includes('PilotAccessScopes'))return {currentAppInstallation:{accessScopes:scopes.map(handle=>({handle}))}};
     if(args.query.includes('FROM sessions'))return table(traffic);
+    if(args.query.includes('FROM campaign_sales'))return table(pilotRow);
     if(failSales)throw new Error('provider failure');
     return table({orders:0,total_sales:0});
   };
   return {pool,graphql,writes,queries};
 }
-test('reports confirmed human traffic and shop totals without calling them Pilot sales',async()=>{
+test('reports human traffic, shop totals, and separately attributed Pilot orders',async()=>{
   const f=fixture(),r=await refreshPerformance({...f,enabled:true});
   assert.equal(r.connected,true);assert.equal(r.visitors,3);assert.equal(r.orders,0);
-  assert.equal(r.cartSessions,0);assert.match(r.salesScope,/not orders attributed to Pilot/);
+  assert.equal(r.pilotAttributedOrders,0);assert.equal(r.pilotAttributedRevenueEUR,0);
+  assert.deepEqual(r.pilotAttributedBySource,[{source:'facebook',medium:'organic',orders:0,revenue:0}]);
+  assert.match(r.salesScope,/not orders attributed to Pilot/);
   assert.ok(f.queries.some(q=>q.args?.query?.includes("human_or_bot_session = 'human'")));
+  assert.ok(f.queries.some(q=>q.args?.query?.includes("utm_campaign = 'homestro_pilot'")));
   assert.equal(f.writes.length,1);
 });
 test('missing report access is explicit and no zero visits/orders are invented',async()=>{
@@ -32,10 +37,12 @@ test('missing report access is explicit and no zero visits/orders are invented',
   assert.equal(r.status,'permission_required');assert.deepEqual(r.missingScopes,['read_reports']);
   assert.equal(r.sessions,null);assert.equal(r.orders,null);assert.equal(f.queries.length,1);
 });
-test('one unavailable source cannot erase the other confirmed measurement',async()=>{
+test('one unavailable source cannot erase other confirmed measurements',async()=>{
   const f=fixture({failSales:true}),r=await refreshPerformance({...f,enabled:true});
   assert.equal(r.status,'partial');assert.equal(r.sessions,7);assert.equal(r.orders,null);
+  assert.equal(r.pilotAttributedOrders,0);
   assert.equal(r.sources.sessions.connected,true);assert.equal(r.sources.sales.connected,false);
+  assert.equal(r.sources.pilotSales.connected,true);
 });
 test('fresh persisted measurements avoid repeated API requests',async()=>{
   const payload={connected:true,status:'connected',sessions:7};
@@ -48,16 +55,33 @@ test('malformed results or parse errors are not treated as zero sales',()=>{
     assert.throws(()=>parsePerformanceTable(value,['orders']));
   assert.equal(parsePerformanceTable(table({orders:0}),['orders']).orders,0);
 });
-test('parses the live Admin API object rows and legacy array rows',()=>{
+test('parses live Admin API object rows and legacy array rows',()=>{
  const actual={shopifyqlQuery:{tableData:{columns:[{name:'orders',dataType:'INTEGER'},{name:'total_sales',dataType:'MONEY'}],rows:[{orders:'0',total_sales:'0'}]},parseErrors:[]}};
  assert.deepEqual(parsePerformanceTable(actual,['orders','total_sales']),{orders:0,total_sales:0});
  actual.shopifyqlQuery.tableData.rows=[['0','0']];
  assert.deepEqual(parsePerformanceTable(actual,['orders','total_sales']),{orders:0,total_sales:0});
 });
+test('aggregates Pilot attributed sales across UTM source and medium rows',()=>{
+ const result={shopifyqlQuery:{parseErrors:[],tableData:{
+  columns:['campaign_last_non_direct_click_order_count','campaign_last_non_direct_click_total_sales','utm_source','utm_medium'].map(name=>({name})),
+  rows:[[2,'19.5','facebook','organic'],[1,'12','pinterest','organic'],[3,'30','facebook','organic']]
+ }}};
+ assert.deepEqual(parsePilotSalesTable(result),{orders:6,revenue:61.5,bySource:[
+  {source:'facebook',medium:'organic',orders:5,revenue:49.5},
+  {source:'pinterest',medium:'organic',orders:1,revenue:12}
+ ]});
+});
+test('a valid empty campaign result means zero attributed orders',()=>{
+ const result={shopifyqlQuery:{parseErrors:[],tableData:{
+  columns:['campaign_last_non_direct_click_order_count','campaign_last_non_direct_click_total_sales','utm_source','utm_medium'].map(name=>({name})),rows:[]
+ }}};
+ assert.deepEqual(parsePilotSalesTable(result),{orders:0,revenue:0,bySource:[]});
+});
 test('refund periods can report negative revenue but never negative visitor or order counts',()=>{
   assert.equal(parsePerformanceTable(table({orders:0,total_sales:-25.5}),['orders','total_sales']).total_sales,-25.5);
   assert.throws(()=>parsePerformanceTable(table({orders:-1}),['orders']));
   assert.throws(()=>parsePerformanceTable(table({sessions:1.5}),['sessions']));
+  assert.throws(()=>parsePilotSalesTable(table({...pilotRow,campaign_last_non_direct_click_order_count:-1})));
 });
 test('report windows are bounded and stale snapshots are labelled',async()=>{
   assert.throws(()=>performanceQueries('30; DROP TABLE'));
