@@ -615,12 +615,13 @@ class MetaAdLibraryClient:
 
 
 class MetaPublisher:
-    """Single-use Meta website-sales pilot with a €5/day, seven-day allowance.
+    """Single-use, purchase-optimized Meta test with a €5/day, seven-day allowance.
 
-    Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
-    account/assets pass preflight, the selected product is in the validated feed,
-    the creative passes its quality checks, and the persistent one-shot claim is
-    acquired. The ad set uses a €5 daily budget and a seven-day schedule.
+    Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the Meta
+    Purchase event is explicitly verified, the account/assets pass preflight, the
+    selected product is in the validated feed, the creative passes quality checks,
+    and the persistent one-shot claim is acquired. The ad set uses a €5 daily
+    budget and a seven-day schedule.
     """
 
     ENDPOINT = "https://graph.facebook.com"
@@ -835,6 +836,12 @@ class MetaPublisher:
                 product_ids_in_feed=product_ids_in_feed,
                 previously_submitted_campaigns=0,
                 dry_run=False,
+                purchase_event_verified=(
+                    self.env.get("META_PURCHASE_EVENT_VERIFIED", "")
+                    .strip()
+                    .lower()
+                    == "true"
+                ),
             )
             if not gate.eligible:
                 return {"status": "blocked", "reason": "MICRO_BUDGET_PREFLIGHT_FAILED", "blockers": gate.blockers}
@@ -914,7 +921,7 @@ class MetaPublisher:
                     f"{account_id}/adsets",
                     headers,
                     {
-                        "name": f"Homestro DE AddToCart {product_id[:32]}",
+                        "name": f"Homestro DE Purchase {product_id[:32]}",
                         "campaign_id": campaign,
                         "daily_budget": str(self.DAILY_BUDGET_CENTS),
                     "billing_event": "IMPRESSIONS",
@@ -922,7 +929,7 @@ class MetaPublisher:
                     "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
                     "destination_type": "WEBSITE",
                     "promoted_object": json.dumps(
-                        {"pixel_id": pixel_id, "custom_event_type": "ADD_TO_CART"}
+                        {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
                     ),
                     "dsa_beneficiary": beneficiary,
                     "dsa_payor": payor,
