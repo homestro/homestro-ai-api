@@ -43,16 +43,23 @@ class DaemonTests(unittest.TestCase):
                     "META_PIXEL_ID": "5555",
                 },
                 clear=False,
-            ), patch("adtech_pilot.daemon.MetaPublisher") as publisher_cls:
+            ), patch("adtech_pilot.daemon.MetaPublisher") as publisher_cls, patch(
+                "adtech_pilot.daemon.MetaInsightsClient"
+            ) as insights_cls:
                 publisher_cls.return_value.check_readiness = AsyncMock(
                     return_value={"status": "checked", "account": readiness.model_dump()}
                 )
+                insights_cls.return_value.campaign_metrics = AsyncMock(return_value=[])
                 result = await PilotDaemon(MemoryAudit())._metrics_job()
             publisher_cls.return_value.check_readiness.assert_awaited_once()
             self.assertEqual(result["meta_ads_preflight"]["status"], "checked")
             self.assertIn("DRY_RUN_ENABLED", result["optimizer_micro_budget_preflight"]["blockers"])
             self.assertFalse(result["optimizer_micro_budget_preflight"]["live_submission_enabled"])
-            self.assertEqual(result["micro_budget_execution"], "READ_ONLY_PREFLIGHT_ONLY")
+            self.assertEqual(result["micro_budget_execution"], "READ_ONLY_METRICS_ONLY")
+            self.assertEqual(result["execution"], "READ_ONLY")
+            self.assertTrue(result["optimizer_dry_run"])
+            self.assertEqual(result["optimizer_budget_limit_eur"], 0.0)
+            insights_cls.return_value.campaign_metrics.assert_awaited_once_with(days=7)
 
         asyncio.run(run())
 
