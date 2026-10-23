@@ -84,12 +84,15 @@ class MicroBudgetGate:
         product_ids_in_feed: set[str],
         previously_submitted_campaigns: int = 0,
         dry_run: bool = True,
+        purchase_event_verified: bool = False,
     ) -> MicroBudgetDecision:
         blockers: list[str] = []
         if not self.enabled:
             blockers.append("MICRO_BUDGET_NOT_EXPLICITLY_ENABLED")
         if dry_run:
             blockers.append("DRY_RUN_ENABLED")
+        if not purchase_event_verified:
+            blockers.append("META_PURCHASE_EVENT_NOT_VERIFIED")
         if account is None:
             blockers.append("META_ACCOUNT_PREFLIGHT_NOT_VERIFIED")
         else:
