@@ -64,6 +64,7 @@ class MetaPublisherTests(unittest.TestCase):
             "META_DSA_PAYOR": "Homestro legal entity",
             "META_API_VERSION": "v26.0",
             "META_BILLING_VERIFIED": "true",
+            "META_PURCHASE_EVENT_VERIFIED": "true",
             "MICRO_BUDGET_PRODUCT_ID": "sku-1",
             "PILOT_CREATIVE_DIR": str(self.root),
             "PILOT_CREATIVE_MIN_SCORE": "80",
@@ -273,7 +274,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
         self.assertEqual(adset_form["daily_budget"], ["500"])
-        self.assertIn('"custom_event_type": "ADD_TO_CART"', adset_form["promoted_object"][0])
+        self.assertIn('"custom_event_type": "PURCHASE"', adset_form["promoted_object"][0])
 
 
 if __name__ == "__main__":
