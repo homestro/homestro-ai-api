@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 32908)
-Total output lines: 1450
-
 const {checkGallery}=require('./gallery-readiness');
 const {contentReadiness}=require('./content-readiness');
 const {summarizeAutopilotResults}=require('./autopilot-results');
@@ -510,7 +507,161 @@ app.post('/api/shopify/products/variants',apiKey,async(req,res)=>{try{res.json({
 
 // HOMESTRO_CATALOG_AUTOPILOT_V3
 const catalogState={running:false,lastRun:null,lastError:null,created:0,rejected:0,failed:0,seen:new Set(),candidates:[]};
-const catalogKeywords=['EU Stock kitchen tool','EU Sto…2908 tokens truncated…GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
+const catalogKeywords=['EU Stock kitchen tool','EU Stock kitchen gadget','EU Stock chef knife','EU Stock cleaning tool','EU Stock home cleaning','EU Stock travel accessory','EU Stock garden tools','EU Stock headphones','EU Stock bluetooth headphones','EU Stock earbuds','Poland Warehouse kitchen knife','Poland Warehouse kitchen tool','France Warehouse kitchen knife','Germany Warehouse kitchen tool','EU Warehouse cleaning tool','EU Warehouse garden tool','EU Stock wireless headphones','EU Stock noise cancelling headphones'];
+function catalogInterval(){const n=Number(process.env.HOMESTRO_CATALOG_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=300000?n:300000;}
+function catalogNum(v){
+ const raw=String(v??'').trim().replace(/\s+/g,'');
+ if(!raw)return NaN;
+ const suffix=(raw.match(/([kmb])\+?$/i)||[])[1]?.toLowerCase()||'';
+ let s=raw.replace(/[kmb]\+?$/i,'').replace(/[^0-9.,-]/g,'');
+ if(!s)return NaN;
+ let x=s;
+ if(s.includes(',')&&s.includes('.')) x=s.lastIndexOf(',')>s.lastIndexOf('.')?s.replace(/\./g,'').replace(',','.'):s.replace(/,/g,'');
+ else if(s.includes(',')&&/,[0-9]{3}$/.test(s)) x=s.replace(/,/g,'');
+ else x=s.replace(',','.');
+ let n=Number(x); if(!Number.isFinite(n))return NaN; if(suffix==='k')n*=1000; else if(suffix==='m')n*=1000000; else if(suffix==='b')n*=1000000000;
+ return Number.isFinite(n)?n:NaN;
+}
+
+async function homestroCJSearch(keyword){
+  const token=String(process.env.CJ_API_KEY||'').trim();
+  if(!token){ console.log('CJ_SOURCE_DISABLED','reason=no-CJ_API_KEY'); return []; }
+  const endpoint=String(process.env.CJ_API_ENDPOINT||'https://developers.cjdropshipping.com/api2.0/v1/product/query').trim();
+  const pageSize=Math.min(Math.max(Number(process.env.CJ_API_PAGE_SIZE||50),1),100);
+  const pageNum=Math.max(Number(process.env.CJ_API_PAGE||1),1);
+  const requestBody={keyWord:String(keyword||'').trim(),countryCode:String(process.env.CJ_COUNTRY_CODE||'DE').trim(),pageSize,pageNum,verifiedWarehouse:1};
+  try{
+    const r=await fetch(endpoint,{method:'POST',headers:{'CJ-Access-Token':token,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(requestBody)});
+    const raw=await r.text(); let d={}; try{d=JSON.parse(raw);}catch{throw new Error('CJ API returned non-JSON HTTP '+r.status);}
+    if(!r.ok)throw new Error('CJ API HTTP '+r.status+' '+String(d.message||d.msg||''));
+    if(d?.code&&Number(d.code)!==200)throw new Error('CJ API code '+d.code+': '+String(d.message||d.msg||'unknown error'));
+    const root=d?.data||d?.result||d;
+    const list=root?.list||root?.records||root?.productList||root?.products||root?.content||[];
+    const arr=Array.isArray(list)?list:(list?[list]:[]);
+    const eu=new Set(['DE','GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
+    const euNorm=v=>{const x=String(v??'').trim().toUpperCase();return Boolean(x&&(eu.has(x)||[...eu].some(c=>x.includes(c))));};
+    const firstString=(o,keys)=>{for(const k of keys){const v=o?.[k];if(v!==undefined&&v!==null&&String(v).trim())return String(v).trim();}return '';};
+    const firstNumber=(o,keys)=>{for(const k of keys){const n=catalogNum(o?.[k]);if(Number.isFinite(n))return n;}return NaN;};
+    const out=[];
+    for(const p of arr){
+      const id=firstString(p,['id','productId','product_id','pid','sku']);
+      const url=firstString(p,['productUrl','product_url','url','productDetailUrl','product_detail_url','detailUrl']);
+      if(!id||!url)continue;
+      const title=firstString(p,['nameEn','name','productName','product_name','title'])||String(keyword||'').trim();
+      const cost=firstNumber(p,['sellPrice','sell_price','salePrice','sale_price','price','discountPrice']);
+      const sold=firstNumber(p,['sales','sold','orders','orderCount','ordersCount','saleNum','salesCount']);
+      const direct=firstString(p,['warehouseCountry','warehouse_country','shipFromCountry','ship_from_country','countryCode','country','warehouse']);
+      const warehouseValues=[direct,
+        ...(Array.isArray(p.warehouseList)?p.warehouseList:[]).flatMap(x=>[x?.countryCode,x?.country,x?.warehouseCountry,x?.warehouseName]),
+        ...(Array.isArray(p.warehouses)?p.warehouses:[]).flatMap(x=>[x?.countryCode,x?.country,x?.warehouseCountry,x?.warehouseName]),
+        ...(Array.isArray(p.variants)?p.variants:[]).flatMap(x=>[x?.warehouseCountry,x?.warehouse_country,x?.shipFromCountry,x?.ship_from_country,x?.countryCode,x?.country])
+      ].filter(Boolean);
+      const euWarehouse=warehouseValues.some(euNorm);
+      const warehouse=warehouseValues.find(euNorm)||direct;
+      out.push({id:String(id),title,cost,sold:Number.isFinite(sold)?sold:0,source_url:url,euWarehouse,warehouse:String(warehouse||''),source_type:'cj-api',
+        context:JSON.stringify({countryCode:requestBody.countryCode,warehouse:String(warehouse||''),verifiedWarehouse:1}),
+        evidence:euWarehouse?'CJ Dropshipping API: explicit EU warehouse evidence '+String(warehouse):'CJ Dropshipping API: no explicit EU warehouse evidence'});
+    }
+    console.log('CJ_SOURCE',keyword,'items='+out.length,'euConfirmed='+out.filter(x=>x.euWarehouse===true).length);
+    if(arr[0])console.log('CJ_SAMPLE_KEYS',JSON.stringify(Object.keys(arr[0]).slice(0,120)));
+    return out;
+  }catch(e){console.error('CJ_SOURCE_FAILED',keyword,String(e?.message||e));return [];}
+}
+
+async function homestroAffiliateApiSearch(keyword){
+  const appKey=String(process.env.ALIEXPRESS_APP_KEY||'').trim();
+  const appSecret=String(process.env.ALIEXPRESS_APP_SECRET||'').trim();
+  if(!appKey||!appSecret)return [];
+  const endpoint=String(process.env.ALIEXPRESS_API_ENDPOINT||'https://api-sg.aliexpress.com/sync').trim();
+  const pageSize=Math.min(Math.max(Number(process.env.ALIEXPRESS_API_PAGE_SIZE||50),1),50);
+  const timestamp=new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,14);
+  const baseParams={
+    method:'aliexpress.affiliate.product.query',
+    app_key:appKey,
+    timestamp,
+    sign_method:'sha256',
+    format:'json',
+    v:'2.0',
+    keywords:String(keyword||''),
+    ship_to_country:String(process.env.ALIEXPRESS_SHIP_TO_COUNTRY||'DE'),
+    target_currency:'EUR',
+    target_language:'DE',
+    page_size:String(pageSize),
+    page_no:'1',
+    fields:'product_id,product_title,sale_price,original_price,discount,product_detail_url,first_level_category_name,second_level_category_name,commission_rate,lastest_volume,ship_from_country,delivery_time'
+  };
+  const signBase=Object.keys(baseParams).sort().map(k=>k+String(baseParams[k])).join('');
+  const sign=crypto.createHmac('sha256',appSecret).update('aliexpress.affiliate.product.query'+signBase).digest('hex').toUpperCase();
+  const params=new URLSearchParams({...baseParams,sign});
+  try{
+    const r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'},body:params});
+    const text=await r.text();
+    if(!r.ok)throw new Error('AliExpress API HTTP '+r.status);
+    const d=JSON.parse(text);
+    const root=d?.aliexpress_affiliate_product_query_response?.resp_result?.result
+      ||d?.aliexpress_affiliate_product_query_response?.result
+      ||d?.resp_result?.result
+      ||d?.result      ||d;
+    const list=root?.products?.product||root?.products||root?.product||[];
+    const arr=Array.isArray(list)?list:(list?[list]:[]);
+    const eu=new Set(['DE','GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','TSchechien'.toUpperCase(),'ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
+    const out=[];
+    for(const p of arr){
+      const ship=String(p.ship_from_country||p.shipFromCountry||p.ship_from||p.warehouse_country||p.warehouseCountry||'').trim();
+      const shipNorm=ship.toUpperCase();
+      const euWarehouse=eu.has(shipNorm)||[...eu].some(c=>shipNorm.includes(c));
+      const id=String(p.product_id||p.productId||'').replace(/[^0-9]/g,'');
+      const url=String(p.product_detail_url||p.productDetailUrl||'').trim() || (id?'https://www.aliexpress.com/item/'+id+'.html':'');
+      const cost=Number(String(p.sale_price||p.salePrice||p.app_sale_price||'').replace(',','.'));
+      const sold=catalogNum(p.lastest_volume||p.latest_volume||p.orders||p.order_count||p.sales||0);
+      if(id&&url)out.push({
+        id,title:String(p.product_title||p.productTitle||keyword).trim(),cost,sold:Number.isFinite(sold)?sold:0,
+        source_url:url,euWarehouse,source_type:'aliexpress-affiliate-api',
+        context:JSON.stringify({ship_from_country:ship,delivery_time:p.delivery_time||'',sale_price:p.sale_price||''}),
+        evidence:'AliExpress Affiliate API: ship_from_country='+ship
+      });
+    }
+    console.log('ALIEXPRESS_API_SOURCE',keyword,'items='+out.length,'euConfirmed='+out.filter(x=>x.euWarehouse).length);
+    return out;
+  }catch(e){
+    console.error('ALIEXPRESS_API_SOURCE_FAILED',keyword,String(e?.message||e));
+    return [];
+  }
+}
+
+async function homestroFeedSearch(keyword){
+  const feed=String(process.env.HOMESTRO_SOURCE_FEED_URL||'').trim();
+  if(!feed)return [];
+  try{
+    const r=await fetch(feed,{headers:{'Accept':'application/json,text/csv;q=0.9,*/*;q=0.8'},redirect:'follow'});
+    if(!r.ok)throw new Error('feed HTTP '+r.status);
+    const text=await r.text();
+    let rows=[];
+    if(/^\s*[\[{]/.test(text)){
+      const d=JSON.parse(text);
+      rows=Array.isArray(d)?d:(Array.isArray(d.products)?d.products:Array.isArray(d.items)?d.items:[]);
+    }else{
+      const lines=text.split(/\r?\n/).filter(Boolean),head=(lines.shift()||'').split(',').map(x=>x.replace(/^"|"$/g,'').trim());
+      rows=lines.map(line=>{const vals=[];let cur='',q=false;for(const ch of line){if(ch==='"')q=!q;else if(ch===','&&!q){vals.push(cur);cur='';}else cur+=ch;}vals.push(cur);return Object.fromEntries(head.map((h,i)=>[h,vals[i]||'']));});
+    }
+    const eu=new Set(['DE','GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
+    const kw=String(keyword||'').toLowerCase();
+    return rows.filter(p=>!p.keyword||String(p.keyword).toLowerCase().includes(kw)||kw.includes(String(p.keyword).toLowerCase())).map(p=>{
+      const id=String(p.id||p.product_id||p.productId||'').replace(/[^0-9]/g,'');
+      const url=String(p.url||p.product_url||p.productUrl||p.product_detail_url||'').trim()||(id?'https://www.aliexpress.com/item/'+id+'.html':'');
+      const ship=String(p.ship_from_country||p.shipFromCountry||p.warehouse_country||p.warehouseCountry||'').trim();
+      return {id,title:String(p.title||p.product_title||keyword),cost:Number(String(p.cost_eur||p.cost||p.sale_price||'').replace(',','.')),sold:catalogNum(p.sold||p.orders||p.sales||0),source_url:url,euWarehouse:Boolean(p.eu_warehouse)||[...eu].some(c=>ship.toUpperCase().includes(c)),source_type:'homestro-feed',context:JSON.stringify(p),evidence:'Configured sourcing feed'};    }).filter(x=>x.id&&x.source_url);
+  }catch(e){console.error('HOMESTRO_SOURCE_FEED_FAILED',String(e?.message||e));return [];}
+}
+
+
+
+/* HOMESTRO_MULTI_SOURCE_V1
+ * Source adapters are deliberately credential/config driven.
+ * Apify is used as a sourcing/market-intelligence execution layer; no CAPTCHA,
+ * stealth, proxy evasion, or anti-bot bypass is performed.
+ */
+const HOMESTRO_EU_COUNTRIES=new Set(['DE','GERMANY','DEUTSCHLAND','PL','POLAND','POLEN','CZ','CZECH','CZECHIA','CZECH REPUBLIC','ES','SPAIN','SPANIEN','FR','FRANCE','FRANKREICH','IT','ITALY','ITALIEN','NL','NETHERLANDS','NIEDERLANDE','BE','BELGIUM','BELGIEN','AT','AUSTRIA','ÖSTERREICH']);
 function homestroEuWarehouseValue(v){
  const s=String(v??'').trim().toUpperCase();
  if(!s)return false;
