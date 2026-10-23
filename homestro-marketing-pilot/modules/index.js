@@ -13,7 +13,7 @@ import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
 import {createFeedRefresh} from './feed-refresh.js';
-import {publishProductSeo} from './seo-publication.js';
+import {publishProductSeo,syncSeoCatalogBatch} from './seo-publication.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
@@ -24,7 +24,7 @@ import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
 import {buildGrowthReport,reportWindow} from './growth-report.js';
-import {createSeoArticleDraft} from './seo-articles.js';
+import {createSeoArticleDraft,publishNextSeoArticle} from './seo-articles.js';
 import {buildSeoContentPlan} from './content-plan.js';
 import {parseTrackedLink,trackedDestination} from './tracking.js';
 import {syncSeoGuides} from './seo-guides.js';
@@ -106,6 +106,17 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         for(const p of await store.feedRows())await processProduct(p.id,cfg.autonomyEnabled);
         const r=await syncCatalog(graphql,id=>processProduct(id,cfg.autonomyEnabled));
         await approveReviewed(store,cfg);
+        try {
+          const seoBatch=await syncSeoCatalogBatch({pool,graphql,fetchProduct,batchSize:cfg.seoCatalogBatchSize});
+          log('SEO_CATALOG_BATCH',seoBatch);
+        } catch(e) { log('SEO_CATALOG_BATCH_FAILED',{reason:codeOf(e)}); }
+        if(cfg.seoBlogAutopublishEnabled) {
+          try {
+            const article=await publishNextSeoArticle({pool,graphql,products:await store.seoRows(),
+              blogId:cfg.seoBlogId,author:cfg.seoAuthor,maxDaily:cfg.seoBlogMaxDailyArticles});
+            log('SEO_BLOG_AUTOPUBLISH',article);
+          } catch(e) { log('SEO_BLOG_AUTOPUBLISH_FAILED',{reason:codeOf(e)}); }
+        }
         if(social)await social.prepare().catch(e=>log('SOCIAL_PREPARATION_FAILED',{reason:codeOf(e)}));
         const pendingReasons=(await pool.query(`SELECT reason,count(*)::int AS count FROM marketing_products p
           CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason
@@ -210,7 +221,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
     router.get('/seo/articles/drafts',route(async(req,res)=>{
       const rows=(await pool.query('SELECT handle,status,shopify_id,created_at,updated_at FROM marketing_seo_articles ORDER BY created_at DESC LIMIT 100')).rows;
-      res.json({blogConfigured:Boolean(cfg.seoBlogId),writeContentScopeRequired:true,articles:rows});
+      res.json({blogConfigured:Boolean(cfg.seoBlogId),writeContentScopeRequired:true,
+        autopublishEnabled:cfg.seoBlogAutopublishEnabled,maximumDailyArticles:cfg.seoBlogMaxDailyArticles,articles:rows});
     }));
     router.get('/seo/content-plan/:id',route(async(req,res)=>{
       const id=decodeURIComponent(String(req.params.id||''));

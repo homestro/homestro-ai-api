@@ -33,11 +33,14 @@ WHERE s.status='published' AND s.published_at IS NULL;
 CREATE TABLE IF NOT EXISTS marketing_seo_articles (
   handle text PRIMARY KEY,
   content_hash text NOT NULL,
-  status text NOT NULL CHECK(status IN ('creating','draft_created','failed','recovery_required')),
+  status text NOT NULL CHECK(status IN ('creating','draft_created','published','failed','recovery_required','external_exists')),
   shopify_id text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE marketing_seo_articles DROP CONSTRAINT IF EXISTS marketing_seo_articles_status_check;
+ALTER TABLE marketing_seo_articles ADD CONSTRAINT marketing_seo_articles_status_check
+  CHECK(status IN ('creating','draft_created','published','failed','recovery_required','external_exists'));
 
 CREATE TABLE IF NOT EXISTS marketing_clicks (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -57,6 +60,9 @@ CREATE TABLE IF NOT EXISTS marketing_seo_pages (
 );
 CREATE TABLE IF NOT EXISTS marketing_performance (
   window_days integer PRIMARY KEY,payload jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS marketing_pilot_state (
+  key text PRIMARY KEY,value text NOT NULL,updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS marketing_seo_attempts (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -10,7 +10,7 @@ export const PRODUCT_QUERY=`query PilotProduct($id:ID!, $mediaAfter:String, $var
     publishedFacebook: metafield(namespace:"homestro",key:"organic_facebook_post_id") { jsonValue }
     publishedInstagram: metafield(namespace:"homestro",key:"organic_instagram_post_id") { jsonValue }
     media(first:50, after:$mediaAfter) {
-      nodes { mediaContentType status
+      nodes { id mediaContentType status
         ... on Video { sources { url format mimeType width height } originalSource { url format mimeType width height } }
         ... on MediaImage { image { url altText } }
       } pageInfo { hasNextPage endCursor }
