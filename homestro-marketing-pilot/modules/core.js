@@ -49,6 +49,9 @@ export function config(env=process.env) {
     publishOnce:envBool(env.PILOT_PUBLISH_ONCE), syncOnce:envBool(env.PILOT_SYNC_ONCE),
     feedEnabled:envBool(env.PILOT_FEED_ENABLED),
     seoAutopublishEnabled:envBool(env.PILOT_SEO_AUTOPUBLISH_ENABLED),
+    seoCatalogBatchSize:Math.max(1,Math.min(100,Number(env.PILOT_SEO_CATALOG_BATCH_SIZE)||25)),
+    seoBlogAutopublishEnabled:envBool(env.PILOT_SEO_BLOG_AUTOPUBLISH_ENABLED??env.PILOT_SEO_AUTOPUBLISH_ENABLED),
+    seoBlogMaxDailyArticles:Number(env.PILOT_SEO_BLOG_MAX_DAILY_ARTICLES||1),
     seoMaxDailyPages:Number(env.PILOT_SEO_MAX_DAILY_PAGES||1),
     analyticsEnabled:envBool(env.PILOT_ANALYTICS_ENABLED),
     // Optional product Reels use the verified Shopify media and bounded OpenAI narration.
@@ -76,6 +79,7 @@ export function config(env=process.env) {
   if(!Number.isInteger(cfg.publishEveryHours)||cfg.publishEveryHours<0||cfg.publishEveryHours>24)fail('INVALID_PUBLISH_INTERVAL');
   if(!['','balanced-v1'].includes(cfg.organicPolicy))fail('INVALID_ORGANIC_POLICY');
   if(!Number.isInteger(cfg.seoMaxDailyPages)||cfg.seoMaxDailyPages<1||cfg.seoMaxDailyPages>3)fail('INVALID_SEO_DAILY_LIMIT');
+  if(!Number.isInteger(cfg.seoBlogMaxDailyArticles)||cfg.seoBlogMaxDailyArticles<1||cfg.seoBlogMaxDailyArticles>3)fail('INVALID_SEO_ARTICLE_DAILY_LIMIT');
   if(!Number.isInteger(cfg.maxDailyPosts) || cfg.maxDailyPosts<1 || cfg.maxDailyPosts>(cfg.publishEveryHours?24:10) ||
     !Number.isInteger(cfg.maxDailyPerChannel) || cfg.maxDailyPerChannel<1 || cfg.maxDailyPerChannel>(cfg.publishEveryHours?6:5))fail('INVALID_DAILY_LIMIT');
   if(!Number.isFinite(cfg.feeRate) || cfg.feeRate<0 || cfg.feeRate>=1)fail('INVALID_FEE_RATE');

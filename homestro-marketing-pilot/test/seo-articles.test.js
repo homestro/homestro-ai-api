@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {articleDraftInput,createSeoArticleDraft} from '../modules/seo-articles.js';
+import {articleDraftInput,createSeoArticleDraft,productSeoArticle,publishNextSeoArticle} from '../modules/seo-articles.js';
 
 const valid={title:'Ordnung im kleinen Flur: praktische Ideen',handle:'ordnung-kleiner-flur',
   summary:'Praktische, alltagstaugliche Hinweise für mehr Ordnung in einem kleinen Flur.',
@@ -15,6 +15,22 @@ test('creates escaped Shopify article body as a private draft',()=>{
   assert.ok(article.body.includes('&lt;b&gt;mark&lt;/b&gt;'));
   assert.ok(!article.body.includes('<script>'));
   assert.ok(article.body.startsWith('<p>'));
+});
+
+test('builds a product-specific German article only from reviewed available product facts',()=>{
+  const product={id:'gid://shopify/Product/12345',status:'ACTIVE',contentReviewed:true,rejected:false,
+    url:'https://homestro.de/products/ordnungsbox-kueche',variants:[{available:true,price:19.9}],localized:{
+      title:'Aufbewahrungsbox für die Küche',searchTitle:'Aufbewahrungsbox Küche',
+      description:'Diese Aufbewahrungsbox ist für die übersichtliche Aufbewahrung in der Küche beschrieben. Prüfe vor dem Kauf die Maße und Varianten auf der Produktseite.',
+      benefits:[{text:'Die Box besitzt einen Deckel.'},{text:'Sie ist in mehreren Varianten verfügbar.'},{text:'Die angegebenen Maße stehen auf der Produktseite.'}]}};
+  const article=productSeoArticle(product);
+  assert.ok(article);
+  assert.ok(article.body.length>=800);
+  assert.match(article.handle,/ordnungsbox-kueche-ratgeber-12345$/);
+  assert.equal(article.productUrl,product.url);
+  assert.equal(productSeoArticle({...product,status:'DRAFT'}),null);
+  assert.equal(productSeoArticle({...product,rejected:true}),null);
+  assert.equal(productSeoArticle({...product,variants:[{available:false,price:19.9}]}),null);
 });
 
 test('rejects short, unsafe, malformed, or unconfigured article input',()=>{
@@ -34,6 +50,7 @@ test('creates a draft once and returns the Shopify-confirmed result',async()=>{
   },release(){}};
   const pool={connect:async()=>client,query:async()=>({rowCount:1,rows:[]})};
   const result=await createSeoArticleDraft({pool,graphql:async(_query,vars)=>{
+    if(vars.query)return {articles:{nodes:[],pageInfo:{hasNextPage:false}}};
     captured=vars.article;
     return {articleCreate:{article:{id:'gid://shopify/Article/10',isPublished:false},userErrors:[]}};
   },...config,input:valid});
@@ -66,9 +83,44 @@ test('does not create a duplicate when a Shopify draft is already recorded',asyn
     throw new Error('Unexpected SQL');
   };
   const pool={connect:async()=>client,query:async()=>({rowCount:1,rows:[]})};
-  const result=await createSeoArticleDraft({pool,graphql:async()=>{mutationCalled=true;},...config,input:valid});
+  const result=await createSeoArticleDraft({pool,graphql:async(_query,vars)=>{
+    if(vars.query)return {articles:{nodes:[],pageInfo:{hasNextPage:false}}};
+    mutationCalled=true;
+  },...config,input:valid});
   assert.equal(result.created,false);
   assert.equal(result.id,'gid://shopify/Article/10');
   assert.equal(committed,true);
   assert.equal(mutationCalled,false);
+});
+
+test('auto-publishes at most one deduplicated fact-based article per day and links to the product',async()=>{
+  const product={id:'gid://shopify/Product/12345',status:'ACTIVE',contentReviewed:true,rejected:false,
+    url:'https://homestro.de/products/ordnungsbox-kueche',variants:[{available:true,price:19.9}],localized:{
+      title:'Aufbewahrungsbox für die Küche',searchTitle:'Aufbewahrungsbox Küche',
+      description:'Diese Aufbewahrungsbox ist für die übersichtliche Aufbewahrung in der Küche beschrieben. Prüfe vor dem Kauf die Maße und Varianten auf der Produktseite.',
+      benefits:[{text:'Die Box besitzt einen Deckel.'},{text:'Sie ist in mehreren Varianten verfügbar.'},{text:'Die angegebenen Maße stehen auf der Produktseite.'}]}};
+  let status='creating',mutation;
+  const client={query:async(sql,params=[])=>{
+    if(sql==='BEGIN'||sql==='COMMIT')return {rowCount:0,rows:[]};
+    if(sql.includes('INSERT INTO marketing_seo_articles'))return {rowCount:1,rows:[{handle:params[0]}]};
+    if(sql.includes('UPDATE marketing_seo_articles')){status=params[2];return {rowCount:1,rows:[]};}
+    throw new Error('Unexpected SQL '+sql);
+  },release(){}};
+  const pool={connect:async()=>client,query:async(sql,params=[])=>{
+    if(sql.includes("WHERE status='published'"))return {rows:[{count:0}]};
+    if(sql.includes('SELECT handle,status FROM marketing_seo_articles'))return {rows:[]};
+    if(sql.includes('UPDATE marketing_seo_articles')){status=params[2];return {rowCount:1,rows:[]};}
+    throw new Error('Unexpected pool SQL '+sql);
+  }};
+  const result=await publishNextSeoArticle({pool,graphql:async(query,vars)=>{
+    if(vars.query)return {articles:{nodes:[],pageInfo:{hasNextPage:false}}};
+    mutation=vars.article;
+    return {articleCreate:{article:{id:'gid://shopify/Article/55',handle:vars.article.handle,isPublished:true},userErrors:[]}};
+  },products:[product],...config});
+  assert.equal(result.status,'published');
+  assert.equal(result.published,1);
+  assert.equal(status,'published');
+  assert.equal(mutation.isPublished,true);
+  assert.ok(mutation.body.includes('https://homestro.de/products/ordnungsbox-kueche'));
+  assert.ok(mutation.tags.some(x=>x.startsWith('homestro-pilot-')));
 });
