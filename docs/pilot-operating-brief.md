@@ -1,3 +1,13 @@
+## Trycrush-style optimization foundation — 23 October 2026
+
+Prepared on branch `codex/trycrush-readonly-metrics-20261023` from `deploy/adtech-pilot` (base commit `2a06de3e6fd803d0b47d89dd8f4bbf4cdde86709`). Adds a read-only, seven-day Meta Ads Insights loader to the Python adtech pilot and wires its scheduler to report campaign spend, impressions, clicks, and Meta-reported purchase metrics. The Docker image now includes the module. This closes the prior `NO_VERIFIED_CHANNEL_METRICS_LOADER` gap for Meta metrics.
+
+Safety and scope: optimizer remains `READ_ONLY`, dry-run, and €0; this code does not create, edit, pause, or scale campaigns, and no deployment was triggered. Meta's reported purchase data is not yet joined to verified Shopify orders and contribution margin, so the optimizer reports `HOLD` with `SHOPIFY_ORDERS_AND_CONTRIBUTION_MARGIN_NOT_JOINED`. Therefore this is a working first step toward Trycrush-like performance reporting, not yet automatic optimization or proof a campaign is live/approved. No new spend was made.
+
+Validation in this branch: stdlib async tests use a mocked Meta endpoint and assert GET-only behavior, seven-day range, purchase-action deduplication, and unverified attribution. CI/build result is recorded after the branch checks complete. Not deployed; production behavior is unchanged.
+
+---
+
 Warning: truncated output (original token count: 13966)
 Total output lines: 411
 
