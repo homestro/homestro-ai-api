@@ -91,6 +91,7 @@ class MicroBudgetGateTests(unittest.TestCase):
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
             dry_run=False,
+            purchase_event_verified=True,
         )
         self.assertTrue(result.eligible)
 
