@@ -218,10 +218,18 @@ class PilotDaemon:
         if not feed_url:
             return {"status": "blocked", "reason": "PRODUCT_FEED_URL_NOT_CONFIGURED"}
         parsed = urlsplit(feed_url)
-        if parsed.scheme != "https" or parsed.hostname not in {
+        allowed_feed_hosts = {
             "homestro.de",
             "www.homestro.de",
-        }:
+            "homestro-ai-api-fixed-current-production.up.railway.app",
+        }
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in allowed_feed_hosts
+            or parsed.username
+            or parsed.password
+            or parsed.port not in {None, 443}
+        ):
             return {"status": "blocked", "reason": "FEED_URL_HOST_NOT_ALLOWED"}
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30, connect=8), follow_redirects=False
