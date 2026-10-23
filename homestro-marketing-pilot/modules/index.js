@@ -30,6 +30,7 @@ import {parseTrackedLink,trackedDestination} from './tracking.js';
 import {syncSeoGuides} from './seo-guides.js';
 import {refreshPerformance,readPerformance} from './performance.js';
 import {buildAdsReadiness} from './ads-readiness.js';
+import {buildSalesPlan,refreshProductSales} from './ads-sales-plan.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -114,6 +115,10 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         catch(e){log('SEO_PIPELINE_PENDING',{reason:codeOf(e)});}
         try {await refreshPerformance({pool,graphql,enabled:cfg.analyticsEnabled});}
         catch(e){log('PERFORMANCE_PIPELINE_PENDING',{reason:codeOf(e)});}
+        try {const r=await refreshProductSales({pool,graphql,enabled:cfg.analyticsEnabled});
+          log('PRODUCT_DEMAND_REFRESHED',{status:r.status,days:r.days,productsWithOrders:Object.keys(r.byTitle||{}).length,
+            productsWithTraffic:Object.keys(r.byPath||{}).length,missingScopes:r.missingScopes||[]});}
+        catch(e){log('PRODUCT_DEMAND_REFRESH_FAILED',{reason:codeOf(e)});}
         return {...r,pendingReasons};
       }catch(e){log(codeOf(e));return {error:codeOf(e)};}
       finally{if(locked)await client.query('SELECT pg_advisory_unlock(73341002)').catch(()=>{});client?.release();syncBusy=false;}
@@ -225,6 +230,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.json(buildAdsReadiness({products,feedEnabled:cfg.feedEnabled,
         // Current operating brief records all Homestro Merchant Center items rejected.
         merchantApprovalConfirmed:false}));
+    }));
+    router.get('/ads/sales-plan',route(async(req,res)=>{
+      const products=(await pool.query('SELECT document,status FROM marketing_products ORDER BY id LIMIT 5000')).rows;
+      const productSales=await refreshProductSales({pool,graphql,enabled:cfg.analyticsEnabled});
+      const configuredMargin=Number(process.env.MIN_NET_PROFIT_EUR||10);
+      const minimumNetMarginEUR=Number.isFinite(configuredMargin)?Math.max(10,configuredMargin):10;
+      res.json(buildSalesPlan({products,productSales,minimumNetMarginEUR}));
     }));
     router.get('/growth/report',route(async(req,res)=>{
       const days=reportWindow(req.query.days);
