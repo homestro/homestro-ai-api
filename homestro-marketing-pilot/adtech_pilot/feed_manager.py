@@ -319,6 +319,7 @@ class ProductFeedManager:
 
     def _parse_json(self, raw: bytes) -> FeedReport:
         decoded = json.loads(raw)
+        rows: Any
         if isinstance(decoded, dict) and {"id", "handle", "variants"}.issubset(
             decoded
         ):
