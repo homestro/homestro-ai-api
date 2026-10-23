@@ -50,3 +50,8 @@ This deployment starts the daemon and its available diagnostics. It does not rep
 ## Validation scope and production prerequisites
 
 The tests cover feed parsing/validation, read-only GMC diagnostics, output normalization, structured model and image API handling through mocks, Meta account preflight and one-time campaign creation against a mock Graph API, scoring and micro-budget gates, attribution requirements, budget-cap reconciliation and API authentication. Live Meta OAuth approval, billing, Pixel access, ad review and real campaign delivery remain account-specific prerequisites. A historical Purchase event is not required for the first cold-start campaign. Feed corrections cannot by themselves resolve Merchant Center account-policy or shipping setup issues.
+
+
+## Read-only Meta metrics implementation (prepared branch)
+
+The scheduler now reads campaign-level Meta Insights for the last seven days and reports spend, impressions, clicks, and Meta-reported purchase counts/value. It is GET-only and remains in `READ_ONLY` mode with optimizer budget €0. Meta-reported purchases are not treated as verified Shopify attribution. Budget changes and winner scaling stay on HOLD until orders and contribution margin are reconciled with Shopify. No campaign writes are made by this metrics job.
