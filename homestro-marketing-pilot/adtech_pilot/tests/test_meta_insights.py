@@ -1,8 +1,7 @@
-from datetime import date
 import unittest
+from datetime import date
 
 import httpx
-
 from adtech_pilot.media_buyer import Platform
 from adtech_pilot.meta_insights import MetaInsightsClient
 
