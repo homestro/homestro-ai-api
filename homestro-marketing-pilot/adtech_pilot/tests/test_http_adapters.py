@@ -4,7 +4,6 @@ import io
 import unittest
 
 import httpx
-
 from adtech_pilot.creative_factory import CreativeBrief, OpenAIProvider
 from adtech_pilot.media_buyer import MetaAdLibraryClient
 from PIL import Image
