@@ -1224,7 +1224,7 @@ class MetaPublisher:
             client,
             f"{catalog_id}/product_sets",
             headers,
-            {"fields": "id,name,product_count", "limit": "100"},
+            {"fields": "id,name", "limit": "100"},
         )
         rows = result.get("data")
         if not isinstance(rows, list):
@@ -1243,7 +1243,6 @@ class MetaPublisher:
         exact.sort(
             key=lambda row: (
                 0 if str(row.get("name", "")).strip().casefold() == "all products" else 1,
-                -int(row.get("product_count", 0) or 0),
                 str(row.get("id", "")),
             )
         )
