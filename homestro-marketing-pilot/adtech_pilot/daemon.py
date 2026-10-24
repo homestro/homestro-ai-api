@@ -373,8 +373,11 @@ class PilotDaemon:
         )
         micro_budget = MicroBudgetGate().evaluate(
             account=account,
-            product_id=os.getenv("MICRO_BUDGET_PRODUCT_ID"),
             product_ids_in_feed={str(p.get("id")) for p in self._latest_products},
+            purchase_event_verified=(
+                os.getenv("META_PURCHASE_EVENT_VERIFIED", "false").strip().lower()
+                == "true"
+            ),
             # This optimization pass is intentionally read-only and cannot publish.
             dry_run=True,
         )
