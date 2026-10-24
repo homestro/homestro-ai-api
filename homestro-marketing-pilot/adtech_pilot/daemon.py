@@ -306,6 +306,8 @@ class PilotDaemon:
         connected product set, so this path must not depend on an OpenAI image,
         logo URL, or a one-product creative candidate.
         """
+        reconciliation = await MetaPublisher(self.audit).reconcile_retired_campaign()
+        await self.audit.record("retired_campaign_reconciliation", reconciliation)
         candidates = [
             product
             for product in self._latest_products
