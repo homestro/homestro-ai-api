@@ -723,7 +723,7 @@ class MetaPublisher:
     async def publish_one(
         self,
         *,
-        creative: GeneratedCreative,
+        creative: GeneratedCreative | None,
         product: dict[str, Any],
         product_ids_in_feed: set[str],
     ) -> dict[str, Any]:
