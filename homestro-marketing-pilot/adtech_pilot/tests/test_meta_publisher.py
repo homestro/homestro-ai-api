@@ -355,5 +355,31 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertIn(("GET", "/v26.0/old-campaign"), events)
         self.assertIn(("GET", "/v26.0/old-campaign/adsets"), events)
 
+    def test_retirement_works_without_purchase_but_never_releases_active_campaign(self):
+        async def run(remote_status):
+            campaign_id = "120254321479480274"
+            def handler(request):
+                self.assertEqual(request.method, "GET")
+                if request.url.path.endswith("/adsets"):
+                    return httpx.Response(200, json={"data": []})
+                return httpx.Response(200, json={"id": campaign_id, "status": remote_status})
+            audit = PlanAuditStore(self.root / f"retire-{remote_status}.sqlite3")
+            await audit.claim_meta_micro_campaign("act_12345", "old-product")
+            await audit.update_meta_micro_campaign(status="ACTIVE_PENDING_REVIEW", campaign_id=campaign_id)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                publisher = MetaPublisher(audit, client=client, env={"META_ACCESS_TOKEN": "test-token"})
+                result = await publisher.reconcile_retired_campaign()
+            with audit._connect() as connection:
+                archived = connection.execute("SELECT payload_json FROM adtech_audit WHERE kind='meta_campaign_archived'").fetchall()
+            return result, await audit.get_meta_micro_campaign_claim(), archived
+        result, claim, archived = asyncio.run(run("PAUSED"))
+        self.assertEqual(result["status"], "INACTIVE")
+        self.assertIsNone(claim)
+        self.assertEqual(len(archived), 1)
+        result, claim, archived = asyncio.run(run("ACTIVE"))
+        self.assertEqual(result["status"], "blocked")
+        self.assertIsNotNone(claim)
+        self.assertEqual(archived, [])
+
 if __name__ == "__main__":
     unittest.main()
