@@ -47,8 +47,12 @@ class DaemonTests(unittest.TestCase):
                 publisher_cls.return_value.check_readiness = AsyncMock(
                     return_value={"status": "checked", "account": readiness.model_dump()}
                 )
+                publisher_cls.return_value.reconcile_inactive_claim = AsyncMock(
+                    return_value={"status": "no_claim"}
+                )
                 result = await PilotDaemon(MemoryAudit())._metrics_job()
             publisher_cls.return_value.check_readiness.assert_awaited_once()
+            publisher_cls.return_value.reconcile_inactive_claim.assert_awaited_once()
             self.assertEqual(result["meta_ads_preflight"]["status"], "checked")
             self.assertIn("DRY_RUN_ENABLED", result["optimizer_micro_budget_preflight"]["blockers"])
             self.assertFalse(result["optimizer_micro_budget_preflight"]["live_submission_enabled"])
