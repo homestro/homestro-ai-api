@@ -367,6 +367,27 @@ class PlanAuditStore:
 
         return await asyncio.to_thread(delete)
 
+    async def mark_meta_micro_campaign_inactive(
+        self, *, campaign_id: str, expected_status: str
+    ) -> bool:
+        """Mark the exact locally claimed campaign inactive after remote verification."""
+        if expected_status not in {
+            "ACTIVE_PENDING_REVIEW",
+            "RECONCILED_EXISTING_CAMPAIGN",
+        }:
+            return False
+
+        def mark() -> bool:
+            with closing(self._connect()) as connection, connection:
+                cursor = connection.execute(
+                    "UPDATE meta_micro_campaign_claim SET status='INACTIVE' "
+                    "WHERE slot=? AND status=? AND campaign_id=?",
+                    ("single_live_meta_campaign", expected_status, campaign_id),
+                )
+            return cursor.rowcount == 1
+
+        return await asyncio.to_thread(mark)
+
     async def release_inactive_claim(
         self, *, campaign_id: str, expected_status: str
     ) -> bool:
@@ -374,6 +395,7 @@ class PlanAuditStore:
         if expected_status not in {
             "ACTIVE_PENDING_REVIEW",
             "RECONCILED_EXISTING_CAMPAIGN",
+            "INACTIVE",
         }:
             return False
 
@@ -829,7 +851,7 @@ class MetaPublisher:
                 elif (
                     prior_claim["campaign_id"]
                     and prior_claim["status"]
-                    in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}
+                    in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN", "INACTIVE"}
                 ):
                     # The local one-campaign slot can be reused only after Meta
                     # confirms the prior campaign and every ad set are paused.
@@ -1112,13 +1134,13 @@ class MetaPublisher:
         headers: dict[str, str],
         campaign_id: str,
     ) -> str:
-        """Resume only a confirmed paused campaign with no active ad sets."""
+        """Confirm the campaign and all of its ad sets are paused or archived."""
         campaign = await self._get(
             client, campaign_id, headers, {"fields": "id,status"}
         )
         if str(campaign.get("id", "")) != campaign_id:
             return "campaign_mismatch"
-        if str(campaign.get("status", "")).upper() != "PAUSED":
+        if str(campaign.get("status", "")).upper() not in {"PAUSED", "ARCHIVED"}:
             return "campaign_not_paused"
         adsets = await self._get(
             client,
@@ -1129,7 +1151,11 @@ class MetaPublisher:
         rows = adsets.get("data")
         if not isinstance(rows, list):
             return "adsets_incomplete"
-        if any(str(row.get("status", "")).upper() != "PAUSED" for row in rows if isinstance(row, dict)):
+        if any(
+            str(row.get("status", "")).upper() not in {"PAUSED", "ARCHIVED"}
+            for row in rows
+            if isinstance(row, dict)
+        ):
             return "adsets_not_all_paused"
         if any(not isinstance(row, dict) for row in rows):
             return "adsets_incomplete"
@@ -1137,6 +1163,84 @@ class MetaPublisher:
         if isinstance(paging, dict) and paging.get("next"):
             return "adsets_incomplete"
         return "ready"
+
+    async def reconcile_inactive_claim(self) -> dict[str, Any]:
+        """Read Meta state and mark an inactive single-campaign claim in the audit DB."""
+        claim = await self.audit.get_meta_micro_campaign_claim()
+        if claim is None:
+            return {"status": "no_claim"}
+        campaign_id = claim.get("campaign_id")
+        current_status = claim.get("status", "")
+        if current_status == "INACTIVE":
+            return {
+                "status": "already_inactive",
+                "campaign_id": campaign_id,
+            }
+        if (
+            not campaign_id
+            or current_status
+            not in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}
+        ):
+            return {
+                "status": "blocked",
+                "reason": "CLAIM_NOT_RECONCILABLE",
+            }
+        token = self.env.get("META_ACCESS_TOKEN", "").strip()
+        if not token:
+            return {
+                "status": "blocked",
+                "reason": "META_ACCESS_TOKEN_MISSING",
+                "campaign_id": campaign_id,
+            }
+
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(
+            timeout=httpx.Timeout(35, connect=8), follow_redirects=False
+        )
+        try:
+            reconciliation = await self._reconcile_paused_campaign(
+                client,
+                {"Authorization": f"Bearer {token}"},
+                campaign_id,
+            )
+            if reconciliation != "ready":
+                return {
+                    "status": "not_confirmed_inactive",
+                    "campaign_id": campaign_id,
+                    "reason": reconciliation,
+                }
+            marked = await self.audit.mark_meta_micro_campaign_inactive(
+                campaign_id=campaign_id,
+                expected_status=current_status,
+            )
+            if not marked:
+                return {
+                    "status": "blocked",
+                    "reason": "CLAIM_CHANGED_DURING_RECONCILIATION",
+                    "campaign_id": campaign_id,
+                }
+            await self.audit.record(
+                "meta_micro_campaign_claim_marked_inactive",
+                {
+                    "campaign_id": campaign_id,
+                    "previous_status": current_status,
+                    "reason": "Meta confirmed campaign and all ad sets paused or archived",
+                },
+            )
+            return {
+                "status": "INACTIVE",
+                "campaign_id": campaign_id,
+                "meta_verified": True,
+            }
+        except Exception as exc:  # noqa: BLE001 - retry on the next pilot cycle
+            return {
+                "status": "retry_scheduled",
+                "campaign_id": campaign_id,
+                "error_type": type(exc).__name__,
+            }
+        finally:
+            if own_client:
+                await client.aclose()
 
     async def _reconcile_failed_claim(
         self,
