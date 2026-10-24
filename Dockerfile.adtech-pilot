@@ -24,6 +24,7 @@ COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/__init__.py /app/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/feed_manager.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/creative_factory.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/media_buyer.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/meta_insights.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/main_pilot.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/daemon.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/github_reporter.py /app/adtech_pilot/

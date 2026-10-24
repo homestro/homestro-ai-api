@@ -61,6 +61,7 @@ class MicroBudgetGateTests(unittest.TestCase):
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
             dry_run=False,
+            purchase_event_verified=True,
         )
         self.assertTrue(result.eligible)
         self.assertEqual(result.platform, "meta")
@@ -90,8 +91,20 @@ class MicroBudgetGateTests(unittest.TestCase):
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
             dry_run=False,
+            purchase_event_verified=True,
         )
         self.assertTrue(result.eligible)
+
+    def test_campaign_stays_blocked_until_meta_purchase_event_is_verified(self):
+        result = MicroBudgetGate(enabled=True).evaluate(
+            account=self.active_account,
+            product_id="sku-1",
+            product_ids_in_feed={"sku-1"},
+            dry_run=False,
+            purchase_event_verified=False,
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("META_PURCHASE_EVENT_NOT_VERIFIED", result.blockers)
 
     def test_campaign_stays_blocked_when_pixel_is_not_accessible(self):
         account = self.active_account.model_copy(update={"pixel_access_verified": False})

@@ -22,6 +22,7 @@ from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
 from .media_buyer import MetaAdLibraryClient, MetaPublisher, PlanAuditStore
+from .meta_insights import MetaInsightsClient
 from .micro_budget import (
     MetaAccountReadiness,
     MicroBudgetGate,
@@ -444,10 +445,8 @@ class PilotDaemon:
             dry_run=True,
         )
         daily_budget_limit = configured_daily_budget_limit_eur()
-        return {
-            "status": "blocked",
-            "reason": "NO_VERIFIED_CHANNEL_METRICS_LOADER",
-            "execution": "READ_ONLY_PREFLIGHT_ONLY",
+        response: dict[str, Any] = {
+            "execution": "READ_ONLY",
             "optimizer_dry_run": True,
             "optimizer_budget_limit_eur": 0.0,
             "campaign_submission_config": {
@@ -469,9 +468,84 @@ class PilotDaemon:
             "meta_ads_preflight": meta_preflight,
             "optimizer_micro_budget_preflight": micro_budget.model_dump(mode="json"),
             "micro_budget_execution": (
-                "READ_ONLY_PREFLIGHT_ONLY"
+                "READ_ONLY_METRICS_ONLY"
                 if meta_preflight.get("status") == "checked"
                 else "BLOCKED_META_PREFLIGHT"
             ),
         }
+        if account is None:
+            response.update(
+                {
+                    "status": "blocked",
+                    "reason": "META_ACCOUNT_PREFLIGHT_NOT_VERIFIED",
+                    "metrics_source": None,
+                }
+            )
+            return response
+
+        token = os.getenv("META_ACCESS_TOKEN", "").strip()
+        if not token:
+            response.update(
+                {
+                    "status": "blocked",
+                    "reason": "META_INSIGHTS_ACCESS_TOKEN_MISSING",
+                    "metrics_source": None,
+                }
+            )
+            return response
+
+        try:
+            metrics = await MetaInsightsClient(
+                token,
+                account.account_id,
+                api_version=os.getenv("META_API_VERSION", "v26.0"),
+            ).campaign_metrics(days=7)
+        except httpx.HTTPStatusError as exc:
+            response.update(
+                {
+                    "status": "blocked",
+                    "reason": "META_INSIGHTS_HTTP_ERROR",
+                    "http_status": exc.response.status_code,
+                    "metrics_source": "meta_marketing_api_insights",
+                }
+            )
+            return response
+
+        response.update(
+            {
+                "status": "metrics_loaded" if metrics else "no_campaign_metrics",
+                "metrics_source": "meta_marketing_api_insights",
+                "window_days": 7,
+                "campaigns_checked": len(metrics),
+                "totals": {
+                    "spend_eur": round(sum(item.spend_eur for item in metrics), 2),
+                    "meta_reported_purchases": sum(item.conversions for item in metrics),
+                    "meta_reported_purchase_value_eur": round(
+                        sum(item.revenue_eur for item in metrics), 2
+                    ),
+                    "clicks": sum(item.clicks for item in metrics),
+                    "impressions": sum(item.impressions for item in metrics),
+                },
+                "campaign_metrics": [
+                    {
+                        "campaign_id": item.campaign_id,
+                        "campaign_name": item.campaign_name,
+                        "spend_eur": item.spend_eur,
+                        "meta_reported_purchases": item.conversions,
+                        "meta_reported_purchase_value_eur": item.revenue_eur,
+                        "clicks": item.clicks,
+                        "impressions": item.impressions,
+                        "attribution_verified": False,
+                    }
+                    for item in metrics
+                ],
+                "optimizer_status": "HOLD",
+                "optimizer_reason": "SHOPIFY_ORDERS_AND_CONTRIBUTION_MARGIN_NOT_JOINED",
+                "revenue_note": (
+                    "Meta-reported purchase values only; not reconciled with Shopify "
+                    "orders or product contribution margin."
+                ),
+            }
+        )
+        return response
 
