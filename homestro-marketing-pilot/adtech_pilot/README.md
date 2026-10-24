@@ -5,22 +5,24 @@ This is a separate FastAPI service alongside the existing Node/Shopify Pilot. It
 ## Current safety state
 
 - `PILOT_AD_DRY_RUN=true` and `PILOT_AD_MAX_BUDGET_EUR=0` are the defaults.
+- The scheduled Shopify GraphQL catalog check is read-only. Missing scopes, unavailable product costs, API errors, and incomplete pagination fail closed; it never treats unknown cost as a passing margin.
 - The daemon starts with the API by default, runs feed and Merchant Center diagnostics every six hours, public Meta Ad Library discovery and creative generation every 24 hours, and reports a heartbeat hourly. Each task has its own bounded retry/backoff; one provider failure does not stop the other tasks.
 - GitHub reporting is optional. When `PILOT_GITHUB_TOKEN` is configured, the daemon updates one rolling status comment on PR #104 rather than creating hourly comment spam.
 - Google/TikTok/Pinterest/Microsoft/Sklik publishing and optimizer mutations are not wired in. `/feed/prepare/*` creates normalized payloads only; it never uploads them.
 - The execution engine refuses all writes in dry-run, verifies the reconciled portfolio total before checking the cap, and fails closed if a platform adapter is missing. Cross-platform transfers remain recommendations because two ad networks cannot provide one atomic budget transaction.
 - Autopilot scheduling is disabled unless a trusted metrics loader is injected and `PILOT_AUTOPILOT_ENABLED=true` is set. Attribution and contribution margin must be verified before scaling or moving budgets.
-- Creative generation is disabled unless `PILOT_CREATIVE_ENABLED=true`; text and image API requests can incur provider charges. It requires a validated feed product, HTTPS product image and official logo; it composes hook/problem/solution/CTA copy, rejects a plain white output and deletes candidates that fail the 85-point quality gate. A passing candidate is offered to the isolated Meta publisher; that publisher still blocks all writes unless every explicit spend, billing, accessible-Pixel, account, asset, product and DSA gate passes. The score is not a sales forecast.
+- Creative generation remains blocked until a trusted source supplies fresh, verified per-product intent; the daemon never selects the first product from the feed or incurs image-generation charges without that evidence. The isolated Meta publisher also requires a matching eligible intent rank and blocks before any Meta API request when intent is missing or mismatched. Product-intent ingestion is not connected yet, so no campaign can be submitted through the daemon.
 - Merchant Center uses the official Merchant API v1 for read-only account/product diagnostics when `GMC_MERCHANT_ID` and a service account JSON secret are configured. It never rewrites or uploads products. Product claims are not inferred from LLM output, and account policy issues such as misrepresentation or shipping configuration require a verified human/business correction.
-- `ALLOW_MICRO_BUDGET` is false by default. The isolated Meta publisher can submit exactly one Germany-targeted website-sales campaign only after the account, Page and pixel pass official API checks; billing is verified; the configured feed product and approved creative match; EU beneficiary/payer values are supplied; and `DRY_RUN=false`. A prior Purchase is not required: it is a cold-start campaign optimized for Meta's standard Purchase event, and the pixel must be accessible to record actual orders. It permanently consumes a single-use SQLite claim before any write. Campaign, ad set and ad are created paused; the campaign is activated last. The pilot is configured for a **€5 lifetime budget over seven days** (maximum campaign allocation €5 total). The Meta ad set uses its lifetime budget field. If a previous HTTP failure consumed the local one-shot claim without returning a campaign ID, the publisher checks Meta read-only for the exact campaign name before it releases that claim and retries; an existing or ambiguous campaign stays blocked. The global optimizer remains dry-run/€0.
+- `ALLOW_MICRO_BUDGET` is false by default. The isolated Meta publisher can submit exactly one DE/AT website-sales campaign only after the account, Page and Pixel pass official API checks; billing and standard Purchase-event tracking are explicitly verified; the configured feed product and approved creative match; EU beneficiary/payer values are supplied; and `DRY_RUN=false`. A prior sale is not required, but an accessible Pixel alone is insufficient: set `META_PURCHASE_EVENT_VERIFIED=true` only after a real test event has been confirmed in Meta Events Manager. The campaign optimizes for Meta's standard Purchase event, uses a **€5 lifetime budget over seven days**, and leaves placements to Meta Advantage+ by omitting fixed placement restrictions. It permanently consumes a single-use SQLite claim before any write. Campaign, ad set and ad are created paused; the campaign is activated last. If a previous HTTP failure consumed the local one-shot claim without returning a campaign ID, the publisher checks Meta read-only for the exact campaign name before it releases that claim and retries; an existing or ambiguous campaign stays blocked. The global optimizer remains dry-run/€0.
 - The Meta competitor connector uses only Meta's public Ad Library API. Access is account/app-dependent. Its data shows ad examples and structure, not competitor ROAS, conversions or profit. There is no scraping fallback.
 
 ## Modules
 
 - `feed_manager.py`: bounded JSON/XML parsing, GTIN/EAN check digit, canonical product URL, price, description, image, availability and category checks; provider-neutral product payloads for six channel families.
+- `shopify_catalog.py`: authenticated Admin GraphQL cursor pagination for active products and every variant; exact gross margin uses `price` and `InventoryItem.unitCost`, and only in-stock variants with known cost and at least 20% gross margin qualify. It is read-only and does not yet supply customer-intent events or update Meta catalog/product sets.
 - `creative_factory.py`: OpenAI Responses structured output, image edits from supplied product photography, official-logo compositing, visual review, history-informed quality score. The score is a quality review, not a sales forecast.
 - `gmc_diagnostics.py`: OAuth service-account token refresh and bounded, read-only Merchant API account/product issue diagnostics.
-- `micro_budget.py`: fail-closed one-campaign/€5-per-day, seven-day readiness gate.
+- `micro_budget.py`: fail-closed one-campaign/€5-lifetime, seven-day readiness gate that requires verified Purchase tracking and a matching eligible product-intent rank.
 - `media_buyer.py`: official Meta Ad Library client, read-only account/Page/Pixel readiness check, and constrained `MetaPublisher`, normalized metrics, conservative ROAS/CPA/CTR recommendations, cross-channel transfer proposals, 12–24-hour loop, SQLite audit log and guarded execution engine.
 - `main_pilot.py`: authenticated API for feed checks, feed preparation, creative candidates, optimization plans, dry-run execution, competitor examples and audit history.
 
@@ -50,3 +52,16 @@ This deployment starts the daemon and its available diagnostics. It does not rep
 ## Validation scope and production prerequisites
 
 The tests cover feed parsing/validation, read-only GMC diagnostics, output normalization, structured model and image API handling through mocks, Meta account preflight and one-time campaign creation against a mock Graph API, scoring and micro-budget gates, attribution requirements, budget-cap reconciliation and API authentication. Live Meta OAuth approval, billing, Pixel access, ad review and real campaign delivery remain account-specific prerequisites. A historical Purchase event is not required for the first cold-start campaign. Feed corrections cannot by themselves resolve Merchant Center account-policy or shipping setup issues.
+
+
+## Product intent ranking
+
+`product_intent.py` ranks the full supplied product set using fresh, verified
+ViewContent, AddToCart, InitiateCheckout and Purchase aggregates. Scores are
+transparent prioritization points, not predicted ROAS or purchase probability.
+Views alone cannot qualify a product: candidates need a checkout or at least
+three cart additions, verified event ingestion, current stock and known positive
+contribution margin. Missing, stale or future-dated evidence fails closed.
+This is a decision module; it does not claim to collect Shopify events by itself.
+The production event source and end-to-end Purchase verification remain release
+gates before any paid campaign can run.

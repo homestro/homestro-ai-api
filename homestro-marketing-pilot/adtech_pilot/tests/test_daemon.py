@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 from adtech_pilot.daemon import PilotDaemon
 from adtech_pilot.micro_budget import MetaAccountReadiness
+from adtech_pilot.shopify_catalog import ShopifyVariantMargin
 
 
 class MemoryAudit:
@@ -31,6 +32,7 @@ class DaemonTests(unittest.TestCase):
                 page_id="4444",
                 pixel_id="5555",
                 pixel_access_verified=False,
+                purchase_event_verified=False,
             )
             with patch.dict(
                 "os.environ",
@@ -81,6 +83,7 @@ class DaemonTests(unittest.TestCase):
                     heartbeat_interval_seconds=1,
                     reporter=FakeReporter(),
                     feed_job=lambda: done("feed"),
+                    shopify_catalog_job=lambda: done("shopify"),
                     merchant_job=lambda: done("merchant"),
                     competitor_job=lambda: done("competitor"),
                     creative_job=lambda: done("creative"),
@@ -90,11 +93,78 @@ class DaemonTests(unittest.TestCase):
             heartbeat = audit.records[-1][1]
             self.assertEqual(heartbeat["budget_limit_eur"], 5.0)
             self.assertFalse(heartbeat["dry_run"])
-            self.assertEqual(heartbeat["planned_total_budget_eur"], 35.0)
-            self.assertTrue(heartbeat["micro_budget_submission_enabled"])
+            self.assertEqual(heartbeat["planned_total_budget_eur"], 5.0)
+            self.assertEqual(heartbeat["budget_type"], "lifetime")
+            self.assertEqual(heartbeat["portfolio_daily_ceiling_eur"], 5.0)
+            self.assertFalse(heartbeat["micro_budget_submission_enabled"])
+            self.assertEqual(heartbeat["submission_blocker"], "PRODUCT_INTENT_SOURCE_NOT_CONNECTED")
             self.assertTrue(heartbeat["optimizer"]["dry_run"])
             self.assertEqual(heartbeat["optimizer"]["budget_limit_eur"], 0.0)
-            self.assertEqual(len(heartbeat["jobs"]), 5)
+            self.assertEqual(len(heartbeat["jobs"]), 6)
+            self.assertEqual(heartbeat["jobs"]["shopify_catalog"]["job"], "shopify")
+
+        asyncio.run(run())
+
+    def test_shopify_catalog_job_loads_verified_variants_read_only(self):
+        async def run():
+            audit = MemoryAudit()
+            variant = ShopifyVariantMargin(
+                product_id="gid://shopify/Product/1",
+                product_title="Test product",
+                product_handle="test-product",
+                variant_id="gid://shopify/ProductVariant/2",
+                sku="SKU-2",
+                inventory_quantity=4,
+                price="20.00",
+                unit_cost="10.00",
+                currency="EUR",
+                gross_margin_ratio="0.50",
+            )
+            with patch.dict(
+                "os.environ",
+                {"SHOPIFY_STORE_URL": "homestro.myshopify.com", "SHOPIFY_ACCESS_TOKEN": "test-token"},
+                clear=False,
+            ), patch("adtech_pilot.daemon.ShopifyCatalogClient") as client_cls:
+                client_cls.return_value.fetch_margin_qualified_variants = AsyncMock(
+                    return_value=[variant]
+                )
+                daemon = PilotDaemon(audit)
+                result = await daemon._shopify_catalog_job()
+            self.assertEqual(result["status"], "catalog_loaded")
+            self.assertEqual(result["margin_and_stock_qualified_variants"], 1)
+            self.assertFalse(result["ad_mutations_performed"])
+            self.assertEqual(daemon._latest_catalog_variants[0]["sku"], "SKU-2")
+            self.assertEqual(audit.records[0][0], "shopify_catalog_diagnostics")
+
+        asyncio.run(run())
+
+    def test_creative_job_does_not_select_first_feed_product_or_spend_without_intent(self):
+        async def run():
+            with patch.dict(
+                "os.environ",
+                {
+                    "PILOT_CREATIVE_ENABLED": "true",
+                    "OPENAI_API_KEY": "test-key",
+                    "HOMESTRO_LOGO_URL": "https://homestro.de/logo.png",
+                },
+                clear=False,
+            ), patch("adtech_pilot.daemon.OpenAIProvider") as provider, patch(
+                "adtech_pilot.daemon.MetaPublisher"
+            ) as publisher:
+                daemon = PilotDaemon(MemoryAudit())
+                daemon._latest_products = [
+                    {
+                        "id": "first-product",
+                        "description": "Product description.",
+                        "image_link": "https://cdn.shopify.com/image.png",
+                    }
+                ]
+                result = await daemon._creative_job()
+            provider.assert_not_called()
+            publisher.assert_not_called()
+            self.assertEqual(result["reason"], "PRODUCT_INTENT_SOURCE_NOT_CONNECTED")
+            self.assertFalse(result["creative_generation_performed"])
+            self.assertFalse(result["ad_mutations_performed"])
 
         asyncio.run(run())
 

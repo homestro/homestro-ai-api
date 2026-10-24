@@ -1,15 +1,21 @@
 import unittest
 
+from adtech_pilot.product_intent import ProductIntentRank
 from adtech_pilot.micro_budget import (
     MetaAccountReadiness,
     MicroBudgetGate,
     configured_daily_budget_limit_eur,
+    configured_lifetime_budget_limit_eur,
     live_ads_dry_run,
 )
 
 
 class MicroBudgetGateTests(unittest.TestCase):
     def setUp(self):
+        self.intent = ProductIntentRank(
+            product_id="sku-1", score=15.0, eligible_for_review=True,
+            blockers=[], evidence={"views": 0, "add_to_cart": 3, "initiate_checkout": 0, "purchases": 0},
+        )
         self.active_account = MetaAccountReadiness(
             account_id="act_123",
             account_status="active",
@@ -18,6 +24,7 @@ class MicroBudgetGateTests(unittest.TestCase):
             page_id="123",
             pixel_id="456",
             pixel_access_verified=True,
+            purchase_event_verified=True,
         )
 
     def test_runtime_controls_require_both_switches_and_honor_hard_cap(self):
@@ -33,15 +40,25 @@ class MicroBudgetGateTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            configured_daily_budget_limit_eur(
+            configured_lifetime_budget_limit_eur(
                 {"PILOT_AD_MAX_BUDGET_EUR": "1000"}
             ),
             5.0,
         )
         self.assertEqual(
-            configured_daily_budget_limit_eur(
+            configured_lifetime_budget_limit_eur(
                 {"PILOT_AD_MAX_BUDGET_EUR": "invalid"}
             ),
+            0.0,
+        )
+
+    def test_daily_portfolio_budget_is_capped_and_invalid_values_fail_closed(self):
+        self.assertEqual(
+            configured_daily_budget_limit_eur({"PILOT_AD_MAX_BUDGET_EUR": "100"}),
+            5.0,
+        )
+        self.assertEqual(
+            configured_daily_budget_limit_eur({"PILOT_AD_MAX_BUDGET_EUR": "invalid"}),
             0.0,
         )
 
@@ -55,20 +72,21 @@ class MicroBudgetGateTests(unittest.TestCase):
         self.assertEqual(result.daily_budget_eur, 0)
         self.assertFalse(result.live_submission_enabled)
 
-    def test_verified_configuration_is_limited_to_one_five_euro_meta_campaign(self):
+    def test_verified_configuration_is_limited_to_five_euro_lifetime(self):
         result = MicroBudgetGate(enabled=True).evaluate(
             account=self.active_account,
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
+            intent=self.intent,
             dry_run=False,
         )
         self.assertTrue(result.eligible)
         self.assertEqual(result.platform, "meta")
-        self.assertEqual(result.daily_budget_eur, 5.0)
-        self.assertEqual(result.lifetime_budget_eur, 0.0)
+        self.assertEqual(result.daily_budget_eur, 0.0)
+        self.assertEqual(result.lifetime_budget_eur, 5.0)
         self.assertEqual(result.planned_days, 7)
-        self.assertEqual(result.planned_total_eur, 35.0)
-        self.assertEqual(result.budget_type, "daily")
+        self.assertEqual(result.planned_total_eur, 5.0)
+        self.assertEqual(result.budget_type, "lifetime")
         self.assertEqual(result.max_campaigns, 1)
         self.assertTrue(result.live_submission_enabled)
 
@@ -84,14 +102,27 @@ class MicroBudgetGateTests(unittest.TestCase):
                 self.assertFalse(result.eligible)
                 self.assertEqual(result.daily_budget_eur, 0.0)
 
-    def test_campaign_can_start_before_the_first_purchase_when_pixel_is_accessible(self):
+    def test_campaign_requires_fresh_high_intent_even_when_purchase_tracking_is_verified(self):
         result = MicroBudgetGate(enabled=True).evaluate(
             account=self.active_account,
             product_id="sku-1",
             product_ids_in_feed={"sku-1"},
             dry_run=False,
         )
-        self.assertTrue(result.eligible)
+        self.assertFalse(result.eligible)
+        self.assertIn("PRODUCT_INTENT_NOT_VERIFIED", result.blockers)
+
+    def test_campaign_stays_blocked_when_purchase_tracking_is_not_verified(self):
+        account = self.active_account.model_copy(update={"purchase_event_verified": False})
+        result = MicroBudgetGate(enabled=True).evaluate(
+            account=account,
+            product_id="sku-1",
+            product_ids_in_feed={"sku-1"},
+            intent=self.intent,
+            dry_run=False,
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("META_PURCHASE_EVENT_NOT_VERIFIED", result.blockers)
 
     def test_campaign_stays_blocked_when_pixel_is_not_accessible(self):
         account = self.active_account.model_copy(update={"pixel_access_verified": False})
