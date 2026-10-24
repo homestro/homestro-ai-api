@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -80,6 +81,7 @@ class PilotDaemon:
         competitor_job: Job | None = None,
         creative_job: Job | None = None,
         metrics_job: Job | None = None,
+        catalog_job: Job | None = None,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
     ):
@@ -115,6 +117,10 @@ class PilotDaemon:
             "media_buying_plan": (
                 metrics_interval_hours * 3600,
                 metrics_job or self._metrics_job,
+            ),
+            "meta_catalog_access": (
+                feed_interval_hours * 3600,
+                catalog_job or self._catalog_access_job,
             ),
         }
         self._next_run = {name: 0.0 for name in self.jobs}
@@ -257,32 +263,171 @@ class PilotDaemon:
         }
 
     async def _competitor_job(self) -> dict[str, Any]:
+        """Compare public Meta Ad Library examples with the current Shopify feed.
+
+        Longevity is a public-ad signal only. It does not prove that an ad is still
+        delivering or profitable. Results prioritize candidates for review and never
+        unlock spend or create ads.
+        """
         token = os.getenv("META_AD_LIBRARY_ACCESS_TOKEN", "").strip()
         if not token:
             return {
                 "status": "partial",
                 "meta": "blocked_access_token_missing",
                 "tiktok": "not_available_no_authorized_api_configured",
+                "sell_the_trend": "not_available_no_authorized_api_configured",
+                "minea": "not_available_no_authorized_api_configured",
             }
+        if not self._latest_products:
+            return {
+                "status": "blocked",
+                "reason": "SHOPIFY_FEED_NOT_LOADED",
+                "campaign_writes_performed": False,
+            }
+
+        # Use real product categories present in the feed to scope public searches.
+        category_counts: dict[str, int] = {}
+        for product in self._latest_products:
+            category = str(
+                product.get("product_type")
+                or product.get("google_product_category")
+                or ""
+            ).strip()
+            if category:
+                category_counts[category] = category_counts.get(category, 0) + 1
+        search_terms = [
+            category
+            for category, _ in sorted(
+                category_counts.items(), key=lambda item: (-item[1], item[0].casefold())
+            )[:5]
+        ]
+        if not search_terms:
+            return {
+                "status": "blocked",
+                "reason": "NO_PRODUCT_CATEGORIES_IN_SHOPIFY_FEED",
+                "products_checked": len(self._latest_products),
+                "campaign_writes_performed": False,
+            }
+
         client = MetaAdLibraryClient(
             token, api_version=os.getenv("META_GRAPH_VERSION", "v26.0")
         )
-        ads = await client.search(
-            ["Hundezubehör", "Haushalt", "Fitness Rucksack"], country="DE", limit=20
-        )
-        await self.audit.record(
-            "daemon_competitor_scan",
+        ads_by_id: dict[str, dict[str, Any]] = {}
+        for country in ("DE", "AT"):
+            for term in search_terms:
+                # Each call is bounded. The daemon retries a failed scan with
+                # exponential backoff; no query failure is converted into a trend.
+                for ad in await client.search([term], country=country, limit=20):
+                    record = ads_by_id.setdefault(
+                        ad.library_id, {"ad": ad, "countries": set(), "terms": set()}
+                    )
+                    record["countries"].add(country)
+                    record["terms"].add(term)
+
+        now = datetime.now(UTC)
+        longevity_days: dict[str, int] = {}
+        long_running_ads: list[dict[str, Any]] = []
+        for observed in ads_by_id.values():
+            ad = observed["ad"]
+            observed_countries = sorted(observed["countries"])
+            if not ad.started_at:
+                continue
+            try:
+                started = datetime.fromisoformat(
+                    str(ad.started_at).replace("Z", "+00:00")
+                )
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=UTC)
+                age_days = max(0, (now - started.astimezone(UTC)).days)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if age_days < 14:
+                continue
+
+            ad_text = " ".join(ad.ad_copy).casefold()
+            long_running_ads.append(
+                {
+                    "library_id": ad.library_id,
+                    "page_name": ad.page_name,
+                    "started_at": ad.started_at,
+                    "observed_age_days": age_days,
+                    "country_searches": observed_countries,
+                    "matched_search_terms": sorted(observed["terms"]),
+                    "copy": ad.ad_copy[:2],
+                    "snapshot_url": ad.snapshot_url,
+                }
+            )
+            for product in self._latest_products:
+                product_id = str(product.get("id", "")).strip()
+                title = str(product.get("title", "")).casefold()
+                category = str(
+                    product.get("product_type")
+                    or product.get("google_product_category")
+                    or ""
+                ).casefold()
+                product_tags = product.get("tags", [])
+                tags_text = " ".join(
+                    str(tag) for tag in product_tags
+                ).casefold() if isinstance(product_tags, list) else str(product_tags).casefold()
+                tokens = {
+                    token
+                    for token in re.findall(r"[a-zäöüß]{4,}", " ".join((title, category, tags_text)))
+                    if token not in {"dass", "dieser", "dieses", "für", "über", "with", "from"}
+                }
+                matched = tokens.intersection(
+                    set(re.findall(r"[a-zäöüß]{4,}", ad_text))
+                )
+                if product_id and len(matched) >= 2:
+                    longevity_days[product_id] = max(
+                        longevity_days.get(product_id, 0), age_days
+                    )
+
+        candidates = [
             {
-                "source": "official_meta_ad_library",
-                "ads": [ad.model_dump(mode="json") for ad in ads],
-                "limitation": "public_examples_only; no competitor ROAS, conversions or profit",
-            },
+                "product_id": str(product.get("id", "")),
+                "title": str(product.get("title", ""))[:200],
+                "product_type": str(product.get("product_type", ""))[:160],
+                "observed_longest_ad_age_days": longevity_days[str(product.get("id", ""))],
+                "review_signal": "public_ad_copy_overlap_and_ad_start_age_only",
+            }
+            for product in self._latest_products
+            if str(product.get("id", "")) in longevity_days
+        ]
+        candidates.sort(
+            key=lambda item: (
+                -item["observed_longest_ad_age_days"],
+                item["title"].casefold(),
+                item["product_id"],
+            )
         )
+        audit_payload = {
+            "source": "official_meta_ad_library",
+            "countries": ["DE", "AT"],
+            "search_terms": search_terms,
+            "public_ads_searched": len(ads_by_id),
+            "ads_with_start_age_at_least_14_days": long_running_ads,
+            "feed_products_checked": len(self._latest_products),
+            "matched_product_candidates": candidates[:50],
+            "evidence_limit": (
+                "Public ad copy and start dates are not proof of current delivery, "
+                "sales, conversion rate, profit, or product demand."
+            ),
+            "campaign_writes_performed": False,
+        }
+        await self.audit.record("daemon_competitor_scan", audit_payload)
         return {
             "status": "completed",
             "source": "official_meta_ad_library",
-            "public_ad_examples": len(ads),
+            "countries": ["DE", "AT"],
+            "search_terms": search_terms,
+            "public_ad_examples": len(ads_by_id),
+            "ads_with_start_age_at_least_14_days": len(long_running_ads),
+            "feed_products_checked": len(self._latest_products),
+            "matched_product_candidates": candidates[:50],
             "tiktok": "not_available_no_authorized_api_configured",
+            "sell_the_trend": "not_available_no_authorized_api_configured",
+            "minea": "not_available_no_authorized_api_configured",
+            "campaign_writes_performed": False,
         }
 
     async def _merchant_diagnostics_job(self) -> dict[str, Any]:
@@ -364,6 +509,12 @@ class PilotDaemon:
                 raise ValueError("source image exceeds the size limit")
             return response.content
 
+    async def _catalog_access_job(self) -> dict[str, Any]:
+        """Diagnose Meta catalog access without requiring or enabling paid spend."""
+        result = await MetaPublisher(self.audit).check_catalog_access()
+        await self.audit.record("meta_catalog_access_diagnostic", result)
+        return result
+
     async def _metrics_job(self) -> dict[str, Any]:
         meta_preflight = await MetaPublisher(self.audit).check_readiness()
         account = (
@@ -373,8 +524,11 @@ class PilotDaemon:
         )
         micro_budget = MicroBudgetGate().evaluate(
             account=account,
-            product_id=os.getenv("MICRO_BUDGET_PRODUCT_ID"),
             product_ids_in_feed={str(p.get("id")) for p in self._latest_products},
+            purchase_event_verified=(
+                os.getenv("META_PURCHASE_EVENT_VERIFIED", "false").strip().lower()
+                == "true"
+            ),
             # This optimization pass is intentionally read-only and cannot publish.
             dry_run=True,
         )

@@ -807,6 +807,121 @@ class MetaPublisher:
             if own_client:
                 await client.aclose()
 
+    async def check_catalog_access(self) -> dict[str, Any]:
+        """Read catalog and whole-catalog product-set access; never writes Meta objects."""
+        token = self.env.get("META_ACCESS_TOKEN", "").strip()
+        catalog_id = self.env.get("META_PRODUCT_CATALOG_ID", "").strip()
+        version = self._version()
+        if not token:
+            return {"status": "blocked", "reason": "META_ACCESS_TOKEN_MISSING"}
+        if not self.ID_PATTERN.fullmatch(catalog_id):
+            return {"status": "blocked", "reason": "META_PRODUCT_CATALOG_ID_MISSING_OR_INVALID"}
+        if not self.API_VERSION_PATTERN.fullmatch(version):
+            return {"status": "blocked", "reason": "META_API_VERSION_INVALID"}
+
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(
+            timeout=httpx.Timeout(30, connect=8), follow_redirects=False
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            catalog = await self._get(
+                client, catalog_id, headers, {"fields": "id,name"}
+            )
+            if str(catalog.get("id", "")) != catalog_id:
+                return {"status": "blocked", "reason": "META_CATALOG_ID_MISMATCH"}
+
+            result = await self._get(
+                client,
+                f"{catalog_id}/product_sets",
+                headers,
+                {"fields": "id,name", "limit": "100"},
+            )
+            rows = result.get("data")
+            if not isinstance(rows, list):
+                return {"status": "blocked", "reason": "META_PRODUCT_SET_LIST_INVALID"}
+            if isinstance(result.get("paging"), dict) and result["paging"].get("next"):
+                return {"status": "blocked", "reason": "META_PRODUCT_SET_LIST_INCOMPLETE"}
+
+            full_catalog_names = {"all products", "alle produkte"}
+            full_sets = [
+                row for row in rows
+                if isinstance(row, dict)
+                and str(row.get("name", "")).strip().casefold() in full_catalog_names
+                and self.ID_PATTERN.fullmatch(str(row.get("id", "")))
+            ]
+            configured_set_id = self.env.get("META_PRODUCT_SET_ID", "").strip()
+            if configured_set_id:
+                if not self.ID_PATTERN.fullmatch(configured_set_id):
+                    return {"status": "blocked", "reason": "META_PRODUCT_SET_ID_INVALID"}
+                selected = [
+                    row for row in full_sets
+                    if str(row.get("id")) == configured_set_id
+                ]
+                if len(selected) != 1:
+                    return {
+                        "status": "blocked",
+                        "reason": "META_CONFIGURED_SET_IS_NOT_ALL_PRODUCTS",
+                        "catalog_id": catalog_id,
+                    }
+                full_set = selected[0]
+            elif len(full_sets) == 1:
+                full_set = full_sets[0]
+            else:
+                return {
+                    "status": "blocked",
+                    "reason": "META_ALL_PRODUCTS_SET_NOT_FOUND_OR_AMBIGUOUS",
+                    "catalog_id": catalog_id,
+                    "matching_set_count": len(full_sets),
+                }
+
+            return {
+                "status": "checked",
+                "catalog_id": catalog_id,
+                "catalog_name": str(catalog.get("name", ""))[:160],
+                "product_set_id": str(full_set["id"]),
+                "product_set_name": str(full_set.get("name", ""))[:80],
+                "visible_product_set_count": len(rows),
+                "campaign_writes_performed": False,
+            }
+        except asyncio.CancelledError:
+            raise
+        except httpx.HTTPStatusError as exc:
+            try:
+                body = exc.response.json()
+            except ValueError:
+                body = {}
+            error = body.get("error", {}) if isinstance(body, dict) else {}
+            if not isinstance(error, dict):
+                error = {}
+            details: dict[str, Any] = {
+                "status": "failed",
+                "reason": "META_CATALOG_READ_FAILED",
+                "http_status": exc.response.status_code,
+                "campaign_writes_performed": False,
+            }
+            for source, target in (
+                ("code", "meta_error_code"),
+                ("error_subcode", "meta_error_subcode"),
+            ):
+                value = error.get(source)
+                if isinstance(value, int):
+                    details[target] = value
+            if isinstance(error.get("type"), str):
+                details["meta_error_type"] = error["type"][:80]
+            return details
+        except Exception as exc:
+            # Never include provider response bodies, headers, or credentials in logs.
+            return {
+                "status": "failed",
+                "reason": "META_CATALOG_READ_FAILED",
+                "error_type": type(exc).__name__,
+                "campaign_writes_performed": False,
+            }
+        finally:
+            if own_client:
+                await client.aclose()
+
     async def publish_one(
         self,
         *,
