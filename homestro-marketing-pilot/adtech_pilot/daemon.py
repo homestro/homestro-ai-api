@@ -362,7 +362,9 @@ class PilotDaemon:
             return response.content
 
     async def _metrics_job(self) -> dict[str, Any]:
-        meta_preflight = await MetaPublisher(self.audit).check_readiness()
+        publisher = MetaPublisher(self.audit)
+        meta_preflight = await publisher.check_readiness()
+        claim_reconciliation = await publisher.reconcile_inactive_claim()
         account = (
             MetaAccountReadiness.model_validate(meta_preflight["account"])
             if meta_preflight.get("status") == "checked"
@@ -399,6 +401,7 @@ class PilotDaemon:
                 ),
             },
             "meta_ads_preflight": meta_preflight,
+            "campaign_claim_reconciliation": claim_reconciliation,
             "optimizer_micro_budget_preflight": micro_budget.model_dump(mode="json"),
             "micro_budget_execution": (
                 "READ_ONLY_PREFLIGHT_ONLY"
