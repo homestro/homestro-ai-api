@@ -1170,7 +1170,7 @@ class MetaPublisher:
         if claim is None:
             return {"status": "no_claim"}
         campaign_id = claim.get("campaign_id")
-        current_status = claim.get("status", "")
+        current_status = claim.get("status") or ""
         if current_status == "INACTIVE":
             return {
                 "status": "already_inactive",
