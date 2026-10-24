@@ -277,6 +277,33 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertIn('"custom_event_type": "PURCHASE"', adset_form["promoted_object"][0])
 
 
+    def test_product_set_resolution_fails_closed_on_duplicate_all_products_names(self):
+        async def run():
+            def handler(request):
+                if request.method == "GET" and request.url.path.endswith("/3333/product_sets"):
+                    return httpx.Response(
+                        200,
+                        json={
+                            "data": [
+                                {"id": "1111", "name": "All Products"},
+                                {"id": "2222", "name": "All Products"},
+                            ]
+                        },
+                    )
+                return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            publisher = MetaPublisher(
+                PlanAuditStore(self.root / "ambiguous-set.sqlite3"),
+                client=client,
+                env={},
+            )
+            result = await publisher._resolve_all_products_set(client, "3333", {})
+            await client.aclose()
+            return result
+
+        self.assertIsNone(asyncio.run(run()))
+
     def test_paused_prior_campaign_is_reconciled_before_releasing_single_campaign_slot(self):
         async def run():
             events = []
