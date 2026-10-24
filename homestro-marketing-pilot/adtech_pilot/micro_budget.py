@@ -59,7 +59,6 @@ class MicroBudgetDecision(BaseModel):
     planned_total_eur: float = 0.0
     budget_type: Literal["daily"] = "daily"
     max_campaigns: int = 1
-    product_id: str | None = None
     blockers: list[str] = Field(default_factory=list)
     live_submission_enabled: bool = False
 
@@ -80,8 +79,8 @@ class MicroBudgetGate:
         self,
         *,
         account: MetaAccountReadiness | None,
-        product_id: str | None,
         product_ids_in_feed: set[str],
+        purchase_event_verified: bool = False,
         previously_submitted_campaigns: int = 0,
         dry_run: bool = True,
     ) -> MicroBudgetDecision:
@@ -90,6 +89,8 @@ class MicroBudgetGate:
             blockers.append("MICRO_BUDGET_NOT_EXPLICITLY_ENABLED")
         if dry_run:
             blockers.append("DRY_RUN_ENABLED")
+        if not purchase_event_verified:
+            blockers.append("META_PURCHASE_EVENT_NOT_VERIFIED")
         if account is None:
             blockers.append("META_ACCOUNT_PREFLIGHT_NOT_VERIFIED")
         else:
@@ -101,10 +102,8 @@ class MicroBudgetGate:
                 blockers.append("META_BILLING_NOT_READY")
             if not account.pixel_access_verified:
                 blockers.append("META_PIXEL_ACCESS_NOT_VERIFIED")
-        if not product_id:
-            blockers.append("MICRO_BUDGET_PRODUCT_ID_MISSING")
-        elif product_id not in product_ids_in_feed:
-            blockers.append("MICRO_BUDGET_PRODUCT_NOT_IN_VALIDATED_FEED")
+        if not product_ids_in_feed:
+            blockers.append("NO_VALIDATED_CATALOG_PRODUCTS")
         if previously_submitted_campaigns >= 1:
             blockers.append("SINGLE_CAMPAIGN_ALLOWANCE_ALREADY_USED")
 
@@ -113,7 +112,6 @@ class MicroBudgetGate:
             daily_budget_eur=self.DAILY_BUDGET_EUR if not blockers else 0.0,
             lifetime_budget_eur=0.0,
             planned_total_eur=self.TOTAL_BUDGET_EUR if not blockers else 0.0,
-            product_id=product_id,
             blockers=blockers,
             live_submission_enabled=not blockers,
         )
