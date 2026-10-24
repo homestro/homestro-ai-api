@@ -19,7 +19,7 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
-from .creative_factory import CreativeFactory, GeneratedCreative
+from .creative_factory import GeneratedCreative
 from .micro_budget import (
     MetaAccountReadiness,
     MicroBudgetGate,
