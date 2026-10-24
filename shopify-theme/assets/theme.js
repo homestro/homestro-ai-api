@@ -156,9 +156,6 @@ async function addToCart(form) {
 function initializeRecommendations(section) {
   if (!section.dataset.url || section.dataset.loaded === 'true') return;
   section.dataset.loaded = 'true';
-  const slot = section.dataset.recommendationIntent === 'complementary'
-    ? document.querySelector('[data-complementary-slot]') : null;
-  if (slot) slot.append(section);
   fetch(section.dataset.url)
     .then((response) => {
       if (!response.ok) throw new Error('Recommendations request failed');
@@ -169,10 +166,6 @@ function initializeRecommendations(section) {
       const replacement = html.querySelector('[data-product-recommendations]');
       if (replacement?.querySelector('.product-card')) {
         section.innerHTML = replacement.innerHTML;
-        if (slot) {
-          slot.hidden = false;
-          slot.closest('.product').classList.add('product--with-complementary');
-        }
       } else section.remove();
     })
     .catch(() => section.remove());
@@ -222,3 +215,15 @@ document.querySelectorAll('[data-facets-close]').forEach((button) => button.addE
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeFacets();
 });
+
+
+const zoomImage=document.querySelector('[data-product-main-image]');
+if(zoomImage){
+  const dialog=document.createElement('dialog');dialog.className='product-image-dialog';dialog.setAttribute('aria-label','Produktbild vergrößert');
+  const close=document.createElement('button');close.type='button';close.setAttribute('aria-label','Bild schließen');close.textContent='×';
+  const image=document.createElement('img');dialog.append(close,image);document.body.append(dialog);
+  const open=()=>{image.src=zoomImage.src;image.alt=zoomImage.alt;dialog.showModal();close.focus();};
+  zoomImage.tabIndex=0;zoomImage.setAttribute('role','button');zoomImage.setAttribute('aria-label','Produktbild vergrößern');zoomImage.addEventListener('click',open);
+  zoomImage.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}});
+  close.addEventListener('click',()=>dialog.close());dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close();});dialog.addEventListener('close',()=>zoomImage.focus());
+}
