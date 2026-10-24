@@ -326,3 +326,8 @@ RUNWAY_API_KEY is absent in production (names-only inventory), while OPENAI_API_
 
 ## Paid media planner foundation — 16 October 2026
 A read-only readiness endpoint is prepared in draft PR #104: `GET /api/marketing/v2/ads/readiness`. It reports product candidate counts and blockers for Meta, Google, TikTok, Pinterest, Microsoft Ads and Sklik. It does not connect to ad platforms, create campaigns, change budgets or spend. Ad spend remains 0 EUR and campaign execution is disabled. Google Merchant Center approval is deliberately reported as unconfirmed because the latest verified audit records 50/50 items disapproved for misrepresentation and shipping configuration. Added unit tests cover spend guard, product eligibility and Merchant Center status. GitHub Actions verification is running; no local Codex development environment or production deployment is available for this change.
+
+
+## All-products Meta catalog support — 24 October 2026
+
+Prepared in branch `codex/meta-catalog-all-products-20261024`: the AdTech publisher now targets a configured Meta product catalog and product set, uses catalog item images and destinations, and no longer binds publication to `MICRO_BUDGET_PRODUCT_ID`. Live submission also requires `META_PURCHASE_EVENT_VERIFIED=true`; missing catalog, product-set, or Purchase verification blocks the publisher. The current Railway service has no configured catalog/product-set IDs, and Purchase-event verification has not been confirmed. This branch has not been deployed; ad spend remains €0. The operator must select/create a Meta product set that contains all intended validated-feed products and configure its IDs after the catalog/feed mapping is verified. No campaign was created or changed by this work.
