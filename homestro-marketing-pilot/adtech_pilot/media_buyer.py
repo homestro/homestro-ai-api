@@ -367,6 +367,27 @@ class PlanAuditStore:
 
         return await asyncio.to_thread(delete)
 
+    async def release_inactive_claim(
+        self, *, campaign_id: str, expected_status: str
+    ) -> bool:
+        """Release the local slot only for the exact reconciled inactive campaign."""
+        if expected_status not in {
+            "ACTIVE_PENDING_REVIEW",
+            "RECONCILED_EXISTING_CAMPAIGN",
+        }:
+            return False
+
+        def delete() -> bool:
+            with closing(self._connect()) as connection, connection:
+                cursor = connection.execute(
+                    "DELETE FROM meta_micro_campaign_claim "
+                    "WHERE slot=? AND status=? AND campaign_id=?",
+                    ("single_live_meta_campaign", expected_status, campaign_id),
+                )
+            return cursor.rowcount == 1
+
+        return await asyncio.to_thread(delete)
+
     async def has_meta_micro_campaign_claim(self) -> bool:
         return await self.get_meta_micro_campaign_claim() is not None
 
@@ -794,7 +815,7 @@ class MetaPublisher:
                     and prior_claim["campaign_id"] is not None
                 ):
                     resumed_campaign = str(prior_claim["campaign_id"])
-                    reconciliation = await self._reconcile_failed_campaign(
+                    reconciliation = await self._reconcile_paused_campaign(
                         client, headers, resumed_campaign
                     )
                     if reconciliation != "ready":
@@ -804,6 +825,42 @@ class MetaPublisher:
                             "campaign_id": resumed_campaign,
                             "reconciliation": reconciliation,
                         }
+                elif (
+                    prior_claim["campaign_id"]
+                    and prior_claim["status"]
+                    in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}
+                ):
+                    # The local one-campaign slot can be reused only after Meta
+                    # confirms the prior campaign and every ad set are paused.
+                    campaign_id = str(prior_claim["campaign_id"])
+                    reconciliation = await self._reconcile_paused_campaign(
+                        client, headers, campaign_id
+                    )
+                    if reconciliation != "ready":
+                        return {
+                            "status": "blocked",
+                            "reason": "PRIOR_CAMPAIGN_NOT_CONFIRMED_PAUSED",
+                            "campaign_id": campaign_id,
+                            "reconciliation": reconciliation,
+                        }
+                    released = await self.audit.release_inactive_claim(
+                        campaign_id=campaign_id,
+                        expected_status=str(prior_claim["status"]),
+                    )
+                    if not released:
+                        return {
+                            "status": "blocked",
+                            "reason": "PRIOR_CAMPAIGN_CLAIM_CHANGED_DURING_RECONCILIATION",
+                            "campaign_id": campaign_id,
+                        }
+                    await self.audit.record(
+                        "meta_micro_campaign_claim_released",
+                        {
+                            "campaign_id": campaign_id,
+                            "reason": "Meta confirmed campaign and ad sets paused",
+                        },
+                    )
+                    prior_claim = None
                 else:
                     return {
                         "status": "blocked",
@@ -1048,7 +1105,7 @@ class MetaPublisher:
             if own_client:
                 await client.aclose()
 
-    async def _reconcile_failed_campaign(
+    async def _reconcile_paused_campaign(
         self,
         client: httpx.AsyncClient,
         headers: dict[str, str],
