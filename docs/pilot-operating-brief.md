@@ -331,3 +331,12 @@ A read-only readiness endpoint is prepared in draft PR #104: `GET /api/marketing
 ## All-products Meta catalog support — 24 October 2026
 
 Prepared in branch `codex/meta-catalog-all-products-20261024`: the AdTech publisher now targets a configured Meta product catalog and product set, uses catalog item images and destinations, and no longer binds publication to `MICRO_BUDGET_PRODUCT_ID`. Live submission also requires `META_PURCHASE_EVENT_VERIFIED=true`; missing catalog, product-set, or Purchase verification blocks the publisher. The current Railway service has no configured catalog/product-set IDs, and Purchase-event verification has not been confirmed. This branch has not been deployed; ad spend remains €0. The operator must select/create a Meta product set that contains all intended validated-feed products and configure its IDs after the catalog/feed mapping is verified. No campaign was created or changed by this work.
+
+
+## Production fix verified — 24 October 2026, 16:26 Berlin
+
+PR #115 is merged into deploy/adtech-pilot (merge 7d461fda77b3f1d2b49cf0d9dfaebd8e5c491a06). Follow-up fixes retire the old campaign independently of paid gates, atomically archive its exact local claim with status INACTIVE, and report the outcome in the heartbeat. When Meta confirmed the parent PAUSED but children were ACTIVE, the targeted retirement idempotently paused those children and reread their state before archival. No activation or budget increase was performed.
+
+Railway deployment ff92738b-99e5-4c02-ab79-f658c220313b is SUCCESS. The heartbeat generated at 14:26:42 UTC confirms retired_campaign.status=INACTIVE for campaign 120254321479480274, catalog mode with 384 validated feed items, and publisher blocked by META_PURCHASE_EVENT_NOT_VERIFIED. The separate optimizer still reports NO_VERIFIED_CHANNEL_METRICS_LOADER and READ_ONLY. Do not call the entire autonomous system complete or claim a new campaign/publication. Catalog-mode submission is implemented; actual Meta product-set membership and live delivery remain unverified behind the Purchase gate. No product or paid video generation was performed in this repair.
+
+Local verification: 48 Python tests pass, Ruff passes, mypy passes across 20 source files. See docs/pilot-24x7-architecture.md for deployed architecture and explicit outstanding modules. Preserve all working Shopify/Meta/Railway connections. Next code work concerns actual performance loading and attributable Purchase/margin evidence; do not reset existing integrations or repeat this completed campaign retirement.
