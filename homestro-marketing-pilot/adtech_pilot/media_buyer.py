@@ -671,7 +671,7 @@ class MetaPublisher:
     async def reconcile_retired_campaign(self) -> dict[str, Any]:
         """Retire the owner's old campaign independently of all paid-action gates.
 
-        Only Meta reads and an atomic local archive are permitted here.
+        Only Meta reads, idempotent child pauses and a local archive are permitted.
         An active or uncertain remote campaign always retains its local claim.
         """
         campaign_id = "120254321479480274"
@@ -690,6 +690,32 @@ class MetaPublisher:
             result = await self._reconcile_paused_campaign(
                 client, {"Authorization": f"Bearer {token}"}, campaign_id
             )
+            if result == "adsets_not_all_paused":
+                # The parent is already PAUSED. Finish retiring only its children;
+                # never activate or change a budget, creative, or another campaign.
+                adsets = await self._get(
+                    client, f"{campaign_id}/adsets", {"Authorization": f"Bearer {token}"},
+                    {"fields": "id,status", "limit": "100"},
+                )
+                rows = adsets.get("data")
+                paging = adsets.get("paging")
+                if (not isinstance(rows, list)
+                    or (isinstance(paging, dict) and paging.get("next"))
+                    or any(not isinstance(row, dict)
+                           or not self.ID_PATTERN.fullmatch(str(row.get("id", "")))
+                           for row in rows)):
+                    return {"status": "blocked", "reason": "adsets_incomplete"}
+                for row in rows:
+                    if str(row.get("status", "")).upper() == "ACTIVE":
+                        response = await client.post(
+                            f"{self.ENDPOINT}/{self._version()}/{row['id']}",
+                            headers={"Authorization": f"Bearer {token}"},
+                            data={"status": "PAUSED"},
+                        )
+                        self._json_response(response, require_object_id=False)
+                result = await self._reconcile_paused_campaign(
+                    client, {"Authorization": f"Bearer {token}"}, campaign_id
+                )
             if result != "ready":
                 return {"status": "blocked", "reason": result, "campaign_id": campaign_id}
             released = await self.audit.release_inactive_claim(
