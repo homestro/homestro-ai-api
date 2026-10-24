@@ -80,6 +80,7 @@ class PilotDaemon:
         competitor_job: Job | None = None,
         creative_job: Job | None = None,
         metrics_job: Job | None = None,
+        catalog_job: Job | None = None,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
     ):
@@ -115,6 +116,10 @@ class PilotDaemon:
             "media_buying_plan": (
                 metrics_interval_hours * 3600,
                 metrics_job or self._metrics_job,
+            ),
+            "meta_catalog_access": (
+                feed_interval_hours * 3600,
+                catalog_job or self._catalog_access_job,
             ),
         }
         self._next_run = {name: 0.0 for name in self.jobs}
@@ -363,6 +368,12 @@ class PilotDaemon:
             if len(response.content) > 6_000_000:
                 raise ValueError("source image exceeds the size limit")
             return response.content
+
+    async def _catalog_access_job(self) -> dict[str, Any]:
+        """Diagnose Meta catalog access without requiring or enabling paid spend."""
+        result = await MetaPublisher(self.audit).check_catalog_access()
+        await self.audit.record("meta_catalog_access_diagnostic", result)
+        return result
 
     async def _metrics_job(self) -> dict[str, Any]:
         meta_preflight = await MetaPublisher(self.audit).check_readiness()
