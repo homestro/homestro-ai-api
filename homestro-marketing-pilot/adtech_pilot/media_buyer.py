@@ -753,6 +753,16 @@ class MetaPublisher:
         claim_acquired = False
         resumed_campaign: str | None = None
         try:
+            if not product_set_id:
+                product_set_id = await self._resolve_all_products_set(
+                    client, catalog_id, headers
+                )
+                if not product_set_id:
+                    return {
+                        "status": "blocked",
+                        "reason": "META_ALL_PRODUCTS_SET_NOT_FOUND_OR_AMBIGUOUS",
+                        "product_catalog_id": catalog_id,
+                    }
             prior_claim = await self.audit.get_meta_micro_campaign_claim()
             if prior_claim is not None:
                 if (
@@ -908,7 +918,7 @@ class MetaPublisher:
                     "dsa_payor": payor,
                     "targeting": json.dumps(
                         {
-                            "geo_locations": {"countries": ["DE"]},
+                            "geo_locations": {"countries": ["DE", "AT"]},
                             "age_min": 18,
                             "publisher_platforms": ["facebook", "instagram"],
                             "facebook_positions": ["feed", "marketplace", "story", "facebook_reels"],
@@ -1138,8 +1148,8 @@ class MetaPublisher:
             return {"reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
         if not catalog_id or not self.ID_PATTERN.fullmatch(catalog_id):
             return {"reason": "META_PRODUCT_CATALOG_ID_MISSING_OR_INVALID"}
-        if not product_set_id or not self.ID_PATTERN.fullmatch(product_set_id):
-            return {"reason": "META_PRODUCT_SET_ID_MISSING_OR_INVALID"}
+        if product_set_id and not self.ID_PATTERN.fullmatch(product_set_id):
+            return {"reason": "META_PRODUCT_SET_ID_INVALID"}
         if not beneficiary or not payor:
             return {"reason": "META_EU_BENEFICIARY_OR_PAYER_MISSING"}
         if len(beneficiary) > 200 or len(payor) > 200:
@@ -1202,6 +1212,42 @@ class MetaPublisher:
             # as visitors add products to cart.
             pixel_access_verified=accessible_pixel,
         )
+
+    async def _resolve_all_products_set(
+        self,
+        client: httpx.AsyncClient,
+        catalog_id: str,
+        headers: dict[str, str],
+    ) -> str | None:
+        """Read and select an existing whole-catalog product set; never create one."""
+        result = await self._get(
+            client,
+            f"{catalog_id}/product_sets",
+            headers,
+            {"fields": "id,name,product_count", "limit": "100"},
+        )
+        rows = result.get("data")
+        if not isinstance(rows, list):
+            return None
+        paging = result.get("paging")
+        if isinstance(paging, dict) and paging.get("next"):
+            return None
+        exact = [
+            row for row in rows
+            if isinstance(row, dict)
+            and str(row.get("name", "")).strip().casefold() in {"all products", "alle produkte"}
+            and self.ID_PATTERN.fullmatch(str(row.get("id", "")))
+        ]
+        if not exact:
+            return None
+        exact.sort(
+            key=lambda row: (
+                0 if str(row.get("name", "")).strip().casefold() == "all products" else 1,
+                -int(row.get("product_count", 0) or 0),
+                str(row.get("id", "")),
+            )
+        )
+        return str(exact[0]["id"])
 
     async def _get(
         self,
