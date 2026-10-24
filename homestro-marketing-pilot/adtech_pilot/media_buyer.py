@@ -1295,14 +1295,10 @@ class MetaPublisher:
             and str(row.get("name", "")).strip().casefold() in {"all products", "alle produkte"}
             and self.ID_PATTERN.fullmatch(str(row.get("id", "")))
         ]
-        if not exact:
+        # A duplicate label is not sufficient evidence that a set contains the
+        # intended catalog scope. Fail closed instead of selecting one by ID.
+        if len(exact) != 1:
             return None
-        exact.sort(
-            key=lambda row: (
-                0 if str(row.get("name", "")).strip().casefold() == "all products" else 1,
-                str(row.get("id", "")),
-            )
-        )
         return str(exact[0]["id"])
 
     async def _get(
