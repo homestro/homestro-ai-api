@@ -384,6 +384,13 @@ class PlanAuditStore:
                     "WHERE slot=? AND status=? AND campaign_id=?",
                     ("single_live_meta_campaign", expected_status, campaign_id),
                 )
+                if cursor.rowcount == 1:
+                    connection.execute(
+                        "INSERT INTO adtech_audit (id,kind,created_at,payload_json) VALUES(?,?,?,?)",
+                        (str(uuid4()), "meta_campaign_archived", datetime.now(timezone.utc).isoformat(),
+                         json.dumps({"campaign_id": campaign_id, "status": "INACTIVE",
+                                     "prior_status": expected_status})),
+                    )
             return cursor.rowcount == 1
 
         return await asyncio.to_thread(delete)
@@ -660,6 +667,39 @@ class MetaPublisher:
         self.audit = audit
         self.client = client
         self.env = env if env is not None else os.environ
+
+    async def reconcile_retired_campaign(self) -> dict[str, Any]:
+        """Retire the owner's old campaign independently of all paid-action gates.
+
+        Only Meta reads and an atomic local archive are permitted here.
+        An active or uncertain remote campaign always retains its local claim.
+        """
+        campaign_id = "120254321479480274"
+        claim = await self.audit.get_meta_micro_campaign_claim()
+        if claim is None or claim.get("campaign_id") != campaign_id:
+            return {"status": "not_applicable", "campaign_id": campaign_id}
+        status = str(claim.get("status", ""))
+        if status not in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}:
+            return {"status": "blocked", "reason": "RETIRED_CAMPAIGN_UNEXPECTED_CLAIM_STATE"}
+        token = self.env.get("META_ACCESS_TOKEN", "").strip()
+        if not token:
+            return {"status": "blocked", "reason": "META_ACCESS_TOKEN_MISSING"}
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=35, follow_redirects=False)
+        try:
+            result = await self._reconcile_paused_campaign(
+                client, {"Authorization": f"Bearer {token}"}, campaign_id
+            )
+            if result != "ready":
+                return {"status": "blocked", "reason": result, "campaign_id": campaign_id}
+            released = await self.audit.release_inactive_claim(
+                campaign_id=campaign_id, expected_status=status
+            )
+            return {"status": "INACTIVE" if released else "claim_changed",
+                    "campaign_id": campaign_id}
+        finally:
+            if own_client:
+                await client.aclose()
 
     async def check_readiness(self) -> dict[str, Any]:
         """Read Meta account, Page and Pixel access without creating ad objects.
