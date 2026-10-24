@@ -10,14 +10,11 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import ValidationError
 
-from .creative_factory import BrandKit, CreativeFactory, OpenAIProvider
 from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
