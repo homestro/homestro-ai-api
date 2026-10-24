@@ -225,6 +225,8 @@ class MetaPublisherTests(unittest.TestCase):
                     return httpx.Response(200, json={"data": [{"id": "5555", "is_unavailable": False}]})
                 if request.method == "GET" and path == "4444":
                     return httpx.Response(200, json={"id": "4444", "name": "Homestro"})
+                if request.method == "GET" and path == "campaign-1":
+                    return httpx.Response(200, json={"id": "campaign-1", "status": "ACTIVE"})
                 if request.method == "GET" and path == "campaigns":
                     return httpx.Response(200, json={"data": []})
                 if request.method == "GET" and path == "adsets":
@@ -260,7 +262,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertEqual(result["lifetime_budget_eur"], 0.0)
         self.assertEqual(result["planned_total_eur"], 35.0)
         self.assertEqual(result["budget_type"], "daily")
-        self.assertEqual(repeat["reason"], "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED")
+        self.assertEqual(repeat["reason"], "PRIOR_CAMPAIGN_NOT_CONFIRMED_PAUSED")
         self.assertEqual(
             sum(event[0] == "POST" and event[1] == "campaigns" for event in events),
             1,
