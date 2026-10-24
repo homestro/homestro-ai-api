@@ -355,5 +355,74 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertIn(("GET", "/v26.0/old-campaign"), events)
         self.assertIn(("GET", "/v26.0/old-campaign/adsets"), events)
 
+    def test_scheduled_reconciliation_marks_confirmed_paused_claim_inactive(self):
+        async def run():
+            calls = []
+
+            def handler(request):
+                calls.append((request.method, request.url.path))
+                if request.method == "GET" and request.url.path.endswith("/120254321479480274"):
+                    return httpx.Response(
+                        200,
+                        json={"id": "120254321479480274", "status": "PAUSED"},
+                    )
+                if request.method == "GET" and request.url.path.endswith(
+                    "/120254321479480274/adsets"
+                ):
+                    return httpx.Response(
+                        200,
+                        json={"data": [{"id": "old-adset", "status": "PAUSED"}]},
+                    )
+                return httpx.Response(
+                    404, json={"error": {"message": "unexpected test request"}}
+                )
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            audit = PlanAuditStore(self.root / "scheduled-reconcile.sqlite3")
+            await audit.claim_meta_micro_campaign("act_12345", "old-product")
+            await audit.update_meta_micro_campaign(
+                status="ACTIVE_PENDING_REVIEW",
+                campaign_id="120254321479480274",
+            )
+            publisher = MetaPublisher(audit, client=client, env=self.env)
+            result = await publisher.reconcile_inactive_claim()
+            claim = await audit.get_meta_micro_campaign_claim()
+            await client.aclose()
+            return result, claim, calls
+
+        result, claim, calls = asyncio.run(run())
+        self.assertEqual(result["status"], "INACTIVE")
+        self.assertTrue(result["meta_verified"])
+        self.assertEqual(claim["status"], "INACTIVE")
+        self.assertEqual(claim["campaign_id"], "120254321479480274")
+        self.assertTrue(all(method == "GET" for method, _ in calls))
+
+    def test_scheduled_reconciliation_keeps_unpaused_claim_unchanged(self):
+        async def run():
+            def handler(request):
+                if request.method == "GET":
+                    return httpx.Response(
+                        200,
+                        json={"id": "120254321479480274", "status": "ACTIVE"},
+                    )
+                return httpx.Response(404)
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            audit = PlanAuditStore(self.root / "scheduled-reconcile-active.sqlite3")
+            await audit.claim_meta_micro_campaign("act_12345", "old-product")
+            await audit.update_meta_micro_campaign(
+                status="ACTIVE_PENDING_REVIEW",
+                campaign_id="120254321479480274",
+            )
+            publisher = MetaPublisher(audit, client=client, env=self.env)
+            result = await publisher.reconcile_inactive_claim()
+            claim = await audit.get_meta_micro_campaign_claim()
+            await client.aclose()
+            return result, claim
+
+        result, claim = asyncio.run(run())
+        self.assertEqual(result["status"], "not_confirmed_inactive")
+        self.assertEqual(claim["status"], "ACTIVE_PENDING_REVIEW")
+
 if __name__ == "__main__":
     unittest.main()
