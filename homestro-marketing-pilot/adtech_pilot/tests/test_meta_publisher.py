@@ -5,7 +5,6 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
-
 from adtech_pilot.creative_factory import (
     CreativeBrief,
     CreativeScore,
