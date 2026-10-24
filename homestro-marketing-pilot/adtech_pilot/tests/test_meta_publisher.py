@@ -381,5 +381,29 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertIsNotNone(claim)
         self.assertEqual(archived, [])
 
+    def test_retirement_pauses_only_children_and_confirms_before_archiving(self):
+        async def run():
+            campaign_id = "120254321479480274"
+            paused = False
+            def handler(request):
+                nonlocal paused
+                if request.method == "POST":
+                    self.assertTrue(request.url.path.endswith("/987654321"))
+                    self.assertEqual(parse_qs(request.content.decode()), {"status": ["PAUSED"]})
+                    paused = True
+                    return httpx.Response(200, json={"success": True})
+                if request.url.path.endswith("/adsets"):
+                    return httpx.Response(200, json={"data": [{"id": "987654321", "status": "PAUSED" if paused else "ACTIVE"}]})
+                return httpx.Response(200, json={"id": campaign_id, "status": "PAUSED"})
+            audit = PlanAuditStore(self.root / "retire-children.sqlite3")
+            await audit.claim_meta_micro_campaign("act_12345", "old-product")
+            await audit.update_meta_micro_campaign(status="ACTIVE_PENDING_REVIEW", campaign_id=campaign_id)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                result = await MetaPublisher(audit, client=client, env={"META_ACCESS_TOKEN": "test-token"}).reconcile_retired_campaign()
+            self.assertTrue(paused)
+            self.assertEqual(result["status"], "INACTIVE")
+            self.assertIsNone(await audit.get_meta_micro_campaign_claim())
+        asyncio.run(run())
+
 if __name__ == "__main__":
     unittest.main()
