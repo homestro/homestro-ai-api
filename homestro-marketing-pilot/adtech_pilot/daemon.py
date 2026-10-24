@@ -10,14 +10,11 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import ValidationError
 
-from .creative_factory import BrandKit, CreativeFactory, OpenAIProvider
 from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
@@ -303,104 +300,39 @@ class PilotDaemon:
         return report
 
     async def _creative_job(self) -> dict[str, Any]:
-        if os.getenv("PILOT_CREATIVE_ENABLED", "false").lower() != "true":
-            return {"status": "blocked", "reason": "CREATIVE_GENERATION_DISABLED"}
-        if not os.getenv("OPENAI_API_KEY"):
-            return {"status": "blocked", "reason": "OPENAI_API_KEY_MISSING"}
-        logo_url = os.getenv("HOMESTRO_LOGO_URL", "").strip()
+        """Submit the catalog-based pilot without paid AI creative generation.
+
+        Meta's catalog creative uses approved item images and destinations from the
+        connected product set, so this path must not depend on an OpenAI image,
+        logo URL, or a one-product creative candidate.
+        """
         candidates = [
             product
             for product in self._latest_products
-            if product.get("description") and product.get("image_link")
+            if str(product.get("id", "")).strip()
+            and str(product.get("link", "")).strip()
         ]
-        selected_product_id = os.getenv("MICRO_BUDGET_PRODUCT_ID", "").strip()
-        if selected_product_id:
-            candidates = [p for p in candidates if str(p.get("id")) == selected_product_id]
-        if not candidates or not logo_url:
-            return {"status": "blocked", "reason": "VERIFIED_PRODUCT_IMAGE_OR_LOGO_MISSING"}
+        if not candidates:
+            return {"status": "blocked", "reason": "NO_VALIDATED_CATALOG_PRODUCTS"}
+        product_ids = {str(p.get("id")) for p in self._latest_products}
         product = candidates[0]
-        stage = "product_image_download"
-        try:
-            product_image = await self._fetch_brand_image(product["image_link"])
-            stage = "logo_download"
-            logo_image = await self._fetch_brand_image(logo_url)
-        except httpx.HTTPStatusError as exc:
-            return {
-                "status": "blocked",
-                "reason": "CREATIVE_ASSET_HTTP_ERROR",
-                "stage": stage,
-                "http_status": exc.response.status_code,
-                "host": exc.request.url.host,
-            }
-        product["facts"] = [
-            value.strip()
-            for value in product["description"].split(".")
-            if value.strip()
-        ][:10]
-        if not product["facts"]:
-            return {"status": "blocked", "reason": "VERIFIED_PRODUCT_FACTS_MISSING"}
-        provider = OpenAIProvider(
-            os.environ["OPENAI_API_KEY"],
-            text_model=os.getenv("PILOT_LLM_MODEL", "gpt-4.1-mini"),
-            image_model=os.getenv("PILOT_IMAGE_MODEL", "gpt-image-1"),
+        publisher_result = await MetaPublisher(self.audit).publish_one(
+            creative=None,
+            product=product,
+            product_ids_in_feed=product_ids,
         )
-        factory = CreativeFactory(
-            llm=provider,
-            image_editor=provider,
-            brand=BrandKit(
-                primary_hex=os.getenv("HOMESTRO_BRAND_PRIMARY", "#246B4B"),
-                secondary_hex=os.getenv("HOMESTRO_BRAND_SECONDARY", "#F2EFE7"),
-                accent_hex=os.getenv("HOMESTRO_BRAND_ACCENT", "#D8A83E"),
-            ),
-            output_dir=Path(os.getenv("PILOT_CREATIVE_DIR", "/data/adtech-creatives")),
-            minimum_score=int(os.getenv("PILOT_CREATIVE_MIN_SCORE", "85")),
+        await self.audit.record(
+            "daemon_catalog_campaign_attempt",
+            {
+                "product_scope": "configured_meta_product_set",
+                "validated_product_count": len(product_ids),
+                "publisher": publisher_result,
+            },
         )
-        stage = "openai_copy_and_image_generation"
-        try:
-            candidate = await factory.create(
-                product=product,
-                platform="meta",
-                product_image=product_image,
-                logo_image=logo_image,
-            )
-        except httpx.HTTPStatusError as exc:
-            return {
-                "status": "blocked",
-                "reason": "CREATIVE_PROVIDER_HTTP_ERROR",
-                "stage": stage,
-                "http_status": exc.response.status_code,
-                "host": exc.request.url.host,
-                **_openai_error_metadata(exc),
-            }
-        except ValidationError as exc:
-            invalid_fields = [
-                {
-                    "field": ".".join(str(part) for part in item.get("loc", ()))[:100],
-                    "error": str(item.get("type", "validation_error"))[:80],
-                }
-                for item in exc.errors(
-                    include_input=False, include_context=False, include_url=False
-                )[:10]
-            ]
-            return {
-                "status": "blocked",
-                "reason": "CREATIVE_OUTPUT_VALIDATION_FAILED",
-                "invalid_fields": invalid_fields,
-            }
-        await self.audit.record("daemon_creative_candidate", candidate)
-        publisher_result = {"status": "not_submitted"}
-        if candidate.publishable_candidate:
-            publisher_result = await MetaPublisher(self.audit).publish_one(
-                creative=candidate,
-                product=product,
-                product_ids_in_feed={str(p.get("id")) for p in self._latest_products},
-            )
         return {
-            "status": "candidate_ready" if candidate.publishable_candidate else "rejected_and_deleted",
-            "product_id": product["id"],
-            "quality_score": candidate.score.quality_score,
-            "asset_path": candidate.asset_path or None,
-            "published": publisher_result.get("status") == "ACTIVE_PENDING_REVIEW",
+            "status": publisher_result.get("status", "blocked"),
+            "product_scope": "configured_meta_product_set",
+            "validated_product_count": len(product_ids),
             "publisher": publisher_result,
         }
 

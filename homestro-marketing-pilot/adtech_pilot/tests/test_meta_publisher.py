@@ -5,14 +5,13 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
-from PIL import Image
-
 from adtech_pilot.creative_factory import (
     CreativeBrief,
     CreativeScore,
     GeneratedCreative,
 )
 from adtech_pilot.media_buyer import MetaPublisher, PlanAuditStore
+from PIL import Image
 
 
 class MetaPublisherTests(unittest.TestCase):
@@ -64,6 +63,9 @@ class MetaPublisherTests(unittest.TestCase):
             "META_DSA_PAYOR": "Homestro legal entity",
             "META_API_VERSION": "v26.0",
             "META_BILLING_VERIFIED": "true",
+            "META_PURCHASE_EVENT_VERIFIED": "true",
+            "META_PRODUCT_CATALOG_ID": "3333",
+            "META_PRODUCT_SET_ID": "6666",
             "MICRO_BUDGET_PRODUCT_ID": "sku-1",
             "PILOT_CREATIVE_DIR": str(self.root),
             "PILOT_CREATIVE_MIN_SCORE": "80",
@@ -222,6 +224,8 @@ class MetaPublisherTests(unittest.TestCase):
                     return httpx.Response(200, json={"data": [{"id": "5555", "is_unavailable": False}]})
                 if request.method == "GET" and path == "4444":
                     return httpx.Response(200, json={"id": "4444", "name": "Homestro"})
+                if request.method == "GET" and path == "campaign-1":
+                    return httpx.Response(200, json={"id": "campaign-1", "status": "ACTIVE"})
                 if request.method == "GET" and path == "campaigns":
                     return httpx.Response(200, json={"data": []})
                 if request.method == "GET" and path == "adsets":
@@ -237,8 +241,6 @@ class MetaPublisherTests(unittest.TestCase):
 
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             audit = PlanAuditStore(self.root / "audit-live.sqlite3")
-            await audit.claim_meta_micro_campaign("act_12345", "sku-1")
-            await audit.update_meta_micro_campaign(status="FAILED_HTTPStatusError")
             publisher = MetaPublisher(audit, client=client, env=self.env)
             result = await publisher.publish_one(
                 creative=self.creative,
@@ -259,7 +261,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertEqual(result["lifetime_budget_eur"], 0.0)
         self.assertEqual(result["planned_total_eur"], 35.0)
         self.assertEqual(result["budget_type"], "daily")
-        self.assertEqual(repeat["reason"], "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED")
+        self.assertEqual(repeat["reason"], "PRIOR_CAMPAIGN_NOT_CONFIRMED_PAUSED")
         self.assertEqual(
             sum(event[0] == "POST" and event[1] == "campaigns" for event in events),
             1,
@@ -273,8 +275,85 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertTrue(all(form.get("status") == ["PAUSED"] for _, form in created_forms))
         adset_form = next(form for event, form in created_forms if event[1] == "adsets")
         self.assertEqual(adset_form["daily_budget"], ["500"])
-        self.assertIn('"custom_event_type": "ADD_TO_CART"', adset_form["promoted_object"][0])
+        self.assertIn('"custom_event_type": "PURCHASE"', adset_form["promoted_object"][0])
 
+
+    def test_product_set_resolution_fails_closed_on_duplicate_all_products_names(self):
+        async def run():
+            def handler(request):
+                if request.method == "GET" and request.url.path.endswith("/3333/product_sets"):
+                    return httpx.Response(
+                        200,
+                        json={
+                            "data": [
+                                {"id": "1111", "name": "All Products"},
+                                {"id": "2222", "name": "All Products"},
+                            ]
+                        },
+                    )
+                return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            publisher = MetaPublisher(
+                PlanAuditStore(self.root / "ambiguous-set.sqlite3"),
+                client=client,
+                env={},
+            )
+            result = await publisher._resolve_all_products_set(client, "3333", {})
+            await client.aclose()
+            return result
+
+        self.assertIsNone(asyncio.run(run()))
+
+    def test_paused_prior_campaign_is_reconciled_before_releasing_single_campaign_slot(self):
+        async def run():
+            events = []
+
+            def handler(request):
+                path = request.url.path
+                tail = path.rstrip("/").rsplit("/", 1)[-1]
+                events.append((request.method, path))
+                if request.method == "GET" and tail == "act_12345":
+                    return httpx.Response(200, json={"id": "act_12345", "account_status": 1, "currency": "EUR"})
+                if request.method == "GET" and tail == "adspixels":
+                    return httpx.Response(200, json={"data": [{"id": "5555", "is_unavailable": False}]})
+                if request.method == "GET" and tail == "4444":
+                    return httpx.Response(200, json={"id": "4444", "name": "Homestro"})
+                if request.method == "GET" and tail == "old-campaign":
+                    return httpx.Response(200, json={"id": "old-campaign", "status": "PAUSED"})
+                if request.method == "GET" and tail == "adsets" and "old-campaign" in path:
+                    return httpx.Response(200, json={"data": [{"id": "old-adset", "status": "PAUSED"}]})
+                if request.method == "GET" and tail == "adsets":
+                    return httpx.Response(200, json={"data": []})
+                ids = {"campaigns": "campaign-new", "adsets": "adset-new", "adcreatives": "creative-new", "ads": "ad-new"}
+                if request.method == "POST" and tail in ids:
+                    return httpx.Response(200, json={"id": ids[tail]})
+                if request.method == "POST" and tail in {"campaign-new", "adset-new", "ad-new"}:
+                    return httpx.Response(200, json={"success": True})
+                return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            audit = PlanAuditStore(self.root / "audit-paused-campaign.sqlite3")
+            await audit.claim_meta_micro_campaign("act_12345", "old-product")
+            await audit.update_meta_micro_campaign(
+                status="ACTIVE_PENDING_REVIEW", campaign_id="old-campaign"
+            )
+            publisher = MetaPublisher(audit, client=client, env=self.env)
+            result = await publisher.publish_one(
+                creative=None,
+                product=self.product,
+                product_ids_in_feed={"sku-1"},
+            )
+            claim = await audit.get_meta_micro_campaign_claim()
+            await client.aclose()
+            return result, claim, events
+
+        result, claim, events = asyncio.run(run())
+        self.assertEqual(result["status"], "ACTIVE_PENDING_REVIEW")
+        self.assertEqual(claim["campaign_id"], result["campaign_id"])
+        self.assertEqual(result["campaign_id"], "campaign-new")
+        self.assertIn(("GET", "/v26.0/old-campaign"), events)
+        self.assertIn(("GET", "/v26.0/old-campaign/adsets"), events)
 
 if __name__ == "__main__":
     unittest.main()
