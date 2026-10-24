@@ -311,18 +311,24 @@ class PilotDaemon:
         client = MetaAdLibraryClient(
             token, api_version=os.getenv("META_GRAPH_VERSION", "v26.0")
         )
-        ads_by_id: dict[str, Any] = {}
+        ads_by_id: dict[str, dict[str, Any]] = {}
         for country in ("DE", "AT"):
             for term in search_terms:
                 # Each call is bounded. The daemon retries a failed scan with
                 # exponential backoff; no query failure is converted into a trend.
                 for ad in await client.search([term], country=country, limit=20):
-                    ads_by_id.setdefault(ad.library_id, ad)
+                    record = ads_by_id.setdefault(
+                        ad.library_id, {"ad": ad, "countries": set(), "terms": set()}
+                    )
+                    record["countries"].add(country)
+                    record["terms"].add(term)
 
         now = datetime.now(UTC)
         longevity_days: dict[str, int] = {}
         long_running_ads: list[dict[str, Any]] = []
-        for ad in ads_by_id.values():
+        for observed in ads_by_id.values():
+            ad = observed["ad"]
+            observed_countries = sorted(observed["countries"])
             if not ad.started_at:
                 continue
             try:
@@ -344,7 +350,8 @@ class PilotDaemon:
                     "page_name": ad.page_name,
                     "started_at": ad.started_at,
                     "observed_age_days": age_days,
-                    "country_searches": ["DE", "AT"],
+                    "country_searches": observed_countries,
+                    "matched_search_terms": sorted(observed["terms"]),
                     "copy": ad.ad_copy[:2],
                     "snapshot_url": ad.snapshot_url,
                 }
