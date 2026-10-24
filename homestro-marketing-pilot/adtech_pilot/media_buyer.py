@@ -775,15 +775,16 @@ class MetaPublisher:
         resumed_campaign: str | None = None
         try:
             if not product_set_id:
-                product_set_id = await self._resolve_all_products_set(
+                resolved_set_id = await self._resolve_all_products_set(
                     client, catalog_id, headers
                 )
-                if not product_set_id:
+                if not resolved_set_id:
                     return {
                         "status": "blocked",
                         "reason": "META_ALL_PRODUCTS_SET_NOT_FOUND_OR_AMBIGUOUS",
                         "product_catalog_id": catalog_id,
                     }
+                product_set_id = resolved_set_id
             prior_claim = await self.audit.get_meta_micro_campaign_claim()
             if prior_claim is not None:
                 if (
