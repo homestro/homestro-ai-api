@@ -730,7 +730,7 @@ class MetaPublisher:
         config = self._configuration()
         if isinstance(config, dict):
             return {"status": "blocked", **config}
-        account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id = config
+        account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id = config
         product_id = str(product.get("id", ""))
         # Catalog items supply their own images and destination URLs.
         link = str(product.get("link", ""))
@@ -928,7 +928,7 @@ class MetaPublisher:
                 headers,
                 {
                     "name": "Homestro Catalog Creative",
-                    "product_set_id": catalog_id,
+                    "product_set_id": product_set_id,
                     "object_story_spec": json.dumps(
                         {
                             "page_id": page_id,
@@ -971,6 +971,7 @@ class MetaPublisher:
                 "ad_id": ad,
                 "product_scope": "entire_meta_catalog",
                 "product_catalog_id": catalog_id,
+                "product_set_id": product_set_id,
                 "budget_type": "daily",
                 "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
                 "lifetime_budget_eur": 0.0,
@@ -1104,7 +1105,7 @@ class MetaPublisher:
 
     def _configuration(
         self,
-    ) -> tuple[str, str, str, str, str, str, str, str] | dict[str, Any]:
+    ) -> tuple[str, str, str, str, str, str, str, str, str] | dict[str, Any]:
         if self.env.get("ALLOW_MICRO_BUDGET", "false").lower() != "true":
             return {"reason": "MICRO_BUDGET_NOT_ENABLED"}
         if live_ads_dry_run(self.env):
@@ -1128,6 +1129,7 @@ class MetaPublisher:
         payor = self.env.get("META_DSA_PAYOR", "").strip()
         version = self.env.get("META_API_VERSION", "v26.0").strip()
         catalog_id = self.env.get("META_PRODUCT_CATALOG_ID", "").strip()
+        product_set_id = self.env.get("META_PRODUCT_SET_ID", "").strip()
         if not token:
             return {"reason": "META_ACCESS_TOKEN_MISSING"}
         if not self.ACCOUNT_PATTERN.fullmatch(account_id):
@@ -1136,13 +1138,15 @@ class MetaPublisher:
             return {"reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
         if not catalog_id or not self.ID_PATTERN.fullmatch(catalog_id):
             return {"reason": "META_PRODUCT_CATALOG_ID_MISSING_OR_INVALID"}
+        if not product_set_id or not self.ID_PATTERN.fullmatch(product_set_id):
+            return {"reason": "META_PRODUCT_SET_ID_MISSING_OR_INVALID"}
         if not beneficiary or not payor:
             return {"reason": "META_EU_BENEFICIARY_OR_PAYER_MISSING"}
         if len(beneficiary) > 200 or len(payor) > 200:
             return {"reason": "META_EU_BENEFICIARY_OR_PAYER_TOO_LONG"}
         if not self.API_VERSION_PATTERN.fullmatch(version):
             return {"reason": "META_API_VERSION_INVALID"}
-        return account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id
+        return account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id
 
     def _creative_approved(self, creative: GeneratedCreative, product_id: str) -> bool:
         score = creative.score
