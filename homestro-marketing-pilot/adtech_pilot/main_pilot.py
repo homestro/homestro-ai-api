@@ -237,6 +237,19 @@ def create_app(
         claim = await audit.get_meta_micro_campaign_claim()
         return operating_report(latest, claim, daily_cap_eur=configured_daily_budget_limit_eur())
 
+    @app.get("/pilot/marketing", dependencies=[Depends(require_admin)])
+    async def pilot_marketing(limit: int = 50):
+        from .marketing_director import MarketingDirector
+
+        return await asyncio.to_thread(MarketingDirector(audit).report, limit=limit)
+
+    @app.get("/pilot/media", dependencies=[Depends(require_admin)])
+    async def pilot_media():
+        from .media_registry import MediaRegistry
+
+        return {"assets": await asyncio.to_thread(MediaRegistry(audit).list),
+                "publication_confirmed": False, "generation_performed": False}
+
     @app.get("/pilot/economics", dependencies=[Depends(require_admin)])
     async def pilot_economics():
         from .order_economics import economics_summary

@@ -52,3 +52,7 @@ The measurement waiver is explicit and separate from verification: `META_PURCHAS
 6. Build common reporting and conservative allocation only after channel attribution and actual cost completeness are established.
 
 Do not label this contract or the current bounded Meta buyer as a completed replacement for all four services. Every missing row must gain executable integration, meaningful tests and the stated live evidence before its status changes.
+
+## Director expansion, 25 October 2026
+
+Persistent common strategy/work queue and seven-day calendar now produce grounded proposals across seven marketing domains; protected /pilot/marketing exposes actual stored tasks and blockers. This supplies orchestration and reviewable content, not missing Google/Bing/email write adapters. Existing organic main service includes guide/article/social publication logic and remains the sole consumer; the public receipt bridge reports its records explicitly as database evidence. Existing Higgsfield output intake is now executable and content-addressed, with protected review queue; all11observed exports are images, no video source proven, and ten product mappings remain unknown. Stored media remains distinct from approved/attached/published media.161tests passed before deployment. Full parity remains unverified and external consumers listed above remain incomplete.

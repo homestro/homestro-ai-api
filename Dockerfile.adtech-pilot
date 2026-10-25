@@ -13,7 +13,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app
 WORKDIR /app
-RUN groupadd --system --gid 10001 pilot \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 pilot \
     && useradd --system --uid 10001 --gid pilot --home-dir /nonexistent \
        --shell /usr/sbin/nologin pilot \
     && mkdir -p /data/adtech-pilot /data/adtech-creatives \
@@ -33,6 +35,10 @@ COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/purchase_guard.py
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/order_economics.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/payment_webhooks.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/seo_writer.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/organic_bridge.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/marketing_director.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/media_registry.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/existing_media.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/content_engine.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/store_diagnostics.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/product_selection.py /app/adtech_pilot/

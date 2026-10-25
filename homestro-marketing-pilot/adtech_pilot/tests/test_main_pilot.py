@@ -55,6 +55,15 @@ class MainPilotTests(unittest.TestCase):
         self.assertFalse(response.json()["budget_increase_authorized"])
         self.assertFalse(response.json()["full_autonomous_profit_optimization_verified"])
 
+    def test_marketing_and_media_reports_require_admin_and_cannot_claim_publication(self):
+        for path in ('/pilot/marketing', '/pilot/media'):
+            self.assertEqual(self.request('GET', path).status_code, 401)
+            response = self.request('GET', path, headers={
+                'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'})
+            self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.request('GET', '/pilot/marketing', headers={
+            'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}).json()['publication_performed_by_this_endpoint'])
+
     def test_order_expense_api_requires_admin_actual_cost_confirmation_and_known_order(self):
         payload = {"order_hash": "a" * 64, "fulfillment_eur": "4.00", "payment_fees_eur": "1.00",
                    "returns_cost_eur": "0", "other_cost_eur": "0", "actual_costs_confirmed": True}

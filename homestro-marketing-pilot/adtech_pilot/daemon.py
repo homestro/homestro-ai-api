@@ -556,7 +556,23 @@ class PilotDaemon:
         ranked_candidates, selection = await asyncio.to_thread(read_cost_candidates,
             PaymentWebhookStore(payment_database(os.environ)), candidates)
         from .content_engine import content_batch
+        from .marketing_director import MarketingDirector
+        from .media_registry import MediaRegistry
+        from .organic_bridge import read_organic_results
 
+        organic = await read_organic_results()
+        await self.audit.record("organic_publisher_evidence", organic)
+        strategy = await asyncio.to_thread(MarketingDirector(self.audit).reconcile,
+            ranked_candidates, {"claim": claim, "controller": plan, "organic": organic})
+        await self.audit.record("marketing_director", strategy)
+        logger.info("marketing_director %s", json.dumps(strategy, separators=(",", ":")))
+        try:
+            async with asyncio.timeout(90):
+                media_imports = await MediaRegistry(self.audit).seed_existing(candidates, limit=11)
+        except TimeoutError:
+            media_imports = {"status": "partial", "reason": "MEDIA_IMPORT_CYCLE_TIMEOUT", "publication_confirmed": False}
+        await self.audit.record("existing_media_import", media_imports)
+        logger.info("existing_media_import %s", json.dumps(media_imports, separators=(",", ":")))
         content = content_batch(ranked_candidates)
         await self.audit.record("content_drafts", content)
         logger.info("content_drafts %s", json.dumps({key: value for key, value in content.items()
