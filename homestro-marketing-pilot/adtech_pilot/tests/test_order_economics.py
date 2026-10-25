@@ -85,6 +85,19 @@ class OrderEconomicsTests(unittest.TestCase):
             initialize(db)
             self.assertEqual(db.execute('SELECT channel,net_revenue FROM pilot_order_economics').fetchone(), ('meta', '10'))
 
+    def test_publisher_key_can_credit_only_organic_channels(self):
+        self.env['PILOT_ORGANIC_API_KEY'] = 'o' * 40
+        for index, channel in enumerate(('facebook', 'pinterest', 'google', 'meta')):
+            ref = tracking_ref('12345', '23456', 'a' * 24, secret=self.env['PILOT_ORGANIC_API_KEY'],
+                               expires_at=self.now + timedelta(days=1), issued_at=self.now, channel=channel)
+            payload = self.payload()
+            payload['id'] += index
+            payload['landing_site'] = tracked_url('https://homestro.de/products/test', ref,
+                                                  secret=self.env['PILOT_ORGANIC_API_KEY'], at=self.now)
+            self.send('orders/paid', payload)
+            count = economics_summary(self.store, '12345', None, channel=channel)['signed_url_tagged_paid_orders']
+            self.assertEqual(count, 1 if channel in {'facebook', 'pinterest'} else 0)
+
     def test_signed_ref_rejects_tampering_expiry_and_wrong_key(self):
         self.assertEqual(decode_ref(self.ref, secret=self.env['PILOT_ADMIN_KEY'], at=self.now)['campaign'], '12345')
         for token, key, at in ((self.ref + '0', self.env['PILOT_ADMIN_KEY'], self.now),

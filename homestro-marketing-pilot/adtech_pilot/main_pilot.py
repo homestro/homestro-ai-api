@@ -40,6 +40,11 @@ TRIGGER_HEADER = APIKeyHeader(name="X-Pilot-Token", auto_error=False)
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 
 
+class SearchPauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_account: str = Field(pattern=r'^\d{1,20}$')
+
+
 class AttributionLinkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     channel: Literal['meta', 'google', 'microsoft', 'facebook', 'instagram', 'tiktok', 'pinterest']
@@ -271,6 +276,22 @@ def create_app(
         from .marketing_director import MarketingDirector
 
         return await asyncio.to_thread(MarketingDirector(audit).report, limit=limit)
+
+    @app.post("/pilot/search/{channel}/{campaign_id}/pause", dependencies=[Depends(require_admin)])
+    async def pilot_search_pause(channel: Literal['google', 'microsoft'], campaign_id: str, body: SearchPauseRequest):
+        from .channel_control import pause_search_campaign
+        from .search_channels import read_google, read_microsoft
+
+        if not campaign_id.isdigit() or len(campaign_id) > 20:
+            raise HTTPException(422, 'INVALID_CAMPAIGN_ID')
+        observation = await (read_google() if channel == 'google' else read_microsoft())
+        if (observation.get('status') != 'observed' or observation.get('account_id') != body.expected_account
+                or not any(row.get('id') == campaign_id for row in observation.get('campaigns', []))):
+            return {"status": "blocked", "reason": "CAMPAIGN_ACCOUNT_IDENTITY_NOT_OBSERVED", "writes_performed": False}
+        await audit.record('search_pause_intent', {'channel': channel, 'campaign_id': campaign_id, 'account_id': body.expected_account})
+        result = await pause_search_campaign(channel, campaign_id, expected_account=body.expected_account)
+        await audit.record('search_pause_result', result)
+        return result
 
     @app.get("/pilot/search/readiness", dependencies=[Depends(require_admin)])
     async def pilot_search_readiness():

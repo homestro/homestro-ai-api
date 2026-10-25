@@ -532,6 +532,13 @@ class PilotDaemon:
         search_channels = {name: value if isinstance(value, dict) else {"status": "unavailable", "error_type": type(value).__name__}
             for name, value in zip(("google", "microsoft"), observations, strict=True)}
         await self.audit.record("search_channel_evidence", search_channels)
+        from .channel_control import allocation_plan
+
+        # Additional search-channel spend is not authorized. Keep the common cap
+        # zero even when a configured Meta test has a nonzero ceiling.
+        allocation = allocation_plan({}, authorized_daily_eur='0', measurement_verified=False)
+        await self.audit.record("cross_channel_budget_proposal", allocation)
+
         from .cognitive_strategy import CognitiveStrategy
 
         cognitive = await CognitiveStrategy(self.audit).cycle(ranked_candidates, controller=plan)

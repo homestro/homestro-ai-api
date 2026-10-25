@@ -155,6 +155,12 @@ def record_paid_order(db, *, topic, payload, order_hash, blocked, env, now):
         if len(params.get('pilot_ref', [])) != 1:
             return
         ref = decode_ref(params['pilot_ref'][0], secret=env.get('PILOT_ATTRIBUTION_SECRET') or env.get('PILOT_ADMIN_KEY', ''), at=at)
+        if ref is None and env.get('PILOT_ORGANIC_API_KEY'):
+            organic = decode_ref(params['pilot_ref'][0], secret=env['PILOT_ORGANIC_API_KEY'], at=at)
+            # The publisher's existing internal key may attest only its organic lanes.
+            if organic and organic['channel'] in {'facebook', 'instagram', 'tiktok', 'pinterest'}:
+                ref = organic
+
         if not ref or params.get('utm_campaign') != [ref['campaign']] or params.get('utm_content') != [ref['ad']]:
             return
         if ref['channel'] != 'meta' and params.get('utm_source') != [ref['channel']]:

@@ -130,5 +130,5 @@ def connection_requirements(*, env=None):
     } for name, keys, capabilities in (
         ('google', google, ['inventory_read', 'metrics_read', 'validate_only_campaign_bundle']),
         ('microsoft', microsoft, ['inventory_read', 'offline_campaign_templates']))},
-        'campaign_write_transport_complete': False, 'paid_activation_authorized': False,
+        'campaign_write_transport_complete': False, 'stop_only_transport_implemented': True, 'paid_activation_authorized': False,
         'authorized_spend_eur': 0, 'merchant_credentials_are_not_ads_credentials': True}

@@ -49,6 +49,16 @@ class MainPilotTests(unittest.TestCase):
         for url in ('https://evil.example/products/test', 'https://user@homestro.de/products/test', 'https://homestro.de:444/products/test'):
             self.assertEqual(self.request('POST', '/pilot/attribution/link', json={**body, 'url': url}, headers=headers).status_code, 422)
 
+    def test_search_pause_is_admin_only_and_cannot_write_unobserved_campaign(self):
+        from unittest.mock import AsyncMock, patch
+        body = {'expected_account': '1234567890'}
+        path = '/pilot/search/google/123/pause'
+        self.assertEqual(self.request('POST', path, json=body).status_code, 401)
+        with patch('adtech_pilot.search_channels.read_google', new=AsyncMock(return_value={'status': 'not_configured'})), patch('adtech_pilot.channel_control.pause_search_campaign', new=AsyncMock()) as writer:
+            result = self.request('POST', path, json=body, headers={'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'})
+        self.assertEqual(result.json()['reason'], 'CAMPAIGN_ACCOUNT_IDENTITY_NOT_OBSERVED')
+        writer.assert_not_awaited()
+
     def test_admin_key_required_for_feed_and_metrics(self):
         response = self.request(
             "POST",
