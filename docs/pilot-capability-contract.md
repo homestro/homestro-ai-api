@@ -23,7 +23,7 @@ Marketing descriptions do not establish these products' internal algorithms, API
 | Autonomous experiment control | Persistent intent, create/attach reconciliation, one rotation per 24h after additional exposure spend | Confirmed same-ad attachment; no duplicate ad, no budget/end-date change |
 | Performance and stopping | Actual Insights, canonical purchases/ROAS, durable stops, independent watchdog | Provider reads and pause confirmation; missing data never implies purchases |
 | Attribution/economics | Signed link reference, signed paid/refund/cancel webhooks, immutable known COGS, confirmed expenses | Genuine attributed paid order, complete actual costs and reported spend; currently no verified profitability |
-| German copy | Three neutral deterministic message templates | Real feed facts; a complete brand-knowledge/storytelling generator remains missing |
+| German copy | Versioned brand brief and grounded deterministic ad/social/SEO/GEO drafts; source facts and unverified product-name language flagged | Real feed facts; a complete brand-knowledge/storytelling generator remains missing |
 | Store diagnostics | Read-only sample of homepage and up to three product pages; HTTP, metadata, H1, canonical, alt and JSON-LD checks | Recorded sampled URLs/issues; no claim of full SEO audit, rankings or Core Web Vitals |
 | Organic social | Separate existing main-service publisher | Platform receipts/URLs per brand/channel; historical service records do not prove current publication |
 | Competitor trends | Existing Meta archive adapter and matching, failure reported explicitly | Authorized source response; current source rejection is not trend data; 14-day longevity does not prove profit |
@@ -33,7 +33,7 @@ Marketing descriptions do not establish these products' internal algorithms, API
 | Cross-channel budget allocation | Not implemented | Reliable common attribution/cost basis, channel-specific safeguards, explicit total budget; never scale current EUR5 test by inference |
 | Brand knowledge and campaign strategy | Not complete | Versioned real business facts, factual-claim validation, generated strategy/copy tests and provider integration |
 | Email/newsletter/customer support | Not implemented as a live channel | Store consent/suppression inputs, delivery connector, reviewed recipient scope, unsubscribe handling and actual delivery evidence |
-| SEO content and landing-page creation | Diagnostics only; automatic authoring/publication missing | Brand-safe factual drafts, own-store publishing integration, preview/rollback and duplicate protection |
+| SEO content and landing-page creation | Sample diagnostics plus grounded SEO metadata and Product/Offer JSON-LD drafts; automatic storefront revision/publication missing | Brand-safe factual drafts, own-store publishing integration, preview/rollback and duplicate protection |
 | Full reporting/learning | Protected /pilot/brain and /pilot/economics; source freshness and explicit gaps | Actual experiments/orders over time; no invented learning from unobserved outcomes |
 
 ## Fixed operating boundary

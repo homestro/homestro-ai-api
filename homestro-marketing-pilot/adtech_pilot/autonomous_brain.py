@@ -304,12 +304,12 @@ class AutonomousBrain:
                 if not batch:
                     return {'status': 'hold', 'reason': 'NO_COST_ELIGIBLE_EXPERIMENT_PRODUCTS'}
                 story, ids = website_story(batch, page)
-                messages = (
-                    'Was passt zu deinem Alltag? Entdecke Produkte, Varianten und aktuelle Preise bei Homestro.',
-                    'Neue Ideen für deinen Alltag. Schau dir Produktdetails und verfügbare Varianten bei Homestro an.',
-                    'Deine nächste Entdeckung bei Homestro: Produkte vergleichen und alle Details im Shop ansehen.',
-                )
-                story['link_data']['message'] = messages[sum(state['counts'].values()) % len(messages)]
+                if not tracking_only:
+                    from .content_engine import product_draft
+
+                    # Preserve the already-reserved tracking bootstrap story verbatim.
+                    story['link_data']['message'] = (product_draft(batch[0])['ad']['primary_text']
+                        if len(batch) == 1 else 'Neue Ideen bei Homestro: Produktdetails und aktuelle Preise im Shop entdecken.')
                 if not tracking_only and set(ids) == set(state.get('current_product_ids', [])):
                     return {'status': 'hold', 'reason': 'NO_NEW_PRODUCT_BATCH'}
                 from .order_economics import tracked_story, tracking_ref

@@ -545,6 +545,12 @@ class PilotDaemon:
 
         ranked_candidates, selection = await asyncio.to_thread(read_cost_candidates,
             PaymentWebhookStore(payment_database(os.environ)), candidates)
+        from .content_engine import content_batch
+
+        content = content_batch(ranked_candidates)
+        await self.audit.record("content_drafts", content)
+        logger.info("content_drafts %s", json.dumps({key: value for key, value in content.items()
+                    if key != "drafts"}, separators=(",", ":")))
         await self.audit.record("product_selection", selection)
         logger.info("product_selection %s", json.dumps(selection, separators=(",", ":")))
         if not claim or not claim.get("campaign_id"):
