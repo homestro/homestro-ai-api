@@ -3,9 +3,10 @@ import {extractMedia} from './media.js';
 
 const sourceMedia=p=>extractMedia(Array.isArray(p.media)?p.media.filter(n=>n&&typeof n==='object'):[]);
 const pathOf=value=>{try{return decodeURIComponent(productURL(value).pathname).normalize('NFKC').toLocaleLowerCase('de-DE').replace(/\/$/,'');}catch{return null;}};
-export function catalogDecision(product,{demand=null,demandUpdatedAt=null,now=new Date()}={}){
+export function catalogDecision(product,{demand=null,demandUpdatedAt=null,now=new Date(),excludedProductIds=[]}={}){
   const media=sourceMedia(product),blockers=[];
   if(product.rejected===true)blockers.push('PRODUCT_REJECTED');
+  if(excludedProductIds.includes(product.id))blockers.push('PRODUCT_EXCLUDED_BY_POLICY');
   if(product.status!=='ACTIVE')blockers.push('PRODUCT_NOT_ACTIVE');
   if(!Array.isArray(product.variants)||!product.variants.some(v=>v?.available&&Number(v.price)>0))blockers.push('NO_AVAILABLE_VARIANT');
   if(!pathOf(product.url))blockers.push('NO_PUBLIC_PRODUCT_URL');
@@ -34,8 +35,8 @@ export function catalogDecision(product,{demand=null,demandUpdatedAt=null,now=ne
 // One coordinator for existing ingestion and existing workers. No second publisher,
 // no provider/model calls and no inferred approval of imported media or TikTok previews.
 export class CatalogBrain{
-  constructor({pool,processProduct,afterPrepare=async()=>{},autoApprovalEnabled=false,enabled=true,batchSize=8,clock=()=>new Date()}){
-    Object.assign(this,{pool,processProduct,afterPrepare,autoApprovalEnabled,enabled,clock});
+  constructor({pool,processProduct,afterPrepare=async()=>{},autoApprovalEnabled=false,enabled=true,batchSize=8,clock=()=>new Date(),excludedProductIds=[]}){
+    Object.assign(this,{pool,processProduct,afterPrepare,autoApprovalEnabled,enabled,clock,excludedProductIds});
     this.batchSize=Math.max(1,Math.min(20,Number(batchSize)||8));this.busy=false;
   }
   async migrate(){await this.pool.query(`CREATE TABLE IF NOT EXISTS marketing_catalog_brain(
@@ -53,15 +54,17 @@ export class CatalogBrain{
     }
     let eligible=0,imageReferences=0,nativeVideos=0;const images=new Set();
     for(const {document:p} of products){
-      const d=catalogDecision(p,{demand,demandUpdatedAt,now});
+      const d=catalogDecision(p,{demand,demandUpdatedAt,now,excludedProductIds:this.excludedProductIds});
       if(d.eligible)eligible++;imageReferences+=d.sourceImageCount;if(d.nativeVideoAvailable)nativeVideos++;
       for(const url of sourceMedia(p).images)images.add(url);
       await this.pool.query(`INSERT INTO marketing_catalog_brain(product_id,source_revision,decision,state,priority,next_attempt_at)
         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(product_id) DO UPDATE SET
         decision=excluded.decision,priority=excluded.priority,
         state=CASE WHEN marketing_catalog_brain.source_revision<>excluded.source_revision THEN excluded.state
-          WHEN NOT ($3::jsonb->>'eligible')::boolean THEN 'blocked' ELSE marketing_catalog_brain.state END,
-        next_attempt_at=CASE WHEN marketing_catalog_brain.source_revision<>excluded.source_revision THEN excluded.next_attempt_at
+          WHEN NOT ($3::jsonb->>'eligible')::boolean THEN 'blocked'
+          WHEN marketing_catalog_brain.state='blocked' THEN excluded.state ELSE marketing_catalog_brain.state END,
+        next_attempt_at=CASE WHEN marketing_catalog_brain.source_revision<>excluded.source_revision
+          OR (marketing_catalog_brain.state='blocked' AND ($3::jsonb->>'eligible')::boolean) THEN excluded.next_attempt_at
           ELSE marketing_catalog_brain.next_attempt_at END,
         source_revision=excluded.source_revision,updated_at=now()`,
         [p.id,p.revision,d,d.eligible?'due':'blocked',d.priority,now]);

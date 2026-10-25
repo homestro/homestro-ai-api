@@ -121,7 +121,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     let catalogBrain=null,brainTimer;
     try{
       catalogBrain=new CatalogBrain({pool,processProduct:id=>processProduct(id,{freeOnly:true}),enabled:cfg.workerEnabled,
-        autoApprovalEnabled:cfg.autonomyEnabled,afterPrepare:async()=>{await approveReviewed(store,cfg);if(social)await social.prepare();}});
+        autoApprovalEnabled:cfg.autonomyEnabled,excludedProductIds:cfg.excludedProductIds||[],afterPrepare:async()=>{await approveReviewed(store,cfg);if(social)await social.prepare();}});
       await catalogBrain.migrate();
     }catch(e){catalogBrain=null;log('CATALOG_BRAIN_DISABLED',{reason:codeOf(e)});}
     let syncBusy=false,syncTimer;

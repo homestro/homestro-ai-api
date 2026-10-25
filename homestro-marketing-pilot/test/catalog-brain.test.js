@@ -151,3 +151,18 @@ test('catalog report rejects malformed cursors before any query and binds accept
   assert.deepEqual(page.args,[after]);assert.ok(!page.sql.includes(after));
   assert.equal(result.pageInfo.hasNextPage,false);
 });
+
+
+test('catalog decisions preserve the existing owner exclusion policy',async()=>{
+  const p=product();
+  const decision=catalogDecision(p,{excludedProductIds:[p.id]});
+  assert.equal(decision.eligible,false);
+  assert.ok(decision.blockers.includes('PRODUCT_EXCLUDED_BY_POLICY'));
+  assert.equal(catalogDecision(p,{excludedProductIds:[]}).eligible,true);
+  const f=fixture();f.brain.excludedProductIds=[p.id];
+  const result=await f.brain.tick();
+  assert.equal(result.eligible,23);
+  const update=f.queries.find(q=>q.sql.includes('INSERT INTO marketing_catalog_brain')&&q.args[0]===p.id);
+  assert.equal(update.args[2].eligible,false);
+  assert.equal(update.args[3],'blocked');
+});
