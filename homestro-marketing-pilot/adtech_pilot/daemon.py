@@ -327,7 +327,21 @@ class PilotDaemon:
             for term in search_terms:
                 # Each call is bounded. The daemon retries a failed scan with
                 # exponential backoff; no query failure is converted into a trend.
-                for ad in await client.search([term], country=country, limit=20):
+                try:
+                    found_ads = await client.search([term], country=country, limit=20)
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code not in {400, 401, 403, 404}:
+                        raise
+                    # A denied archive operation is not a transient outage or a trend.
+                    # Normal daily scheduling avoids repeated credential/API probing.
+                    return {
+                        "status": "partial", "meta": "AD_LIBRARY_OPERATION_REJECTED",
+                        "http_status": exc.response.status_code,
+                        "tiktok": "not_available_no_authorized_api_configured",
+                        "sell_the_trend": "not_available_no_authorized_api_configured",
+                        "campaign_writes_performed": False,
+                    }
+                for ad in found_ads:
                     record = ads_by_id.setdefault(
                         ad.library_id, {"ad": ad, "countries": set(), "terms": set()}
                     )
