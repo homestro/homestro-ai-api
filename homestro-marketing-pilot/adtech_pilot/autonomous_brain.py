@@ -45,7 +45,8 @@ def next_product_batch(products, counts, limit=10, trend_candidates=None):
     selected, categories = [], {}
     while candidates and len(selected) < limit:
         candidates.sort(key=lambda item: (counts.get(item[1], 0), categories.get(item[2], 0),
-                                          -signals.get(item[1], 0), str(item[0].get('title', '')).casefold(), item[1]))
+                                          -signals.get(item[1], 0), -Decimal(str(item[0].get('pilot_gross_headroom_eur', '0'))),
+                                          str(item[0].get('title', '')).casefold(), item[1]))
         product, product_id, category = candidates.pop(0)
         selected.append(product)
         categories[category] = categories.get(category, 0) + 1
@@ -137,7 +138,7 @@ class AutonomousBrain:
         self.client = client
         self.memory = BrainMemory(audit)
 
-    async def cycle(self, products, *, now=None, trend_candidates=None):
+    async def cycle(self, products, *, now=None, trend_candidates=None, candidate_products=None):
         from .media_buyer import MetaPublisher
         from .purchase_guard import timestamp
 
@@ -297,7 +298,11 @@ class AutonomousBrain:
                 if not tracking_only and spend - Decimal(str(state['baseline_spend_eur'])) < Decimal('2.50'):
                     return {'status': 'learning', 'reason': 'MINIMUM_2_50_EUR_EXPERIMENT_SPEND'}
                 batch = ([p for p in products if str(p.get('id')) in state.get('current_product_ids', [])]
-                         if tracking_only else next_product_batch(products, state['counts'], trend_candidates=trend_candidates))
+                         if tracking_only else next_product_batch(
+                             products if candidate_products is None else candidate_products,
+                             state['counts'], trend_candidates=trend_candidates))
+                if not batch:
+                    return {'status': 'hold', 'reason': 'NO_COST_ELIGIBLE_EXPERIMENT_PRODUCTS'}
                 story, ids = website_story(batch, page)
                 messages = (
                     'Was passt zu deinem Alltag? Entdecke Produkte, Varianten und aktuelle Preise bei Homestro.',

@@ -282,14 +282,21 @@ class PilotDaemon:
         )
         from .order_economics import sync_unit_costs
         from .payment_webhooks import PaymentWebhookStore, payment_database
+        from .store_diagnostics import audit_store
 
+        try:
+            async with asyncio.timeout(35):
+                storefront = await audit_store(self._latest_products)
+        except TimeoutError:
+            storefront = {"status": "unavailable", "reason": "STOREFRONT_DIAGNOSTIC_TIMEOUT"}
+        await self.audit.record("storefront_diagnostics", storefront)
         try:
             async with asyncio.timeout(40):
                 unit_costs = await sync_unit_costs(PaymentWebhookStore(payment_database(os.environ)))
         except TimeoutError:
             unit_costs = {"status": "unavailable", "reason": "COST_SYNC_TIMEOUT"}
         return {
-            "status": "diagnosed", "unit_costs": unit_costs,
+            "status": "diagnosed", "unit_costs": unit_costs, "storefront": storefront,
             "source_format": report.source_format,
             "products_checked": len(report.products),
             "rejected_rows": report.rejected_rows,
@@ -533,6 +540,17 @@ class PilotDaemon:
         ]
         if not candidates:
             return {"status": "blocked", "reason": "NO_VALIDATED_CATALOG_PRODUCTS"}
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+        from .product_selection import read_cost_candidates
+
+        ranked_candidates, selection = await asyncio.to_thread(read_cost_candidates,
+            PaymentWebhookStore(payment_database(os.environ)), candidates)
+        await self.audit.record("product_selection", selection)
+        logger.info("product_selection %s", json.dumps(selection, separators=(",", ":")))
+        if not claim or not claim.get("campaign_id"):
+            if not ranked_candidates:
+                return {"status": "hold", "reason": "NO_COST_ELIGIBLE_EXPERIMENT_PRODUCTS", "product_selection": selection}
+            candidates = ranked_candidates
         product_ids = {str(p.get("id")) for p in self._latest_products}
         product = candidates[0]
         website_mode = os.getenv("PILOT_AD_MODE", "catalog") == "website_sales"
@@ -559,7 +577,8 @@ class PilotDaemon:
 
             scan = self._last_results.get("competitor_scan", {})
             trends = scan.get("matched_product_candidates", []) if scan.get("status") == "completed" else []
-            brain_result = await AutonomousBrain(self.audit).cycle(candidates, trend_candidates=trends)
+            brain_result = await AutonomousBrain(self.audit).cycle(
+                candidates, trend_candidates=trends, candidate_products=ranked_candidates)
             await self.audit.record("autonomous_brain", brain_result)
             logger.info("autonomous_brain %s", json.dumps(brain_result, separators=(",", ":")))
         await self.audit.record(
@@ -569,7 +588,7 @@ class PilotDaemon:
                 "creative_preview": preview,
                 "validated_product_count": len(product_ids),
                 "publisher": publisher_result,
-                "brain": brain_result,
+                "brain": brain_result, "product_selection": selection,
             },
         )
         return {
@@ -579,7 +598,7 @@ class PilotDaemon:
             "creative_preview": preview,
             "validated_product_count": len(product_ids),
             "publisher": publisher_result,
-                "brain": brain_result,
+                "brain": brain_result, "product_selection": selection,
         }
 
     @staticmethod

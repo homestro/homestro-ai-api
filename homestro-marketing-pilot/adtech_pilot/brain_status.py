@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 KINDS = ('autonomous_brain', 'meta_performance_snapshot', 'meta_performance_decision',
-         'daemon_heartbeat', 'purchase_watchdog', 'pilot_control_cycle')
+         'daemon_heartbeat', 'purchase_watchdog', 'pilot_control_cycle', 'product_selection', 'storefront_diagnostics')
 
 
 def operating_report(latest, claim, *, daily_cap_eur, now=None):
@@ -54,7 +54,8 @@ def operating_report(latest, claim, *, daily_cap_eur, now=None):
         'daily_budget_limit_eur': daily_cap_eur, 'budget_increase_authorized': False,
         'control_cycle': payload('pilot_control_cycle'), 'brain': brain, 'persisted_memory': memory, 'campaign_control': watchdog, 'reported_metrics': metrics,
         'performance_decision': payload('meta_performance_decision'),
-        'unit_cost_source': costs, 'order_economics': economics,
+        'product_selection': payload('product_selection'), 'unit_cost_source': costs, 'order_economics': economics,
+        'storefront_diagnostics': payload('storefront_diagnostics'),
         'external_trend_sources': trends, 'source_timestamps': timestamps, 'stale_sources': stale,
         'full_autonomous_profit_optimization_verified': False,
         'remaining_dependencies': [
