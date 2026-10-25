@@ -1,3 +1,4 @@
+import {validateImportedReview} from './imported-media.js';
 import {randomUUID} from 'node:crypto';
 import {hash,fail,codeOf,log,productURL,trackingLink} from './core.js';
 import {compilePost} from './localization.js';
@@ -47,7 +48,9 @@ export function approvePayload(job,body,revision) {
   if(body.expectedRevision!==undefined && body.expectedRevision!==job.revision)fail('SOCIAL_REVIEW_STALE');
   const reviewer=String(body.reviewer||'').trim();
   if(!reviewer||reviewer.length>100)fail('REVIEWER_REQUIRED');
+  validateImportedReview(job,body);
   const payload={...job.payload};
+  if(payload.importedMedia)payload.requiresVisualReview=false;
   if(job.channel==='tiktok'){
     const s=body.tiktokSettings;
     if(s?.content_preview_confirmed!==true||s.express_consent_given!==true)fail('TIKTOK_PREVIEW_CONSENT_REQUIRED');
@@ -103,7 +106,8 @@ export class SocialCoordinator {
         }
         const payload=prepareSocial(p,channel,{...this.cfg,...this.providerCfg}),revision=hash(payload);
         await this.pool.query(`UPDATE marketing_social_posts SET status='superseded',updated_at=now()
-          WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')`,[p.id,channel,revision]);
+          WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')
+          AND COALESCE(payload->>'importedMedia','false')<>'true'`,[p.id,channel,revision]);
         const r=await this.pool.query(`INSERT INTO marketing_social_posts(id,product_id,channel,revision,payload,status)
           SELECT $1,$2,$3,$4,$5,'draft_queued' WHERE NOT EXISTS (
             SELECT 1 FROM marketing_social_posts WHERE product_id=$2 AND channel=$3
@@ -118,6 +122,7 @@ export class SocialCoordinator {
       AND p.status='ready' AND p.document->>'contentReviewed'='true'
       AND p.document->>'status'='ACTIVE' AND COALESCE(p.document->>'rejected','false')<>'true'
       AND s.payload->>'productRevision'=p.document->>'revision'
+      AND COALESCE(s.payload->>'importedMedia','false')<>'true'
       AND NOT (s.product_id=ANY($1::text[]))`,[this.cfg.excludedProductIds||[]]);
     return {queued,adSpendEUR:0};
   }
@@ -232,6 +237,7 @@ export class SocialCoordinator {
           if(duplicate||!eligible(p,this.cfg)||p.revision!==job.payload.productRevision){
             await client.query("UPDATE marketing_social_posts SET status='superseded',error_code='SOCIAL_SOURCE_CHANGED' WHERE id=$1",[job.id]);continue;
           }
+          if(job.payload.requiresVisualReview)fail('IMPORTED_VISUAL_REVIEW_REQUIRED');
           if(this.ensureAssets)await this.ensureAssets(job,p);
           await client.query("UPDATE marketing_social_posts SET status='publishing',attempted_at=now(),updated_at=now() WHERE id=$1",[job.id]);
           claimed=true;

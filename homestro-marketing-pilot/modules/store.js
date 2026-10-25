@@ -27,7 +27,8 @@ export class Store {
       await c.query('BEGIN');
       // Old approvals are not valid for a changed product or changed compiled payload.
       await c.query(`UPDATE marketing_posts SET status='superseded',updated_at=now()
-        WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')`,[productId,channel,revision]);
+        WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')
+        AND COALESCE(payload->>'importedMedia','false')<>'true'`,[productId,channel,revision]);
       const r=await c.query(`INSERT INTO marketing_posts(id,product_id,channel,revision,payload,status)
         VALUES($1,$2,$3,$4,$5,'draft_queued') ON CONFLICT DO NOTHING RETURNING id`,[randomUUID(),productId,channel,revision,payload]);
       await c.query('COMMIT'); return r.rows[0]?.id;
@@ -36,10 +37,14 @@ export class Store {
   async list(status='draft_queued') {
     return (await this.pool.query('SELECT * FROM marketing_posts WHERE status=$1 ORDER BY created_at LIMIT 2500',[status])).rows;
   }
-  async approve(id,reviewer) {
-    const r=await this.pool.query(`UPDATE marketing_posts AS s SET status='approved',approved_by=$2,approved_at=now(),updated_at=now()
+  async approve(id,reviewer,review={}) {
+    const r=await this.pool.query(`UPDATE marketing_posts AS s SET status='approved',approved_by=$2,approved_at=now(),updated_at=now(),
+        payload=CASE WHEN s.payload->>'importedMedia'='true' THEN jsonb_set(s.payload,'{requiresVisualReview}','false'::jsonb) ELSE s.payload END
       FROM marketing_products AS p WHERE s.id=$1 AND s.product_id=p.id AND s.status='draft_queued'
-      AND p.status='ready' AND (s.payload->>'productRevision')=(p.document->>'revision') RETURNING s.id`,[id,reviewer]);
+      AND p.status='ready' AND (s.payload->>'productRevision')=(p.document->>'revision')
+      AND (COALESCE(s.payload->>'importedMedia','false')<>'true' OR
+        (s.payload->>'assetSha256'=$3 AND s.revision=$4 AND $5::boolean=true)) RETURNING s.id`,
+      [id,reviewer,review.assetSha256||'',review.expectedRevision||'',review.content_preview_confirmed===true]);
     if (!r.rowCount) fail('NOT_APPROVABLE'); return r.rows[0];
   }
   async checkpoint(id,remote) {

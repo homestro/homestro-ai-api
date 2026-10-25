@@ -94,7 +94,7 @@ el('load').onclick=async()=>{
       try{
         for(const r of selected){
           el('message').textContent='Schvaluji '+(succeeded+failures.length+1)+' / '+selected.length+'…';
-          try{await api('posts/'+r.job.id+'/approve',{reviewer,expectedRevision:r.job.revision,tiktokSettings:{...settings}});markDone(r);succeeded++;}
+          try{await api('posts/'+r.job.id+'/approve',{reviewer,expectedRevision:r.job.revision,tiktokSettings:{...settings},...(r.job.payload.importedMedia?{assetSha256:r.job.payload.assetSha256,content_preview_confirmed:batchPreview.checked}:{})});markDone(r);succeeded++;}
           catch(e){failures.push(r.job.payload.title+': '+e.message);}
         }
       }finally{
@@ -140,6 +140,7 @@ el('load').onclick=async()=>{
     const terms=node('a','TikTok Music Usage Confirmation',a);
     terms.href='https://www.tiktok.com/legal/page/global/music-usage-confirmation/en';terms.target='_blank';terms.rel='noopener';
    }
+   if(p.importedMedia&&j.channel!=='tiktok')preview=check(a,'Prohlédl/a jsem importovaný obrázek nebo video a text.');
    const b=node('button','Schválit tento příspěvek',a);
    record.button=b;
    b.onclick=async()=>{
@@ -147,7 +148,7 @@ el('load').onclick=async()=>{
     record.working=true;if(record.choose)record.choose.disabled=true;refreshBatch();
     b.disabled=true;
     try{
-     const body={reviewer:el('reviewer').value,expectedRevision:j.revision};
+     const body={reviewer:el('reviewer').value,expectedRevision:j.revision,...(p.importedMedia?{assetSha256:p.assetSha256,content_preview_confirmed:preview?.checked===true}:{})};
      if(j.channel==='tiktok')body.tiktokSettings={privacy_level:privacy.value,
       content_preview_confirmed:preview.checked,express_consent_given:consent.checked,
       allow_comment:comment.checked,allow_duet:duet?.checked??false,allow_stitch:stitch?.checked??false};

@@ -1,3 +1,4 @@
+import {ImportedMediaCoordinator,importMetadata} from './imported-media.js';
 import {GeneratedVideoDrafts} from './generative-video.js';
 import {checkMetaOrganicAudience} from './meta-audience-check.js';
 import express from 'express';
@@ -51,11 +52,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
     const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
     await generated.migrate();
-    let social=null;
+    let social=null,importedMedia=null;
     try{
       const providerCfg=cfg.social===undefined?socialConfig(process.env,cfg):cfg.social;
       if(providerCfg){
-        social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh,ensureAssets:(job,source)=>ensureApprovedAssets({job,source,cfg,renderer})});
+        social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh,ensureAssets:(job,source)=>job.payload.importedMedia
+          ? importedMedia?importedMedia.ensure(job,source):Promise.reject(new Error('IMPORTED_ASSET_VERIFIER_UNAVAILABLE'))
+          : ensureApprovedAssets({job,source,cfg,renderer})});
         await social.migrate();
         if(String(process.env.PILOT_SOCIAL_CHECK_CONNECTION).toLowerCase()==='true') {
           social.checkTikTokPreflight()
@@ -65,6 +68,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         await social.emitReport(true).catch(e=>log('SOCIAL_REPORT_PENDING',{reason:codeOf(e)}));
       }
     }catch(e){social=null;log('SOCIAL_DISABLED',{reason:codeOf(e)});}
+    try{importedMedia=new ImportedMediaCoordinator({pool,cfg,fresh,social});await importedMedia.migrate();}
+    catch(e){importedMedia=null;log('MEDIA_IMPORT_DISABLED',{reason:codeOf(e)});}
     const processProduct=async id=>{
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
@@ -91,7 +96,9 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         log(codeOf(e),{productId:id});return {processed:0,status:'pending_marketing'};
       }
     };
-    const worker=new Worker({store,meta,cfg,freshSnapshot:fresh});
+    const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,ensureImportedAssets:(job,source)=>{
+      if(!importedMedia)fail('IMPORTED_ASSET_VERIFIER_UNAVAILABLE');return importedMedia.ensure(job,source);
+    }});
     let syncBusy=false,syncTimer;
     const sync=async()=>{
       if(syncBusy)return {busy:true};syncBusy=true;
@@ -203,6 +210,17 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         channelPolicies:Object.fromEntries(['facebook','instagram','tiktok','pinterest'].map(c=>[c,channelPolicy(cfg,c)])),
         tiktokRequiresPreviewConsent:true,adSpendEUR:0});
     }));
+    router.post('/media/import',express.raw({type:['image/png','image/jpeg','video/mp4'],limit:'100mb'}),route(async(req,res)=>{
+      if(!importedMedia)fail('MEDIA_IMPORT_NOT_CONFIGURED');
+      const metadata=importMetadata(req.get('X-Pilot-Asset-Meta'),req.body);
+      const receipt=await importedMedia.receive(metadata,req.body);
+      log('IMPORTED_MEDIA_QUEUED',{jobId:receipt.job_id,productId:receipt.product_id,
+        queueRows:receipt.posts.length,requiresVisualReview:true,publicationConfirmed:false});
+      res.json(receipt);
+    }));
+    router.get('/media/imports/:job',route(async(req,res)=>{
+      if(!importedMedia)fail('MEDIA_IMPORT_NOT_CONFIGURED');res.json(await importedMedia.status(req.params.job));
+    }));
     router.get('/social/posts',route(async(req,res)=>res.json(await socialRequired().list(req.query.status||'draft_queued'))));
     router.post('/social/prepare',route(async(req,res)=>res.json(await socialRequired().prepare())));
     router.get('/social/tiktok-settings',route(async(req,res)=>{
@@ -282,7 +300,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.get('/connection',route(async(req,res)=>{await meta.verifyConnection();res.json({ok:true,publishingEnabled:cfg.publishingEnabled,adSpendEUR:0});}));
     router.post('/posts/:id/approve',route(async(req,res)=>{
       const reviewer=String(req.body.reviewer||'').trim();if(!reviewer || reviewer.length>100)fail('REVIEWER_REQUIRED');
-      res.json(await store.approve(req.params.id,reviewer));
+      res.json(await store.approve(req.params.id,reviewer,req.body));
     }));
     // Explicit input review. Never automatically trust supplier footage or invented facts.
     router.put('/products/:id/inputs',route(async(req,res)=>{

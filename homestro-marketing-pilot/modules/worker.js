@@ -4,7 +4,7 @@ import {publicationWindow} from './autonomy.js';
 import {repeatedMedia} from './publishing-policy.js';
 
 export class Worker {
-  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow});this.busy=false;}
+  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;}
   async tick(postId=null) {
     if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return;}
     if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return;}
@@ -50,6 +50,7 @@ export class Worker {
             AND COALESCE(published_at,updated_at)>now()-$2::int*interval '1 hour'`,[job.channel,this.cfg.publishEveryHours])).rows[0].recent);
           if(recent>0){log('PUBLISH_BLOCKED',{reason:'CHANNEL_INTERVAL',channel:job.channel,hours:this.cfg.publishEveryHours});return;}
         }
+        if(job.payload.requiresVisualReview){log('PUBLISH_BLOCKED',{postId:job.id,reason:'IMPORTED_VISUAL_REVIEW_REQUIRED'});return;}
         if(job.payload.previewOnly===true) {
           await this.store.setStatus(job.id,'superseded','PREVIEW_NOT_PUBLISHABLE');
           log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,reason:'PREVIEW_NOT_PUBLISHABLE'});return;
@@ -87,6 +88,7 @@ export class Worker {
             await this.store.setStatus(job.id,'superseded','PRODUCT_CHANGED');
             log('PUBLISH_SKIPPED',{postId:job.id,productId:job.product_id,reason:'PRODUCT_CHANGED',storedReady:stored?.status==='ready',currentActive:current?.status==='ACTIVE',revisionMatches:current?.revision===job.payload.productRevision});return;
           }
+          if(job.payload.importedMedia){if(!this.ensureImportedAssets)throw new Error('IMPORTED_ASSET_VERIFIER_UNAVAILABLE');await this.ensureImportedAssets(job,current);}
         }
         log('PUBLISH_SELECTED',{postId:job.id,productId:job.product_id,channel:job.channel,title:job.payload.title||null});
         // Persist all prerequisites before Meta mutations.
