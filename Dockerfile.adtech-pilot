@@ -32,6 +32,7 @@ COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/micro_budget.py /
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/purchase_guard.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/order_economics.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/payment_webhooks.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/seo_writer.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/content_engine.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/store_diagnostics.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/product_selection.py /app/adtech_pilot/

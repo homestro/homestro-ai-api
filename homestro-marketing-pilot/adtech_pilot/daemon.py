@@ -295,7 +295,17 @@ class PilotDaemon:
                 unit_costs = await sync_unit_costs(PaymentWebhookStore(payment_database(os.environ)))
         except TimeoutError:
             unit_costs = {"status": "unavailable", "reason": "COST_SYNC_TIMEOUT"}
+        from .seo_writer import SEORevisionWriter
+
+        try:
+            async with asyncio.timeout(60):
+                seo_publication = await SEORevisionWriter(self.audit).cycle(self._latest_products)
+        except TimeoutError:
+            seo_publication = {"status": "hold", "reason": "SEO_CYCLE_TIMEOUT_PENDING_REVISIONS_RETAINED"}
+        await self.audit.record("seo_publication", seo_publication)
+        logger.info("seo_publication %s", json.dumps(seo_publication, separators=(",", ":")))
         return {
+            "seo_publication": seo_publication,
             "status": "diagnosed", "unit_costs": unit_costs, "storefront": storefront,
             "source_format": report.source_format,
             "products_checked": len(report.products),
