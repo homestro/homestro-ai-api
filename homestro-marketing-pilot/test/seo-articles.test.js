@@ -124,3 +124,32 @@ test('auto-publishes at most one deduplicated fact-based article per day and lin
   assert.ok(mutation.body.includes('https://homestro.de/products/ordnungsbox-kueche'));
   assert.ok(mutation.tags.some(x=>x.startsWith('homestro-pilot-')));
 });
+
+test('an uncertain SEO write cannot starve another product or be replayed',async()=>{
+  const {hash}=await import('../modules/core.js');
+  const product=n=>({id:`gid://shopify/Product/${n}`,status:'ACTIVE',contentReviewed:true,
+    url:`https://homestro.de/products/box-${n}`,variants:[{available:true,price:20}],localized:{
+      title:'Aufbewahrungsbox für die Küche',description:valid.summary,
+      benefits:[{text:'Mit Deckel.'},{text:'Mehrere Varianten.'},{text:'Maße auf der Produktseite.'}]}});
+  const products=[product(111),product(222)];
+  const first=productSeoArticle(products[0]);let writes=0;
+  const client={release(){},query:async(sql,params=[])=>{
+    if(['BEGIN','COMMIT','ROLLBACK'].includes(sql))return {rows:[]};
+    if(sql.includes('INSERT INTO marketing_seo_articles'))return {rowCount:params[0]===first.handle?0:1,rows:[]};
+    if(sql.includes('SELECT content_hash'))return {rows:[{content_hash:hash(articleDraftInput({...config,input:first,publish:true})),status:'recovery_required'}]};
+    throw Error(sql);
+  }};
+  const pool={connect:async()=>client,query:async(sql)=>{
+    if(sql.includes('count(*)'))return {rows:[{count:0}]};
+    if(sql.includes('SELECT handle,status'))return {rows:[{handle:first.handle,status:'recovery_required'}]};
+    if(sql.includes('UPDATE marketing_seo_articles'))return {rowCount:1,rows:[]};
+    throw Error(sql);
+  }};
+  const result=await publishNextSeoArticle({pool,products,...config,graphql:async(_query,vars)=>{
+    if(vars.query)return {articles:{nodes:[],pageInfo:{hasNextPage:false}}};
+    writes++;assert.notEqual(vars.article.handle,first.handle);
+    return {articleCreate:{article:{id:'gid://shopify/Article/77',isPublished:true},userErrors:[]}};
+  }});
+  assert.equal(writes,1);assert.equal(result.productId,products[1].id);
+  assert.equal(result.recoveryPending,1);assert.equal(result.published,1);
+});

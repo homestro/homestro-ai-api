@@ -131,6 +131,27 @@ export class ZernioOrganic {
     const valid=url.protocol==='https:' && (url.hostname===host||url.hostname===`www.${host}`) && !url.username && !url.password;
     return entry.status==='published'&&valid?{status:'published',permalink:url.href}:{status:'verification_pending',permalink:null};
   }
+  async recoverMissing(jobs,checkpoint) {
+    if(!Array.isArray(jobs)||jobs.length>20)fail('RECOVERY_BATCH_INVALID');
+    if(!jobs.length)return [];
+    // Absence from this bounded list is NOT proof of failure and never permits a POST.
+    const listed=await this.request('posts');
+    if(!Array.isArray(listed?.posts)||listed.posts.length>500)fail('RECOVERY_LOOKUP_UNCONFIRMED');
+    const recovered=[];
+    for(const job of jobs){
+      if(!CHANNELS.has(job.channel)||!this.cfg.accounts?.[job.channel]||job.remote?.providerPostId)continue;
+      const matches=listed.posts.filter(p=>p.metadata?.pilotPostId===String(job.id)&&
+        p.metadata?.productId===job.product_id&&objectId(p._id)&&
+        p.platforms?.some(x=>x.platform===job.channel&&String(x.accountId?._id||x.accountId)===this.cfg.accounts[job.channel]));
+      if(matches.length!==1)continue;
+      const providerPostId=matches[0]._id;
+      await checkpoint(job.id,{phase:'zernio_recovered_readonly',providerPostId});
+      // Read the individual record again; list presence alone is not publication.
+      try{recovered.push({id:job.id,state:await this.reconcile(providerPostId,job.channel)});}
+      catch(e){log('SOCIAL_VERIFICATION_PENDING',{postId:job.id,reason:e?.code||'ZERNIO_READ_FAILED'});}
+    }
+    return recovered;
+  }
   async reconcile(providerPostId,channel) {
     if(!objectId(providerPostId)||!CHANNELS.has(channel))fail('INVALID_REMOTE_POST');
     const data=await this.request(`posts/${providerPostId}`);

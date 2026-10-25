@@ -48,12 +48,13 @@ test('Berlin window observes daylight saving boundaries',()=>{
   assert.equal(berlinWindow(new Date('2026-12-10T08:00:00Z')),true);
 });
 
-function fixture({current=source(),used=0,recent=0,duplicate=false,repeated=false,channel='pinterest',pending=[],submitError,enabled=true}={}){
+function fixture({current=source(),used=0,recent=0,duplicate=false,repeated=false,channel='pinterest',pending=[],missing=[],submitError,enabled=true}={}){
   const queries=[],j=job();let submits=0,reconciles=0;
   j.channel=channel;
   const client={release(){},async query(sql,args=[]){
     queries.push({sql,args});
     if(sql.includes('pg_try_advisory_lock'))return {rows:[{locked:true}]};
+    if(sql.includes("NOT(remote ? 'providerPostId')"))return {rows:missing};
     if(sql.includes("remote ? 'providerPostId'"))return {rows:pending};
     if(sql.includes('AS queue_rank'))return {rows:[j]};
     if(sql.includes('count(*)::int AS n'))return {rows:[{n:used}]};
@@ -259,4 +260,19 @@ test('Pinterest signs only the submitted copy and keeps reviewed draft preparati
   assert.ok(new URL(submitted.productURL).searchParams.has('pilot_ref'));
   assert.equal(new URL(submitted.productURL).hostname,'homestro.de');
   assert.deepEqual(prepareSocial(source(),'pinterest',{...base,...providerCfg,adminKey:f.c.cfg.adminKey}),before);
+});
+
+
+test('missing provider ID is read-recovered and persisted even with publication disabled',async()=>{
+  const missing={...job(),status:'recovery_required',remote:{idempotencyKey:'original-key'}};
+  const f=fixture({enabled:false,missing:[missing]});let lookups=0;
+  f.c.provider.recoverMissing=async(jobs,checkpoint)=>{
+    lookups++;assert.equal(jobs[0].remote.idempotencyKey,'original-key');
+    await checkpoint(missing.id,{providerPostId:'b'.repeat(24)});
+    return [{id:missing.id,state:{status:'published',permalink:'https://www.pinterest.com/pin/123/'}}];
+  };
+  await f.c.tick(midday);
+  assert.equal(lookups,1);assert.equal(f.submits,0);
+  assert.ok(f.queries.some(q=>q.sql.includes('published_at=CASE')&&q.args[1]==='published'));
+  assert.ok(f.queries.some(q=>q.sql.includes('SET remote=remote')&&q.args[1].includes('providerPostId')));
 });

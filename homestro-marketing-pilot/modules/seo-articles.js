@@ -121,15 +121,22 @@ export async function publishNextSeoArticle({pool,graphql,products,blogId,author
     WHERE status='published' AND created_at>now()-interval '24 hours'`)).rows[0]?.count||0);
   if(today>=limit)return {status:'daily_limit',published:0,limit};
   const existing=(await pool.query('SELECT handle,status FROM marketing_seo_articles')).rows;
-  const known=new Map(existing.map(x=>[x.handle,x.status]));let skipped=0;
+  const known=new Map(existing.map(x=>[x.handle,x.status]));let skipped=0,recoveryPending=0;
   for(const product of products) {
     const draft=productSeoArticle(product);if(!draft)continue;
     const prior=known.get(draft.handle);
     if(prior&&!['creating','recovery_required'].includes(prior))continue;
-    const result=await createSeoArticleDraft({pool,graphql,blogId,author,publish:true,input:draft});
+    // Reconcile uncertain writes, but never replay them or starve unrelated products.
+    if(['creating','recovery_required'].includes(prior)&&recoveryPending>=5)continue;
+    let result;
+    try{result=await createSeoArticleDraft({pool,graphql,blogId,author,publish:true,input:draft});}
+    catch(e){
+      if(e?.code!=='SEO_ARTICLE_RECOVERY_REQUIRED')throw e;
+      recoveryPending++;continue;
+    }
     if(result.status==='external_exists'){skipped++;known.set(draft.handle,'external_exists');continue;}
-    if(result.status==='published')return {status:result.created?'published':'reconciled_published',published:1,handle:result.handle,productId:draft.productId,skipped};
-    return {status:result.status,published:0,handle:result.handle,productId:draft.productId,skipped};
+    if(result.status==='published')return {status:result.created?'published':'reconciled_published',published:1,handle:result.handle,productId:draft.productId,skipped,recoveryPending};
+    return {status:result.status,published:0,handle:result.handle,productId:draft.productId,skipped,recoveryPending};
   }
-  return {status:skipped?'external_duplicates_skipped':'no_eligible_product',published:0,skipped};
+  return {status:recoveryPending?'recovery_pending':skipped?'external_duplicates_skipped':'no_eligible_product',published:0,skipped,recoveryPending};
 }

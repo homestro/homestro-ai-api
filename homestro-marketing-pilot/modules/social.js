@@ -205,6 +205,17 @@ export class SocialCoordinator {
         try{await this.settle(job.id,await this.provider.reconcile(job.remote.providerPostId,job.channel));}
         catch(e){log('SOCIAL_VERIFICATION_PENDING',{postId:job.id,reason:codeOf(e)});}
       }
+      if(typeof this.provider.recoverMissing==='function'){
+        const missing=(await client.query(`SELECT * FROM marketing_social_posts
+          WHERE status='recovery_required' AND NOT(remote ? 'providerPostId')
+          AND remote ? 'idempotencyKey' ORDER BY updated_at LIMIT 20`)).rows;
+        try{
+          const recovered=await this.provider.recoverMissing(missing,(id,remote)=>this.checkpoint(id,remote));
+          for(const result of recovered)await this.settle(result.id,result.state);
+          if(missing.length)log('SOCIAL_RECOVERY_LOOKUP',{inspected:missing.length,recovered:recovered.length,
+            unresolved:missing.length-recovered.length,writesPerformed:false});
+        }catch(e){log('SOCIAL_RECOVERY_LOOKUP_PENDING',{reason:codeOf(e)});}
+      }
       if(!this.cfg.workerEnabled||!this.cfg.publishingEnabled||!this.providerCfg.publishingEnabled||(!this.cfg.publishAroundClock&&!berlinWindow(now)))return;
       // A large approved TikTok batch must not starve Pinterest after TikTok's cap.
       const jobs=(await client.query(`SELECT * FROM (
