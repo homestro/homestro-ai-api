@@ -33,7 +33,7 @@ Marketing descriptions do not establish these products' internal algorithms, API
 | Cross-channel budget allocation | Not implemented | Reliable common attribution/cost basis, channel-specific safeguards, explicit total budget; never scale current EUR5 test by inference |
 | Brand knowledge and campaign strategy | Not complete | Versioned real business facts, factual-claim validation, generated strategy/copy tests and provider integration |
 | Email/newsletter/customer support | Not implemented as a live channel | Store consent/suppression inputs, delivery connector, reviewed recipient scope, unsubscribe handling and actual delivery evidence |
-| SEO content and landing-page creation | Sample diagnostics plus grounded SEO metadata and Product/Offer JSON-LD drafts; automatic storefront revision/publication missing | Brand-safe factual drafts, own-store publishing integration, preview/rollback and duplicate protection |
+| SEO content and landing-page creation | Sample diagnostics plus grounded SEO metadata and Product/Offer JSON-LD drafts; missing-only SEO title/description writer deployed with backups; GEO schema installed in unpublished theme198462833022, owner publication and rendered readback pending | Brand-safe factual drafts, own-store publishing integration, preview/rollback and duplicate protection |
 | Full reporting/learning | Protected /pilot/brain and /pilot/economics; source freshness and explicit gaps | Actual experiments/orders over time; no invented learning from unobserved outcomes |
 
 ## Fixed operating boundary

@@ -72,4 +72,4 @@ def content_batch(products, *, limit=3):
     return {'status': 'drafted', 'brief': BRIEF.copy(), 'brief_hash': BRIEF_HASH,
             'draft_count': len(drafts), 'invalid_candidates_skipped': rejected, 'drafts': drafts,
             'publication_performed': False, 'ai_search_inclusion_verified': False,
-            'remaining_publication_dependency': 'SHOPIFY_REVIEWED_CONTENT_REVISION_WRITER'}
+            'remaining_publication_dependency': 'CHANNEL_SPECIFIC_PUBLICATION_CONFIRMATION'}
