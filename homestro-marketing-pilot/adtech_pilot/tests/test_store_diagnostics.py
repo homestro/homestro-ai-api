@@ -17,6 +17,11 @@ class StoreDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['rankings_verified'])
         self.assertFalse(result['core_web_vitals_measured'])
 
+    def test_native_shopify_product_group_is_recognized(self):
+        result = inspect_page(VALID.replace(b'"Product"', b'"ProductGroup"'), 'https://homestro.de/products/a')
+        self.assertTrue(result['product_structured_data_present'])
+        self.assertEqual(result['issues'], [])
+
     def test_missing_metadata_and_noindex_are_actionable(self):
         result = inspect_page(b'<html><meta name="robots" content="noindex"><body><img></body></html>',
                               'https://homestro.de/products/a', status_code=404)

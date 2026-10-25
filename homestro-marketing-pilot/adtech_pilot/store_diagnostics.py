@@ -56,7 +56,7 @@ def inspect_page(content, url, *, status_code=200):
             types = value.get('@type', [])
             if isinstance(types, str):
                 types = [types]
-            return 'Product' in types or has_product(value.get('@graph', []))
+            return any(kind in types for kind in ('Product', 'ProductGroup')) or has_product(value.get('@graph', []))
         return False
     for raw in page.xpath('//script[@type="application/ld+json"]/text()'):
         try:
