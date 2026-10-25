@@ -279,7 +279,7 @@ class PilotDaemon:
         delivering or profitable. Results prioritize candidates for review and never
         unlock spend or create ads.
         """
-        token = os.getenv("META_AD_LIBRARY_ACCESS_TOKEN", "").strip()
+        token = (os.getenv("META_AD_LIBRARY_ACCESS_TOKEN") or os.getenv("META_ACCESS_TOKEN") or "").strip()
         if not token:
             return {
                 "status": "partial",
@@ -491,6 +491,14 @@ class PilotDaemon:
             product_ids_in_feed=product_ids,
             products=candidates if website_mode else None,
         )
+        brain_result: dict[str, Any] = {"status": "disabled"}
+        if website_mode and os.getenv("PILOT_BRAIN_ENABLED") == "true":
+            from .autonomous_brain import AutonomousBrain
+
+            scan = self._last_results.get("competitor_scan", {})
+            trends = scan.get("matched_product_candidates", []) if scan.get("status") == "completed" else []
+            brain_result = await AutonomousBrain(self.audit).cycle(candidates, trend_candidates=trends)
+            await self.audit.record("autonomous_brain", brain_result)
         await self.audit.record(
             "daemon_catalog_campaign_attempt",
             {
@@ -498,6 +506,7 @@ class PilotDaemon:
                 "creative_preview": preview,
                 "validated_product_count": len(product_ids),
                 "publisher": publisher_result,
+                "brain": brain_result,
             },
         )
         return {
@@ -507,6 +516,7 @@ class PilotDaemon:
             "creative_preview": preview,
             "validated_product_count": len(product_ids),
             "publisher": publisher_result,
+                "brain": brain_result,
         }
 
     @staticmethod
