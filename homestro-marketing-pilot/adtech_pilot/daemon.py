@@ -472,15 +472,29 @@ class PilotDaemon:
             return {"status": "blocked", "reason": "NO_VALIDATED_CATALOG_PRODUCTS"}
         product_ids = {str(p.get("id")) for p in self._latest_products}
         product = candidates[0]
+        website_mode = os.getenv("PILOT_AD_MODE", "catalog") == "website_sales"
+        preview: dict[str, Any] = {}
+        if website_mode:
+            from .website_ads import website_story
+
+            try:
+                _, selected_ids = website_story(candidates, os.getenv("META_PAGE_ID", ""))
+            except ValueError as exc:
+                return {"status": "blocked", "reason": str(exc)}
+            product = next(candidate for candidate in candidates if str(candidate["id"]) == selected_ids[0])
+            preview = {"selected_product_ids": selected_ids, "product_count": len(selected_ids),
+                       "catalog_required": False, "paid_generation_performed": False}
         publisher_result = await MetaPublisher(self.audit).publish_one(
             creative=None,
             product=product,
             product_ids_in_feed=product_ids,
+            products=candidates if website_mode else None,
         )
         await self.audit.record(
             "daemon_catalog_campaign_attempt",
             {
-                "product_scope": "configured_meta_product_set",
+                "product_scope": "shopify_website_carousel" if website_mode else "configured_meta_product_set",
+                "creative_preview": preview,
                 "validated_product_count": len(product_ids),
                 "publisher": publisher_result,
             },
@@ -488,7 +502,8 @@ class PilotDaemon:
         return {
             "status": publisher_result.get("status", "blocked"),
             "retired_campaign": reconciliation,
-            "product_scope": "configured_meta_product_set",
+            "product_scope": "shopify_website_carousel" if website_mode else "configured_meta_product_set",
+            "creative_preview": preview,
             "validated_product_count": len(product_ids),
             "publisher": publisher_result,
         }
@@ -520,6 +535,8 @@ class PilotDaemon:
 
     async def _catalog_access_job(self) -> dict[str, Any]:
         """Diagnose Meta catalog access without requiring or enabling paid spend."""
+        if os.getenv("PILOT_AD_MODE", "catalog") == "website_sales":
+            return {"status": "not_required", "reason": "WEBSITE_SALES_DOES_NOT_USE_META_CATALOG"}
         result = await MetaPublisher(self.audit).check_catalog_access()
         await self.audit.record("meta_catalog_access_diagnostic", result)
         return result

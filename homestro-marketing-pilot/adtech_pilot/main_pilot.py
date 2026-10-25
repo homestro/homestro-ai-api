@@ -31,6 +31,7 @@ from .media_buyer import (
     build_optimization_plan,
 )
 from .micro_budget import configured_daily_budget_limit_eur, live_ads_dry_run
+from .payment_webhooks import MAX_BODY, TOPICS, receive_payment
 from .purchase_guard import PurchaseWatchdog
 
 ADMIN_HEADER = APIKeyHeader(name="X-Pilot-Admin-Key", auto_error=False)
@@ -181,6 +182,29 @@ def create_app(
 
     app = FastAPI(title="Homestro AdTech Pilot", version="0.1.0", lifespan=lifespan)
 
+    @app.get("/webhooks/shopify/setup")
+    async def payment_setup():
+        origin = os.getenv("PILOT_PUBLIC_ORIGIN", "").rstrip("/")
+        return {"receiver": "shopify_merchant_admin_webhooks",
+                "signing_configured": bool(os.getenv("SHOPIFY_WEBHOOK_SECRET")),
+                "subscription_registration_confirmed": False,
+                "routes": {topic: origin + "/webhooks/shopify/orders" for topic in TOPICS.values()},
+                "paid_generation_performed": False}
+
+    @app.post("/webhooks/shopify/{event}")
+    async def shopify_payment(event: str, request: Request):
+        if event == "orders":
+            event = next((route for route, topic in TOPICS.items()
+                          if topic == request.headers.get("x-shopify-topic")), "unknown")
+        if event not in TOPICS:
+            raise HTTPException(404, "UNKNOWN_PAYMENT_EVENT")
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_BODY:
+                raise HTTPException(413, "WEBHOOK_TOO_LARGE")
+        return await receive_payment(raw=bytes(body), headers=request.headers, route=event)
+
     @app.post("/trigger", dependencies=[Depends(require_trigger)])
     async def trigger():
         return await watchdog.cycle()
@@ -188,6 +212,10 @@ def create_app(
     @app.get("/pilot/status", dependencies=[Depends(require_admin)])
     async def pilot_status():
         return {"purchase_watchdog": watchdog.last_result,
+                "purchase_source": os.getenv("PILOT_PURCHASE_SOURCE", "shopify_api"),
+                "webhook_signing_configured": bool(os.getenv("SHOPIFY_WEBHOOK_SECRET")),
+                "webhook_routes": ["/webhooks/shopify/" + name for name in TOPICS],
+                "ad_mode": os.getenv("PILOT_AD_MODE", "catalog"),
                 "fresh_purchase_window_minutes": 15, "watchdog_interval_seconds": 60,
                 "paid_generation_enabled": os.getenv("PILOT_CREATIVE_ENABLED", "false").lower() == "true"}
 

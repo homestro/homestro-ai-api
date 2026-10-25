@@ -928,6 +928,7 @@ class MetaPublisher:
         creative: GeneratedCreative | None,
         product: dict[str, Any],
         product_ids_in_feed: set[str],
+        products: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         config = self._configuration()
         if isinstance(config, dict):
@@ -938,6 +939,18 @@ class MetaPublisher:
         if not evidence["verified"]:
             return {"status": "blocked", "reason": "FRESH_PURCHASE_REQUIRED", "purchase": evidence}
         account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id = config
+        website_mode = self.env.get("PILOT_AD_MODE", "catalog") == "website_sales"
+        story = None
+        advertised_ids: list[str] = []
+        if website_mode:
+            from .website_ads import website_story
+
+            try:
+                story, advertised_ids = website_story(products or [product], page_id)
+            except ValueError as exc:
+                return {"status": "blocked", "reason": str(exc)}
+            if not set(advertised_ids).issubset(product_ids_in_feed):
+                return {"status": "blocked", "reason": "PRODUCT_NOT_IN_VALIDATED_FEED"}
         product_id = str(product.get("id", ""))
         # Catalog items supply their own images and destination URLs.
         link = str(product.get("link", ""))
@@ -960,7 +973,7 @@ class MetaPublisher:
         claim_acquired = False
         resumed_campaign: str | None = None
         try:
-            if not product_set_id:
+            if not website_mode and not product_set_id:
                 resolved_set_id = await self._resolve_all_products_set(
                     client, catalog_id, headers
                 )
@@ -1064,7 +1077,7 @@ class MetaPublisher:
                     f"{account_id}/campaigns",
                     headers,
                     {
-                        "name": "Homestro Catalog Sales All Products",
+                        "name": self._campaign_name(),
                         "objective": "OUTCOME_SALES",
                         "status": "PAUSED",
                         "special_ad_categories": "[]",
@@ -1120,7 +1133,7 @@ class MetaPublisher:
                     f"{account_id}/adsets",
                     headers,
                     {
-                        "name": "Homestro DE Catalog All Products",
+                        "name": "Homestro DE AT Website Sales" if website_mode else "Homestro DE Catalog All Products",
                         "campaign_id": campaign,
                         "daily_budget": str(self.DAILY_BUDGET_CENTS),
                     "billing_event": "IMPRESSIONS",
@@ -1128,7 +1141,8 @@ class MetaPublisher:
                     "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
                     "destination_type": "WEBSITE",
                     "promoted_object": json.dumps(
-                        {"pixel_id": pixel_id, "product_catalog_id": catalog_id, "custom_event_type": "PURCHASE"}
+                        {"pixel_id": pixel_id, "custom_event_type": "PURCHASE",
+                         **({} if website_mode else {"product_catalog_id": catalog_id})}
                     ),
                     "dsa_beneficiary": beneficiary,
                     "dsa_payor": payor,
@@ -1152,14 +1166,15 @@ class MetaPublisher:
                 client,
                 f"{account_id}/adcreatives",
                 headers,
-                {
+                ({"name": "Homestro Website Creative", "object_story_spec": json.dumps(story, ensure_ascii=False)}
+                 if website_mode else {
                     "name": "Homestro Catalog Creative",
                     "product_set_id": product_set_id,
                     "object_story_spec": json.dumps(
                         {
                             "page_id": page_id,
                             "template_data": {
-                                "message": "Objevte produkty Homestro pro pohodlnější domov.",
+                                "message": "Entdecke Produkte von Homestro für deinen Alltag.",
                                 "name": "{{product.name}}",
                                 "description": "{{product.description}}",
                                 "link": "https://homestro.de",
@@ -1167,14 +1182,14 @@ class MetaPublisher:
                             },
                         }
                     ),
-                },
+                }),
             )
             ad = await self._post(
                 client,
                 f"{account_id}/ads",
                 headers,
                 {
-                    "name": "Homestro Catalog Ad All Products",
+                    "name": "Homestro Website Products" if website_mode else "Homestro Catalog Ad All Products",
                     "adset_id": adset,
                     "creative": json.dumps({"creative_id": adcreative}),
                     "status": "PAUSED",
@@ -1195,7 +1210,8 @@ class MetaPublisher:
                 "campaign_id": campaign,
                 "adset_id": adset,
                 "ad_id": ad,
-                "product_scope": "entire_meta_catalog",
+                "product_scope": "shopify_website_carousel" if website_mode else "entire_meta_catalog",
+                "advertised_product_ids": advertised_ids,
                 "product_catalog_id": catalog_id,
                 "product_set_id": product_set_id,
                 "budget_type": "daily",
@@ -1313,7 +1329,7 @@ class MetaPublisher:
         rows = result.get("data")
         if not isinstance(rows, list):
             return "incomplete"
-        expected_name = f"Homestro Micro Test {product_id[:40]}"
+        expected_name = self._campaign_name()
         for row in rows:
             if not isinstance(row, dict) or row.get("name") != expected_name:
                 continue
@@ -1362,10 +1378,15 @@ class MetaPublisher:
             return {"reason": "META_AD_ACCOUNT_ID_INVALID"}
         if not self.ID_PATTERN.fullmatch(pixel_id) or not self.ID_PATTERN.fullmatch(page_id):
             return {"reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
-        if not catalog_id or not self.ID_PATTERN.fullmatch(catalog_id):
+        mode = self.env.get("PILOT_AD_MODE", "catalog")
+        if mode not in {"catalog", "website_sales"}:
+            return {"reason": "PILOT_AD_MODE_INVALID"}
+        if mode == "catalog" and (not catalog_id or not self.ID_PATTERN.fullmatch(catalog_id)):
             return {"reason": "META_PRODUCT_CATALOG_ID_MISSING_OR_INVALID"}
-        if product_set_id and not self.ID_PATTERN.fullmatch(product_set_id):
+        if mode == "catalog" and product_set_id and not self.ID_PATTERN.fullmatch(product_set_id):
             return {"reason": "META_PRODUCT_SET_ID_INVALID"}
+        if mode == "website_sales":
+            catalog_id = product_set_id = ""
         if not beneficiary or not payor:
             return {"reason": "META_EU_BENEFICIARY_OR_PAYER_MISSING"}
         if len(beneficiary) > 200 or len(payor) > 200:
@@ -1373,6 +1394,10 @@ class MetaPublisher:
         if not self.API_VERSION_PATTERN.fullmatch(version):
             return {"reason": "META_API_VERSION_INVALID"}
         return account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id
+
+    def _campaign_name(self) -> str:
+        return ("Homestro Website Sales" if self.env.get("PILOT_AD_MODE", "catalog") == "website_sales"
+                else "Homestro Catalog Sales All Products")
 
     def _creative_approved(self, creative: GeneratedCreative, product_id: str) -> bool:
         score = creative.score

@@ -309,6 +309,52 @@ class MetaPublisherTests(unittest.TestCase):
 
         self.assertIsNone(asyncio.run(run()))
 
+    def test_website_carousel_uses_purchase_optimization_without_any_catalog_request(self):
+        async def run():
+            events = []
+            def handler(request):
+                tail = request.url.path.rsplit("/", 1)[-1]
+                events.append((request.method, request.url.path, parse_qs(request.content.decode())))
+                if request.method == "GET":
+                    if tail == "act_12345":
+                        return httpx.Response(200, json={"id": "act_12345", "account_status": 1, "currency": "EUR"})
+                    if tail == "adspixels":
+                        return httpx.Response(200, json={"data": [{"id": "5555", "is_unavailable": False}]})
+                    if tail == "4444":
+                        return httpx.Response(200, json={"id": "4444", "name": "Homestro"})
+                    if tail == "adsets":
+                        return httpx.Response(200, json={"data": []})
+                if request.method == "POST" and tail in {"campaigns", "adsets", "adcreatives", "ads"}:
+                    return httpx.Response(200, json={"id": {"campaigns": "90001", "adsets": "90002", "adcreatives": "90003", "ads": "90004"}[tail]})
+                if request.method == "POST" and tail in {"90001", "90002", "90004"}:
+                    return httpx.Response(200, json={"success": True})
+                self.fail("Unexpected network request " + str(request.url))
+            env = {**self.env, "PILOT_AD_MODE": "website_sales"}
+            env.pop("META_PRODUCT_CATALOG_ID")
+            env.pop("META_PRODUCT_SET_ID")
+            products = [{**self.product, "title": "Küchenhelfer", "price": "39.90", "availability": "in_stock",
+                         "image_link": "https://cdn.shopify.com/product.jpg"},
+                        {"id": "sku-2", "link": "https://homestro.de/products/zweites-produkt", "title": "Organizer",
+                         "price": "34.90", "availability": "in_stock", "image_link": "https://cdn.shopify.com/product2.jpg"}]
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                publisher = MetaPublisher(PlanAuditStore(self.root / "website.sqlite"), client=client, env=env)
+                result = await publisher.publish_one(creative=None, product=products[0], products=products,
+                    product_ids_in_feed={"sku-1", "sku-2"})
+                repeated = await publisher.publish_one(creative=None, product=products[0], products=products,
+                    product_ids_in_feed={"sku-1", "sku-2"})
+            self.assertEqual(result["status"], "ACTIVE_PENDING_REVIEW")
+            self.assertEqual(result["advertised_product_ids"], ["sku-1", "sku-2"])
+            self.assertEqual(repeated["status"], "existing_campaign")
+            self.assertFalse(any("catalog" in path or "product_sets" in path for _, path, _ in events))
+            forms = {path.rsplit("/", 1)[-1]: form for method, path, form in events
+                     if method == "POST" and path.rsplit("/", 1)[-1] in {"adsets", "adcreatives"}}
+            promoted = __import__("json").loads(forms["adsets"]["promoted_object"][0])
+            self.assertEqual(promoted, {"pixel_id": "5555", "custom_event_type": "PURCHASE"})
+            story = __import__("json").loads(forms["adcreatives"]["object_story_spec"][0])
+            self.assertEqual(len(story["link_data"]["child_attachments"]), 2)
+            self.assertNotIn("template_data", story)
+        asyncio.run(run())
+
     def test_paused_prior_campaign_keeps_identity_without_creating_duplicate(self):
         async def run():
             events = []

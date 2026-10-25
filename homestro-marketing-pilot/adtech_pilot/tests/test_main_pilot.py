@@ -37,6 +37,16 @@ class MainPilotTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
 
+    def test_public_payment_route_fails_closed_before_signing_configuration(self):
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"SHOPIFY_WEBHOOK_SECRET": ""}):
+            response = self.request("POST", "/webhooks/shopify/orders-paid", content=b"{}")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(self.request("GET", "/webhooks/shopify/setup").json()["signing_configured"], False)
+        self.assertEqual(self.request("POST", "/webhooks/shopify/unknown", content=b"{}").status_code, 404)
+        self.assertEqual(self.request("POST", "/webhooks/shopify/orders-paid", content=b"x" * 1_048_577).status_code, 413)
+
     def test_trigger_requires_exact_secret_and_does_not_accept_admin_header(self):
         self.assertEqual(self.request("POST", "/trigger").status_code, 401)
         self.assertEqual(self.request("POST", "/trigger", headers={"X-Pilot-Token": "wrong"}).status_code, 401)

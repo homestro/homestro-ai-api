@@ -68,6 +68,16 @@ class PurchaseEvidence:
         self._client_refresh_attempted = False
 
     async def check(self, *, now: datetime | None = None) -> dict[str, Any]:
+        if self.env.get("PILOT_PURCHASE_SOURCE", "shopify_api") == "shopify_webhook":
+            from .payment_webhooks import PaymentWebhookStore, payment_database
+
+            if not self.env.get("SHOPIFY_WEBHOOK_SECRET"):
+                return {"verified": False, "source": "shopify_signed_payment_webhook",
+                        "reason": "SHOPIFY_ADMIN_WEBHOOK_SIGNING_SECRET_REQUIRED", "qualifying_orders": 0}
+            try:
+                return await asyncio.to_thread(lambda: PaymentWebhookStore(payment_database(self.env)).evidence(now=now))
+            except Exception as exc:
+                return {"verified": False, "reason": "PAYMENT_STORE_UNAVAILABLE", "error_type": type(exc).__name__}
         try:
             async with asyncio.timeout(25):
                 return await self._check(now=now)
@@ -240,7 +250,7 @@ class PurchaseWatchdog:
             response.raise_for_status()
             remote = response.json()
             if (str(remote.get("account_id")) != account.removeprefix("act_")
-                    or remote.get("name") != "Homestro Catalog Sales All Products"
+                    or remote.get("name") != publisher._campaign_name()
                     or remote.get("objective") != "OUTCOME_SALES"):
                 return {"status": "blocked", "reason": "CAMPAIGN_OWNERSHIP_MISMATCH"}
             if remote.get("status") not in {"ACTIVE", "PAUSED"}:
