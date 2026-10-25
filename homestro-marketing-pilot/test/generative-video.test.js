@@ -43,3 +43,36 @@ test('completed generated motion remains a review draft and is never auto-publis
  const f=fixture();const started=await f.worker.start(input),done=await f.worker.poll(started.jobKey);
  assert.equal(done.state,'review_required');assert.equal(done.requiresReview,true);assert.equal(done.videoURL,'https://cdn.runwayml.com/clip.mp4');assert.equal(f.calls,1);
 });
+
+test('automatic completion polling reads only persisted tasks, isolates failures and never starts generation',async()=>{
+ const keys=['a'.repeat(64),'b'.repeat(64)],tasks=[task,'11111111-1111-1111-1111-111111111111'];
+ const jobs=new Map(keys.map((key,i)=>[key,{job_key:key,task_id:tasks[i],state:'pending',cost_cents:25}]));let gets=0;
+ const pool={query:async(sql,args=[])=>{
+  if(sql.startsWith('SELECT job_key')){assert.match(sql,/LIMIT 10/);return {rows:keys.map(job_key=>({job_key}))};}
+  if(sql.startsWith('SELECT *'))return {rows:[jobs.get(args[0])]};
+  if(sql.includes('SET updated_at=now()'))return {rowCount:1};
+  if(sql.includes("state='review_required'")){assert.match(sql,/AND state='pending' AND task_id=/);Object.assign(jobs.get(args[0]),{state:'review_required',video_url:args[1]});return {rowCount:1};}
+  throw Error(sql);
+ }};
+ const worker=new GeneratedVideoDrafts({pool,cfg:{key:'existing',enabled:false},fetchImpl:async(url,options)=>{
+  gets++;assert.equal(options.method,'GET');assert.match(url,/\/tasks\//);
+  if(url.endsWith(tasks[0]))return new Response('{}',{status:503});
+  return new Response(JSON.stringify({id:tasks[1],status:'SUCCEEDED',output:['https://cdn.runwayml.com/completed.mp4']}));
+ }});
+ const result=await worker.pollPending();
+ assert.equal(gets,2);assert.equal(result.checked,2);assert.equal(result.generationPerformed,false);
+ assert.equal(result.outcomes[0].state,'verification_pending');assert.equal(result.outcomes[1].state,'review_required');
+ assert.equal(worker.pollBusy,false);
+});
+
+test('a late provider read cannot downgrade a task that already reached its native queues',async()=>{
+ const key='a'.repeat(64),row={job_key:key,task_id:task,state:'pending',cost_cents:25};
+ const pool={query:async(sql)=>{
+  if(sql.startsWith('SELECT *'))return {rows:[{...row}]};
+  assert.match(sql,/AND state='pending'/);return {rowCount:0};
+ }};
+ const worker=new GeneratedVideoDrafts({pool,cfg:{key:'existing'},fetchImpl:async()=>{
+  row.state='queued';return new Response(JSON.stringify({id:task,status:'SUCCEEDED',output:['https://cdn.runwayml.com/completed.mp4']}));
+ }});
+ assert.equal((await worker.poll(key)).state,'queued');
+});

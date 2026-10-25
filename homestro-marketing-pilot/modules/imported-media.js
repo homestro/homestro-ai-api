@@ -80,13 +80,29 @@ export class ImportedMediaCoordinator{
     receipt jsonb NOT NULL DEFAULT '{}',created_at timestamptz NOT NULL DEFAULT now())`);}
   async receive(metadata,bytes){
     metadata=importMetadata(Buffer.from(JSON.stringify(metadata)).toString('base64'),bytes);
+    return this.receiveValidated(metadata,bytes);
+  }
+  async receiveGenerated(metadata,bytes){
+    // Internal-only handoff: the public import route still accepts Higgsfield only.
+    if(metadata?.provider!=='runway'||metadata.kind!=='video'||!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>100*1024*1024||
+      !/^[a-f0-9-]{36}$/.test(metadata.job_id||'')||!/^[a-f0-9]{64}$/.test(metadata.generation_job_key||'')||sha(bytes)!==metadata.sha256)fail('GENERATED_HANDOFF_IDENTITY_INVALID');
+    const job=(await this.pool.query('SELECT * FROM marketing_generated_videos WHERE job_key=$1',[metadata.generation_job_key])).rows[0];
+    if(!job||!['handoff_pending','queued'].includes(job.state)||job.task_id!==metadata.job_id||job.product_id!==metadata.product_id||
+      job.revision!==metadata.product_revision||job.video_url!==metadata.source_video_url||job.handoff?.sha256!==metadata.sha256||
+      job.review?.content_preview_confirmed!==true||job.review?.product_fidelity_confirmed!==true||
+      job.review?.expectedRevision!==job.revision||job.review?.expectedTaskId!==job.task_id||job.review?.expectedVideoURL!==job.video_url||
+      typeof job.review?.reviewer!=='string'||!job.review.reviewer.trim()||job.review.reviewer.length>100)fail('GENERATED_VISUAL_REVIEW_REQUIRED');
+    return this.receiveValidated(metadata,bytes);
+  }
+  async receiveValidated(metadata,bytes){
     const client=await this.pool.connect();let locked=false;
     try{
       locked=(await client.query('SELECT pg_try_advisory_lock(73341017) AS locked')).rows[0]?.locked;
       if(!locked)fail('MEDIA_IMPORT_BUSY');
       const old=(await client.query('SELECT * FROM marketing_imported_media WHERE job_id=$1',[metadata.job_id])).rows[0];
       if(old){
-        if(old.checksum!==metadata.sha256||canonical(old.metadata.product_url)!==canonical(metadata.product_url))fail('MEDIA_IMPORT_IDENTITY_CONFLICT');
+        if(old.checksum!==metadata.sha256||old.metadata.provider!==metadata.provider||old.metadata.kind!==metadata.kind||
+          (metadata.provider==='runway'&&(old.metadata.generation_job_key!==metadata.generation_job_key||old.metadata.source_video_url!==metadata.source_video_url))||canonical(old.metadata.product_url)!==canonical(metadata.product_url))fail('MEDIA_IMPORT_IDENTITY_CONFLICT');
         if(old.state==='queued')return {...old.receipt,idempotentReplay:true};
       }
       const rows=(await client.query("SELECT document,status FROM marketing_products WHERE status='ready' AND document->>'status'='ACTIVE' LIMIT 5000")).rows;
@@ -94,6 +110,7 @@ export class ImportedMediaCoordinator{
       if(matches.length!==1)fail('IMPORTED_PRODUCT_NOT_READY');
       const current=await this.fresh(matches[0].document.id);
       if(!eligible(current,this.cfg)||current.revision!==matches[0].document.revision)fail('IMPORTED_PRODUCT_NOT_READY');
+      if(metadata.provider==='runway'&&(current.id!==metadata.product_id||current.revision!==metadata.product_revision))fail('IMPORTED_SOURCE_CHANGED_REVIEW_REQUIRED');
       const product={...current,localized:matches[0].document.localized};
       if(!product.localized)fail('IMPORTED_PRODUCT_NOT_READY');
       if(old&&old.product_revision!==product.revision)fail('IMPORTED_SOURCE_CHANGED_REVIEW_REQUIRED');

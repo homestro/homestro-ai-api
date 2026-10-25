@@ -1,4 +1,5 @@
-import {hash,fail,codeOf} from './core.js';
+import {handoffGeneratedVideo} from './generated-video-handoff.js';
+import {hash,fail,codeOf,log} from './core.js';
 import {extractMedia,carouselAssetKey} from './media.js';
 const uuid=v=>/^[a-f0-9-]{36}$/.test(v||'');
 const view=r=>({jobKey:r.job_key,state:r.state,taskId:r.task_id||null,videoURL:r.video_url||null,estimatedUSD:r.cost_cents/100,error:r.error_code||null,requiresReview:true});
@@ -9,7 +10,9 @@ export class GeneratedVideoDrafts {
   async migrate(){await this.pool.query(`CREATE TABLE IF NOT EXISTS marketing_generated_videos(
     job_key text PRIMARY KEY,product_id text NOT NULL,revision text NOT NULL,request jsonb NOT NULL,
     state text NOT NULL,task_id text,video_url text,error_code text,cost_cents integer NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);}
+    created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
+    await this.pool.query("ALTER TABLE marketing_generated_videos ADD COLUMN IF NOT EXISTS review jsonb NOT NULL DEFAULT '{}', ADD COLUMN IF NOT EXISTS handoff jsonb NOT NULL DEFAULT '{}'");}
+  async handoff(key,body,importedMedia){return handoffGeneratedVideo({pool:this.pool,cfg:this.cfg,fresh:this.fresh,fetchImpl:this.fetch,key,body,importedMedia});}
   async request(path,body){
     if(!/^(?:image_to_video|tasks\/[a-f0-9-]{36})$/.test(path))fail('GENERATIVE_ENDPOINT_BLOCKED');
     const r=await this.fetch('https://api.dev.runwayml.com/v1/'+path,{method:body?'POST':'GET',redirect:'error',
@@ -49,6 +52,29 @@ export class GeneratedVideoDrafts {
       }catch(e){await client.query("UPDATE marketing_generated_videos SET state='recovery_required',error_code=$2,updated_at=now() WHERE job_key=$1",[key,codeOf(e)]);throw e;}
     }finally{if(locked)await client.query('SELECT pg_advisory_unlock(73341009)').catch(()=>{});client?.release();}
   }
+  startPolling(){
+    if(this.pollTimer||!this.cfg.key)return;
+    const run=()=>this.pollPending().catch(e=>log('GENERATED_VIDEO_POLL_PENDING',{reason:codeOf(e)}));
+    this.pollTimer=setInterval(()=>void run(),60000);this.pollTimer.unref();void run();
+  }
+  stopPolling(){clearInterval(this.pollTimer);this.pollTimer=null;}
+  async pollPending(){
+    if(this.pollBusy||!this.cfg.key)return {status:this.pollBusy?'busy':'not_configured',checked:0,generationPerformed:false};
+    this.pollBusy=true;
+    try{
+      const rows=(await this.pool.query("SELECT job_key FROM marketing_generated_videos WHERE state='pending' AND task_id IS NOT NULL ORDER BY updated_at LIMIT 10")).rows;
+      const outcomes=[];
+      for(const row of rows){
+        try{outcomes.push(await this.poll(row.job_key));}
+        catch(e){outcomes.push({jobKey:row.job_key,state:'verification_pending',reason:codeOf(e)});}
+        // Rotate pending checks so failed old tasks cannot starve later completions.
+        await this.pool.query("UPDATE marketing_generated_videos SET updated_at=now() WHERE job_key=$1 AND state='pending'",[row.job_key]);
+      }
+      const result={status:'checked',checked:rows.length,outcomes,generationPerformed:false};
+      if(rows.length)log('GENERATED_VIDEO_POLL',{checked:rows.length,states:outcomes.map(x=>({jobKey:x.jobKey,state:x.state,...(x.reason?{reason:x.reason}:{})})),generationPerformed:false});
+      return result;
+    }finally{this.pollBusy=false;}
+  }
   async poll(key){
     if(!this.cfg.key)fail('RUNWAY_API_KEY_REQUIRED');
     if(!/^[a-f0-9]{64}$/.test(key))fail('INVALID_GENERATIVE_JOB');
@@ -60,11 +86,13 @@ export class GeneratedVideoDrafts {
     if(result.status==='SUCCEEDED'){
       let u;try{u=new URL(result.output?.[0]);}catch{fail('RUNWAY_OUTPUT_UNCONFIRMED');}
       if(u.protocol!=='https:'||u.username||u.password)fail('RUNWAY_OUTPUT_UNCONFIRMED');
-      await this.pool.query("UPDATE marketing_generated_videos SET state='review_required',video_url=$2,updated_at=now() WHERE job_key=$1",[key,u.href]);
+      const updated=await this.pool.query("UPDATE marketing_generated_videos SET state='review_required',video_url=$2,updated_at=now() WHERE job_key=$1 AND state='pending' AND task_id=$3",[key,u.href,job.task_id]);
+      if(updated.rowCount===0)return view((await this.pool.query('SELECT * FROM marketing_generated_videos WHERE job_key=$1',[key])).rows[0]||job);
       return view({...job,state:'review_required',video_url:u.href});
     }
     if(['FAILED','CANCELED'].includes(result.status)){
-      await this.pool.query("UPDATE marketing_generated_videos SET state='failed',error_code='RUNWAY_GENERATION_FAILED',updated_at=now() WHERE job_key=$1",[key]);
+      const updated=await this.pool.query("UPDATE marketing_generated_videos SET state='failed',error_code='RUNWAY_GENERATION_FAILED',updated_at=now() WHERE job_key=$1 AND state='pending' AND task_id=$2",[key,job.task_id]);
+      if(updated.rowCount===0)return view((await this.pool.query('SELECT * FROM marketing_generated_videos WHERE job_key=$1',[key])).rows[0]||job);
       return view({...job,state:'failed',error_code:'RUNWAY_GENERATION_FAILED'});
     }
     return view(job);

@@ -68,3 +68,24 @@ test('existing consumers run once after preparation and ledger refreshes their a
   assert.ok(result.outcomes.every(x=>x.receipts[0].status==='approved'));
   assert.equal(result.newPublicationConfirmed,false);
 });
+
+test('brain report reads current native queues and excludes receipts from older source revisions',async()=>{
+  const p=product(),queries=[];
+  const pool={query:async(sql,args=[])=>{
+    queries.push({sql,args});
+    if(sql.includes('SELECT state,count'))return {rows:[{state:'prepared',count:1}]};
+    if(sql.includes('SELECT product_id,decision,state,outcome'))return {rows:[{product_id:p.id,decision:catalogDecision(p),state:'prepared',outcome:{receipts:[{channel:'facebook',status:'published',count:99}]}}]};
+    if(sql.includes('to_regclass'))return {rows:[{present:'marketing_social_posts'}]};
+    if(sql.includes("payload->>'productRevision'"))return {rows:sql.includes('FROM marketing_social_posts')?[
+      {product_id:p.id,revision:p.revision,channel:'pinterest',status:'draft_queued',count:1}]:[
+      {product_id:p.id,revision:'old',channel:'facebook',status:'published',count:99},
+      {product_id:p.id,revision:p.revision,channel:'facebook',status:'approved',count:1}]};
+    throw Error(sql);
+  }};
+  const brain=new CatalogBrain({pool,processProduct:async()=>assert.fail('readback must not prepare')});
+  const result=await brain.report();
+  assert.deepEqual(result.products[0].currentReceipts,[{channel:'facebook',status:'approved',count:1},
+    {channel:'pinterest',status:'draft_queued',count:1}]);
+  assert.equal(queries.filter(q=>q.sql.includes("payload->>'productRevision'")).length,2);
+  assert.equal(result.paidGenerationAuthorized,false);
+});

@@ -134,7 +134,19 @@ export class CatalogBrain{
     const counts=(await this.pool.query('SELECT state,count(*)::int AS count FROM marketing_catalog_brain GROUP BY state ORDER BY state')).rows;
     const rows=(await this.pool.query(`SELECT product_id,decision,state,outcome,last_attempt_at,next_attempt_at
       FROM marketing_catalog_brain ORDER BY priority DESC,product_id LIMIT 100`)).rows;
-    return {generatedAt:this.clock().toISOString(),enabled:this.enabled,publicationAutoApprovalEnabled:this.autoApprovalEnabled,counts,products:rows,adSpendEUR:0,paidGenerationAuthorized:false,
+    // Current queue readback, bound to the exact source revision; older posts are not evidence for a new creative.
+    const ids=rows.map(r=>r.product_id),receipts=[];
+    const tables=['marketing_posts'];
+    if((await this.pool.query("SELECT to_regclass('marketing_social_posts') AS present")).rows[0]?.present)tables.push('marketing_social_posts');
+    for(const table of tables){
+      const found=(await this.pool.query(`SELECT product_id,payload->>'productRevision' AS revision,
+        channel,status,count(*)::int AS count FROM ${table} WHERE product_id=ANY($1::text[])
+        GROUP BY product_id,payload->>'productRevision',channel,status`,[ids])).rows;
+      receipts.push(...found);
+    }
+    const products=rows.map(r=>({...r,currentReceipts:receipts.filter(x=>x.product_id===r.product_id&&x.revision===r.decision?.revision)
+      .map(({channel,status,count})=>({channel,status,count}))}));
+    return {generatedAt:this.clock().toISOString(),enabled:this.enabled,publicationAutoApprovalEnabled:this.autoApprovalEnabled,counts,products,adSpendEUR:0,paidGenerationAuthorized:false,
       note:'Prepared or queued is distinct from published; motion generation requires an approved price.'};
   }
 }

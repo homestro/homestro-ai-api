@@ -53,7 +53,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
-    const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
+    const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,dataDir:cfg.dataDir,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
     await generated.migrate();
     let social=null,importedMedia=null;
     try{
@@ -270,6 +270,10 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
     router.post('/generated-videos',route(async(req,res)=>res.json(await generated.start(req.body))));
     router.get('/generated-videos/:key',route(async(req,res)=>res.json(await generated.poll(req.params.key))));
+    router.post('/generated-videos/:key/handoff',route(async(req,res)=>{
+      if(!importedMedia)fail('MEDIA_IMPORT_NOT_CONFIGURED');
+      res.json(await generated.handoff(req.params.key,req.body,importedMedia));
+    }));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
     router.get('/seo/articles/drafts',route(async(req,res)=>{
@@ -380,6 +384,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       await runTikTokRecoveryProbe(social,new Date(),new Date(process.env.PILOT_TIKTOK_RECOVERY_CUTOFF),process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID,process.env.PILOT_TIKTOK_ASSET_REPAIR_POST_ID||null);
     worker.start();
     social?.start();
+    generated.startPolling();
     if(cfg.syncOnce){
       log('SYNC_ONCE_START',{publishingEnabled:cfg.publishingEnabled,workerEnabled:cfg.workerEnabled});
       try {
@@ -397,7 +402,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
     return {enabled:true,processProduct,sync,store,worker,social,feedXML:freshFeedXML,
-      stop(){worker.stop();social?.stop();clearInterval(syncTimer);clearInterval(brainTimer);}};
+      stop(){worker.stop();social?.stop();generated.stopPolling();clearInterval(syncTimer);clearInterval(brainTimer);}};
   }catch(e){log('DISABLED',{reason:codeOf(e)});return {enabled:false,processProduct:async()=>({processed:0,status:'marketing_disabled'}),stop(){}};}
 }
 
