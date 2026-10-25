@@ -20,10 +20,10 @@ from .micro_budget import configured_daily_budget_limit_eur, live_ads_dry_run
 
 logger = logging.getLogger("uvicorn.error")
 ORDER_QUERY = """query PilotPurchaseEvidence($query: String!, $after: String) {
-  orders(first: 100, after: $after, query: $query, sortKey: UPDATED_AT) {
+  orders(first: 25, after: $after, query: $query, sortKey: UPDATED_AT) {
     nodes { id test cancelledAt displayFinancialStatus
       shippingAddress { countryCodeV2 }
-      transactions { kind status processedAt amountSet { shopMoney { amount currencyCode } } }
+      transactions(first: 10) { kind status test processedAt amountSet { shopMoney { amount currencyCode } } }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -43,7 +43,8 @@ def paid_in_window(order: dict[str, Any], now: datetime) -> bool:
             or (order.get("shippingAddress") or {}).get("countryCodeV2") not in {"DE", "AT"}):
         return False
     for transaction in order.get("transactions") or []:
-        if transaction.get("status") != "SUCCESS" or transaction.get("kind") not in {"SALE", "CAPTURE"}:
+        if (transaction.get("status") != "SUCCESS" or transaction.get("test") is not False
+                or transaction.get("kind") not in {"SALE", "CAPTURE"}):
             continue
         try:
             money = transaction["amountSet"]["shopMoney"]
@@ -108,7 +109,15 @@ class PurchaseEvidence:
                 response.raise_for_status()
                 body = response.json()
                 if body.get("errors"):
-                    return {**result, "reason": "SHOPIFY_ORDER_QUERY_REJECTED"}
+                    errors = body["errors"]
+                    # Schema/permission diagnostics only, never provider messages,
+                    # query variables, order data or credential-bearing bodies.
+                    diagnostics = [{
+                        "code": str((error.get("extensions") or {}).get("code", ""))[:80],
+                        "field": str((error.get("extensions") or {}).get("fieldName", ""))[:80],
+                        "type": str((error.get("extensions") or {}).get("typeName", ""))[:80],
+                    } for error in errors[:5] if isinstance(error, dict)]
+                    return {**result, "reason": "SHOPIFY_ORDER_QUERY_REJECTED", "diagnostics": diagnostics}
                 orders = body["data"]["orders"]
                 for order in orders["nodes"]:
                     order_id = order.get("id")

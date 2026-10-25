@@ -20,7 +20,7 @@ class PurchaseGuardTests(unittest.TestCase):
         self.now = datetime.now(UTC)
         self.order = {"id": "private-order-id", "test": False, "cancelledAt": None,
             "displayFinancialStatus": "PAID", "shippingAddress": {"countryCodeV2": "DE"},
-            "transactions": [{"kind": "SALE", "status": "SUCCESS", "processedAt": self.now.isoformat(),
+            "transactions": [{"kind": "SALE", "status": "SUCCESS", "test": False, "processedAt": self.now.isoformat(),
                               "amountSet": {"shopMoney": {"amount": "39.90", "currencyCode": "EUR"}}}]}
 
     def test_real_payment_required_and_rejects_wrong_country_refund_test_and_old(self):
@@ -29,7 +29,7 @@ class PurchaseGuardTests(unittest.TestCase):
                            ("displayFinancialStatus", "REFUNDED"), ("shippingAddress", {"countryCodeV2": "US"})]:
             with self.subTest(key=key):
                 self.assertFalse(paid_in_window({**self.order, key: value}, self.now))
-        for key, value in [("kind", "AUTHORIZATION"), ("status", "FAILURE"),
+        for key, value in [("kind", "AUTHORIZATION"), ("status", "FAILURE"), ("test", True),
                            ("processedAt", (self.now - timedelta(minutes=16)).isoformat()),
                            ("processedAt", (self.now + timedelta(minutes=1)).isoformat())]:
             row = copy.deepcopy(self.order)
