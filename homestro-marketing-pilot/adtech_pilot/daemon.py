@@ -531,6 +531,11 @@ class PilotDaemon:
         observations = await asyncio.gather(read_google(), read_microsoft(), return_exceptions=True)
         search_channels = {name: value if isinstance(value, dict) else {"status": "unavailable", "error_type": type(value).__name__}
             for name, value in zip(("google", "microsoft"), observations, strict=True)}
+        from .microsoft_reports import MicrosoftReports
+
+        microsoft_performance = await MicrosoftReports(self.audit).cycle()
+        search_channels['microsoft']['performance_report'] = microsoft_performance
+        await self.audit.record("microsoft_performance_report", microsoft_performance)
         await self.audit.record("search_channel_evidence", search_channels)
         from .channel_control import allocation_plan
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 KINDS = ('autonomous_brain', 'meta_performance_snapshot', 'meta_performance_decision',
-         'daemon_heartbeat', 'purchase_watchdog', 'pilot_control_cycle', 'product_selection', 'storefront_diagnostics', 'content_drafts', 'seo_publication', 'marketing_director', 'existing_media_import', 'organic_publisher_evidence', 'search_channel_evidence', 'cognitive_strategy', 'publisher_media_handoff', 'search_campaign_drafts')
+         'daemon_heartbeat', 'purchase_watchdog', 'pilot_control_cycle', 'product_selection', 'storefront_diagnostics', 'content_drafts', 'seo_publication', 'marketing_director', 'existing_media_import', 'organic_publisher_evidence', 'search_channel_evidence', 'cognitive_strategy', 'publisher_media_handoff', 'search_campaign_drafts', 'microsoft_performance_report', 'google_paused_creation', 'microsoft_paused_creation', 'cross_channel_budget_proposal')
 
 
 def operating_report(latest, claim, *, daily_cap_eur, now=None):
@@ -61,6 +61,10 @@ def operating_report(latest, claim, *, daily_cap_eur, now=None):
         'publisher_media_handoff': payload('publisher_media_handoff'), 'search_campaign_drafts': payload('search_campaign_drafts'),
         'cognitive_strategy': payload('cognitive_strategy'),
         'search_channel_evidence': payload('search_channel_evidence'),
+        'microsoft_performance_report': payload('microsoft_performance_report'),
+        'google_paused_creation': payload('google_paused_creation'),
+        'microsoft_paused_creation': payload('microsoft_paused_creation'),
+        'cross_channel_budget_proposal': payload('cross_channel_budget_proposal'),
         'organic_publisher_evidence': payload('organic_publisher_evidence'),
         'marketing_director': payload('marketing_director'), 'existing_media_import': payload('existing_media_import'),
         'external_trend_sources': trends, 'source_timestamps': timestamps, 'stale_sources': stale,

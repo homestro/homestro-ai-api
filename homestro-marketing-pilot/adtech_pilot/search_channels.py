@@ -82,8 +82,9 @@ async def read_google(*, env=None, client=None):
 async def read_microsoft(*, env=None, client=None):
     env = os.environ if env is None else env
     required = ['MICROSOFT_ADS_ACCOUNT_ID', 'MICROSOFT_ADS_CUSTOMER_ID',
-                'MICROSOFT_ADS_DEVELOPER_TOKEN', 'MICROSOFT_ADS_ACCESS_TOKEN']
-    missing = [key for key in required if not env.get(key)]
+                'MICROSOFT_ADS_DEVELOPER_TOKEN']
+    from .microsoft_auth import access_token, missing_auth
+    missing = [key for key in required if not env.get(key)] + missing_auth(env)
     if missing:
         return {'status': 'not_configured', 'missing_settings': missing, 'writes_performed': False}
     if any(not re.fullmatch(r'\d{1,20}', env[key]) for key in required[:2]):
@@ -91,9 +92,10 @@ async def read_microsoft(*, env=None, client=None):
     own = client is None
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5), follow_redirects=False)
     try:
+        token = await access_token(env, client)
         response = await _bounded_json(client,
             'https://campaign.api.bingads.microsoft.com/CampaignManagement/v13/Campaigns/QueryByAccountId',
-            headers={'Authorization': 'Bearer ' + env['MICROSOFT_ADS_ACCESS_TOKEN'],
+            headers={'Authorization': 'Bearer ' + token,
                 'DeveloperToken': env['MICROSOFT_ADS_DEVELOPER_TOKEN'],
                 'CustomerAccountId': env['MICROSOFT_ADS_ACCOUNT_ID'], 'CustomerId': env['MICROSOFT_ADS_CUSTOMER_ID']},
             json={'AccountId': int(env['MICROSOFT_ADS_ACCOUNT_ID']), 'CampaignType': 'Search'})
@@ -121,7 +123,9 @@ def connection_requirements(*, env=None):
     if not env.get('GOOGLE_ADS_ACCESS_TOKEN'):
         google += ['GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN']
     microsoft = ['MICROSOFT_ADS_ACCOUNT_ID', 'MICROSOFT_ADS_CUSTOMER_ID',
-                 'MICROSOFT_ADS_DEVELOPER_TOKEN', 'MICROSOFT_ADS_ACCESS_TOKEN']
+                 'MICROSOFT_ADS_DEVELOPER_TOKEN']
+    from .microsoft_auth import missing_auth
+    microsoft += missing_auth(env)
     return {'channels': {name: {
         'missing_settings': [key for key in keys if not env.get(key)],
         'credentials_present': all(bool(env.get(key)) for key in keys),
@@ -129,6 +133,6 @@ def connection_requirements(*, env=None):
         'capabilities': capabilities,
     } for name, keys, capabilities in (
         ('google', google, ['inventory_read', 'metrics_read', 'validate_only_campaign_bundle']),
-        ('microsoft', microsoft, ['inventory_read', 'offline_campaign_templates']))},
-        'campaign_write_transport_complete': False, 'stop_only_transport_implemented': True, 'paid_activation_authorized': False,
+        ('microsoft', microsoft, ['inventory_read', 'persistent_performance_reports', 'offline_campaign_templates']))},
+        'campaign_write_transport_complete': False, 'stop_only_transport_implemented': True, 'google_paused_creation_transport_implemented': True, 'microsoft_paused_creation_transport_implemented': True, 'paid_activation_authorized': False,
         'authorized_spend_eur': 0, 'merchant_credentials_are_not_ads_credentials': True}

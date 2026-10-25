@@ -76,10 +76,11 @@ async def pause_search_campaign(channel, campaign_id, *, expected_account, env=N
         return {'status': 'blocked', 'reason': 'CONFIGURED_ACCOUNT_MISMATCH', 'writes_performed': False}
     required = [prefix + '_DEVELOPER_TOKEN']
     if channel == 'microsoft':
-        required += ['MICROSOFT_ADS_CUSTOMER_ID', 'MICROSOFT_ADS_ACCESS_TOKEN']
+        required += ['MICROSOFT_ADS_CUSTOMER_ID']
     elif not env.get('GOOGLE_ADS_ACCESS_TOKEN'):
         required += ['GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN']
-    missing = [key for key in required if not env.get(key)]
+    from .microsoft_auth import access_token, missing_auth
+    missing = [key for key in required if not env.get(key)] + (missing_auth(env) if channel == 'microsoft' else [])
     if missing:
         return {'status': 'not_configured', 'missing_settings': missing, 'writes_performed': False}
     if env.get('PILOT_SEARCH_STOP_WRITES_ENABLED') != 'true':
@@ -88,7 +89,7 @@ async def pause_search_campaign(channel, campaign_id, *, expected_account, env=N
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5), follow_redirects=False)
     attempted = False
     try:
-        token = env.get(prefix + '_ACCESS_TOKEN')
+        token = await access_token(env, client) if channel == 'microsoft' else env.get(prefix + '_ACCESS_TOKEN')
         if not token:
             auth = await _bounded_json(client, 'https://oauth2.googleapis.com/token', data={
                 'grant_type': 'refresh_token', 'client_id': env['GOOGLE_ADS_CLIENT_ID'],

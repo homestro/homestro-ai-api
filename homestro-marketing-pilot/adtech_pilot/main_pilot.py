@@ -40,6 +40,12 @@ TRIGGER_HEADER = APIKeyHeader(name="X-Pilot-Token", auto_error=False)
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 
 
+class SearchCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: str = Field(pattern=r'^[a-f0-9]{64}$')
+    german_copy_reviewed: Literal[True]
+
+
 class SearchPauseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_account: str = Field(pattern=r'^\d{1,20}$')
@@ -291,6 +297,40 @@ def create_app(
         await audit.record('search_pause_intent', {'channel': channel, 'campaign_id': campaign_id, 'account_id': body.expected_account})
         result = await pause_search_campaign(channel, campaign_id, expected_account=body.expected_account)
         await audit.record('search_pause_result', result)
+        return result
+
+    @app.post("/pilot/search/drafts/{draft_id}/create-google-paused", dependencies=[Depends(require_admin)])
+    async def pilot_create_google_paused(draft_id: str, body: SearchCreateRequest):
+        from .google_writer import GooglePausedWriter
+        from .search_campaigns import SearchCampaignDrafts
+
+        drafts = await asyncio.to_thread(SearchCampaignDrafts(audit).list)
+        draft = next((row for row in drafts if row['id'] == draft_id and row['channel'] == 'google'), None)
+        if draft is None or draft['revision'] != body.expected_revision:
+            raise HTTPException(409, 'CURRENT_GOOGLE_DRAFT_REVIEW_REQUIRED')
+        result = await GooglePausedWriter(audit).create_paused(draft, approved_revision=body.expected_revision)
+        await audit.record('google_paused_creation', result)
+        return result
+
+    @app.post("/pilot/search/drafts/{draft_id}/create-microsoft-paused", dependencies=[Depends(require_admin)])
+    async def pilot_create_microsoft_paused(draft_id: str, body: SearchCreateRequest):
+        from .microsoft_writer import MicrosoftPausedWriter
+        from .search_campaigns import SearchCampaignDrafts
+
+        drafts = await asyncio.to_thread(SearchCampaignDrafts(audit).list)
+        draft = next((row for row in drafts if row['id'] == draft_id and row['channel'] == 'microsoft'), None)
+        if draft is None or draft['revision'] != body.expected_revision:
+            raise HTTPException(409, 'CURRENT_MICROSOFT_DRAFT_REVIEW_REQUIRED')
+        result = await MicrosoftPausedWriter(audit).create_paused(draft, approved_revision=body.expected_revision)
+        await audit.record('microsoft_paused_creation', result)
+        return result
+
+    @app.get("/pilot/search/microsoft/performance", dependencies=[Depends(require_admin)])
+    async def pilot_microsoft_performance():
+        from .microsoft_reports import MicrosoftReports
+
+        result = await MicrosoftReports(audit).cycle()
+        await audit.record('microsoft_performance_report', result)
         return result
 
     @app.get("/pilot/search/readiness", dependencies=[Depends(require_admin)])

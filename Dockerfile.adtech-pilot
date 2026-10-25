@@ -22,36 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && chown -R pilot:pilot /data
 COPY --from=builder /opt/venv /opt/venv
 RUN mkdir -p /app/adtech_pilot
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/__init__.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/feed_manager.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/creative_factory.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/media_buyer.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/main_pilot.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/daemon.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/github_reporter.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/gmc_diagnostics.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/micro_budget.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/purchase_guard.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/order_economics.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/payment_webhooks.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/seo_writer.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/organic_bridge.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/search_channels.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/search_campaigns.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/email_delivery.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/cognitive_strategy.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/publisher_handoff.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/marketing_director.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/media_registry.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/existing_media.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/content_engine.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/store_diagnostics.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/product_selection.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/control_cycle.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/brain_status.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/autonomous_brain.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/website_ads.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/performance_loader.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/*.py /app/adtech_pilot/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/entrypoint.py /app/entrypoint.py
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

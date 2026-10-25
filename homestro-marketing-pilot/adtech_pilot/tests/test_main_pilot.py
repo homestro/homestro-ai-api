@@ -59,6 +59,20 @@ class MainPilotTests(unittest.TestCase):
         self.assertEqual(result.json()['reason'], 'CAMPAIGN_ACCOUNT_IDENTITY_NOT_OBSERVED')
         writer.assert_not_awaited()
 
+    def test_search_creation_and_reporting_routes_require_current_review_and_admin(self):
+        headers = {'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}
+        body = {'expected_revision': 'a' * 64, 'german_copy_reviewed': True}
+        for channel in ('google', 'microsoft'):
+            path = '/pilot/search/drafts/missing/create-' + channel + '-paused'
+            self.assertEqual(self.request('POST', path, json=body).status_code, 401)
+            self.assertEqual(self.request('POST', path, json=body, headers=headers).status_code, 409)
+        self.assertEqual(self.request('GET', '/pilot/search/microsoft/performance').status_code, 401)
+        from unittest.mock import patch
+        with patch.dict(os.environ, {'MICROSOFT_ADS_ACCOUNT_ID': ''}):
+            result = self.request('GET', '/pilot/search/microsoft/performance', headers=headers)
+        self.assertEqual(result.json()['status'], 'not_configured')
+        self.assertFalse(result.json()['writes_performed'])
+
     def test_admin_key_required_for_feed_and_metrics(self):
         response = self.request(
             "POST",

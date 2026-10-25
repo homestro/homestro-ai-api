@@ -159,7 +159,7 @@ def microsoft_request_templates(draft, account_id, *, proposed_daily_eur):
         ]}
 
 
-async def validate_google_draft(draft, *, proposed_daily_eur, env=None, client=None):
+async def validate_google_draft(draft, *, proposed_daily_eur, env=None, client=None, include_request=False):
     """Official provider validation, without persisting any Google campaign or budget."""
     env = os.environ if env is None else env
     if env.get('GOOGLE_ADS_VALIDATE_ONLY_ENABLED') != 'true':
@@ -208,7 +208,7 @@ async def validate_google_draft(draft, *, proposed_daily_eur, env=None, client=N
         reply = await _bounded_json(client, base + 'mutate', headers=headers, json=request)
         if not isinstance(reply, dict) or reply.get('error') or reply.get('partialFailureError') or reply.get('mutateOperationResponses'):
             raise ValueError('GOOGLE_VALIDATION_RESPONSE_UNCONFIRMED')
-        return {'status': 'provider_validated_only', 'draft_id': draft['id'], 'revision': draft['revision'],
+        return {**({'validated_request': request} if include_request else {}), 'status': 'provider_validated_only', 'draft_id': draft['id'], 'revision': draft['revision'],
             'account_id': account, 'provider_validation_only': True, 'operation_count': len(request['mutateOperations']),
             'remote_campaigns_created': 0, 'writes_performed': False, 'authorized_spend_eur': 0}
     except (ValueError, TypeError, KeyError, IndexError, httpx.HTTPError) as exc:
