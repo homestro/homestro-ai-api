@@ -63,6 +63,12 @@ class MicroBudgetDecision(BaseModel):
     live_submission_enabled: bool = False
 
 
+def measurement_risk_accepted(env: Mapping[str, str]) -> bool:
+    """Owner-authorized bounded test; never claims measurement is verified."""
+    return (env.get("PILOT_LAUNCH_POLICY") == "bounded_acquisition_test"
+            and env.get("PILOT_ACCEPT_UNVERIFIED_MEASUREMENT") == "true")
+
+
 class MicroBudgetGate:
     """Checks one campaign's readiness under the fixed €5 daily ceiling."""
 
@@ -81,6 +87,7 @@ class MicroBudgetGate:
         account: MetaAccountReadiness | None,
         product_ids_in_feed: set[str],
         purchase_event_verified: bool = False,
+        unverified_measurement_test_authorized: bool = False,
         previously_submitted_campaigns: int = 0,
         dry_run: bool = True,
     ) -> MicroBudgetDecision:
@@ -89,7 +96,7 @@ class MicroBudgetGate:
             blockers.append("MICRO_BUDGET_NOT_EXPLICITLY_ENABLED")
         if dry_run:
             blockers.append("DRY_RUN_ENABLED")
-        if not purchase_event_verified:
+        if not purchase_event_verified and not unverified_measurement_test_authorized:
             blockers.append("META_PURCHASE_EVENT_NOT_VERIFIED")
         if account is None:
             blockers.append("META_ACCOUNT_PREFLIGHT_NOT_VERIFIED")

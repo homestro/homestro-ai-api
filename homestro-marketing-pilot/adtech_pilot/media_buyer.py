@@ -25,6 +25,7 @@ from .micro_budget import (
     MicroBudgetGate,
     configured_daily_budget_limit_eur,
     live_ads_dry_run,
+    measurement_risk_accepted,
 )
 
 
@@ -1050,7 +1051,8 @@ class MetaPublisher:
             )
             gate = MicroBudgetGate(enabled=True).evaluate(
                 account=readiness,
-                purchase_event_verified=True,
+                purchase_event_verified=self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() == "true",
+                unverified_measurement_test_authorized=measurement_risk_accepted(self.env),
                 product_ids_in_feed=product_ids_in_feed,
                 previously_submitted_campaigns=0,
                 dry_run=False,
@@ -1361,7 +1363,8 @@ class MetaPublisher:
             }
         if self.env.get("META_BILLING_VERIFIED", "false").lower() != "true":
             return {"reason": "META_BILLING_NOT_MANUALLY_VERIFIED"}
-        if self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() != "true":
+        if (self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() != "true"
+                and not measurement_risk_accepted(self.env)):
             return {"reason": "META_PURCHASE_EVENT_NOT_VERIFIED"}
         token = self.env.get("META_ACCESS_TOKEN", "").strip()
         account_id = self.env.get("META_AD_ACCOUNT_ID", "").strip()

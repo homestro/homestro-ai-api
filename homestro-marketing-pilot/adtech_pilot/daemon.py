@@ -25,6 +25,7 @@ from .micro_budget import (
     MicroBudgetGate,
     configured_daily_budget_limit_eur,
     live_ads_dry_run,
+    measurement_risk_accepted,
 )
 from .performance_loader import load_meta_performance
 
@@ -560,6 +561,7 @@ class PilotDaemon:
                 os.getenv("META_PURCHASE_EVENT_VERIFIED", "false").strip().lower()
                 == "true"
             ),
+            unverified_measurement_test_authorized=measurement_risk_accepted(os.environ),
             # This optimization pass is intentionally read-only and cannot publish.
             dry_run=True,
         )
