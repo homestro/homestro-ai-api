@@ -517,8 +517,8 @@ class PilotDaemon:
         from .payment_webhooks import PaymentWebhookStore, payment_database
         from .product_selection import read_cost_candidates
 
-        ranked_candidates, selection = await asyncio.to_thread(read_cost_candidates,
-            PaymentWebhookStore(payment_database(os.environ)), candidates)
+        payment_store = PaymentWebhookStore(payment_database(os.environ))
+        ranked_candidates, selection = await asyncio.to_thread(read_cost_candidates, payment_store, candidates)
         from .content_engine import content_batch
         from .marketing_director import MarketingDirector
         from .media_registry import MediaRegistry
@@ -540,11 +540,29 @@ class PilotDaemon:
         search_channels['microsoft']['performance_report'] = microsoft_performance
         await self.audit.record("microsoft_performance_report", microsoft_performance)
         await self.audit.record("search_channel_evidence", search_channels)
+        from .search_write_recovery import SearchWriteRecovery
+
+        search_recovery = await SearchWriteRecovery(self.audit).cycle()
+        await self.audit.record("search_write_recovery", search_recovery)
+        logger.info("search_write_recovery %s", json.dumps({"status": search_recovery["status"],
+            "checked": search_recovery["checked"], "channels": {name: {key: value for key, value in row.items()
+                if key in {"status", "checked", "campaign_paused_observations"}}
+                for name, row in search_recovery["channels"].items()}, "writes_performed": False}, separators=(",", ":")))
+        from .channel_accounting import accounting_observations
         from .channel_control import allocation_plan
 
-        # Additional search-channel spend is not authorized. Keep the common cap
-        # zero even when a configured Meta test has a nonzero ceiling.
-        allocation = allocation_plan({}, authorized_daily_eur='0', measurement_verified=False)
+        latest = await self.audit.latest_brain_evidence()
+        meta_record = latest.get('meta_performance_snapshot') or {}
+        meta_source = {**meta_record.get('payload', {}), 'observed_at': meta_record.get('created_at')}
+        provider_sources = {'meta': meta_source,
+            'google': {**search_channels['google'], 'observed_at': datetime.now(UTC).isoformat()},
+            'microsoft': microsoft_performance}
+        accounting = await asyncio.to_thread(accounting_observations, payment_store, provider_sources)
+        await self.audit.record('cross_channel_accounting', accounting)
+        logger.info('cross_channel_accounting %s', json.dumps(accounting, separators=(',', ':')))
+        # Observe actual accounting rather than passing an empty portfolio. Missing
+        # windows/costs remain explicit, and observation never grants spending.
+        allocation = allocation_plan(accounting, authorized_daily_eur='0', measurement_verified=False)
         await self.audit.record("cross_channel_budget_proposal", allocation)
 
         from .cognitive_strategy import CognitiveStrategy

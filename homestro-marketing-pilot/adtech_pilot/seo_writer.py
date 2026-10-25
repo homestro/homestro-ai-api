@@ -72,17 +72,32 @@ class SEORevisionWriter:
             for offset in range(min(limit, len(products))):
                 raw = products[(position + offset) % len(products)]
                 try:
-                    result = await self.revise(raw, graphql)
-                    results.append(result)
-                except (ValueError, KeyError, TypeError, httpx.HTTPError) as exc:
-                    results.append({'status': 'unavailable', 'error_type': type(exc).__name__})
-                    # Stop this scan on provider/network errors; no blind write retry.
-                    break
+                    # Source eligibility is local. A sold-out/rejected row must not
+                    # poison the persisted cursor or prevent valid later products.
+                    product_draft(raw)
+                    eligible_source = True
+                except (ValueError, KeyError, TypeError):
+                    eligible_source = False
+                    results.append({'status': 'skipped', 'reason': 'SOURCE_PRODUCT_NOT_ELIGIBLE'})
+                if eligible_source and not re.fullmatch(r'gid://shopify/ProductVariant/[1-9]\d*', str(raw.get('id', ''))):
+                    eligible_source = False
+                    results.append({'status': 'skipped', 'reason': 'SEO_VARIANT_IDENTITY_REQUIRED'})
+                if eligible_source:
+                    try:
+                        result = await self.revise(raw, graphql)
+                        results.append(result)
+                    except (ValueError, KeyError, TypeError, httpx.HTTPError) as exc:
+                        reason = 'SEO_GRAPHQL_REJECTED' if str(exc) == 'SEO_GRAPHQL_REJECTED' else 'SEO_REMOTE_REQUEST_UNCONFIRMED'
+                        results.append({'status': 'unavailable', 'error_type': type(exc).__name__, 'reason': reason})
+                        # Keep this cursor on provider/network failures. Never replay
+                        # an uncertain write; revise() reconciles its durable intent.
+                        break
                 with closing(self.audit._connect()) as db, db:
                     db.execute("INSERT INTO pilot_seo_cursor VALUES ('catalog',?) ON CONFLICT(name) DO UPDATE SET position=excluded.position",
                                ((position + offset + 1) % len(products),))
             return {'status': 'checked', 'items': results, 'checked': len(results),
                     'confirmed_revisions': sum(item['status'] == 'confirmed' for item in results),
+                    'ineligible_sources_skipped': sum(item['status'] == 'skipped' for item in results),
                     'policy': 'fill_missing_only', 'theme_writes': False, 'geo_theme_publication': False,
                     'concurrency_guard': 'read_before_write_not_atomic_provider_cas'}
         finally:

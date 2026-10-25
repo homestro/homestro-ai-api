@@ -115,3 +115,41 @@ class SEOWriterTests(unittest.IsolatedAsyncioTestCase):
             await writer.cycle(products, limit=1)
             await writer.cycle(products, limit=1)
         self.assertEqual(variants, ['gid://shopify/ProductVariant/123', 'gid://shopify/ProductVariant/124'])
+
+
+    async def test_ineligible_first_row_advances_cursor_and_restart_reaches_valid_products(self):
+        import json
+        variants = []
+        self.product['seo'] = {'title': 'Reviewed existing title', 'description': 'Reviewed existing description'}
+        def handle(request):
+            data = json.loads(request.content)
+            self.assertEqual(data['query'], READ)
+            variants.append(data['variables']['id'])
+            return httpx.Response(200, json={'data': {'productVariant': {'product': self.product}}})
+        env = {'SHOPIFY_STORE_DOMAIN': 'homestro.myshopify.com', 'SHOPIFY_ACCESS_TOKEN': 'existing'}
+        products = [{**self.raw, 'availability': 'out_of_stock'}, self.raw,
+                    {**self.raw, 'id': 'gid://shopify/ProductVariant/124'}]
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            first = await SEORevisionWriter(self.audit, env=env, client=client).cycle(products, limit=2)
+            self.assertEqual(first['ineligible_sources_skipped'], 1)
+            self.assertEqual([row['status'] for row in first['items']], ['skipped', 'preserved'])
+            second = await SEORevisionWriter(self.audit, env=env, client=client).cycle(products, limit=1)
+            self.assertEqual(second['items'][0]['status'], 'preserved')
+        self.assertEqual(variants, [self.raw['id'], 'gid://shopify/ProductVariant/124'])
+
+    async def test_unknown_product_identity_is_not_guessed_and_provider_failure_keeps_retry_cursor(self):
+        import json
+        variants = []
+        def handle(request):
+            data = json.loads(request.content)
+            variants.append(data['variables']['id'])
+            return httpx.Response(503)
+        env = {'SHOPIFY_STORE_DOMAIN': 'homestro.myshopify.com', 'SHOPIFY_ACCESS_TOKEN': 'existing'}
+        products = [{**self.raw, 'id': '123'}, self.raw]
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            first = await SEORevisionWriter(self.audit, env=env, client=client).cycle(products, limit=2)
+            self.assertEqual(first['items'][0]['reason'], 'SEO_VARIANT_IDENTITY_REQUIRED')
+            self.assertEqual(first['items'][1]['reason'], 'SEO_REMOTE_REQUEST_UNCONFIRMED')
+            restarted = await SEORevisionWriter(self.audit, env=env, client=client).cycle(products, limit=2)
+            self.assertEqual(len(restarted['items']), 1)
+        self.assertEqual(variants, [self.raw['id'], self.raw['id']])

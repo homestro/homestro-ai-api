@@ -201,13 +201,20 @@ def record_paid_order(db, *, topic, payload, order_hash, blocked, env, now):
         return
 
 
-def economics_summary(store, campaign, spend_eur=0, *, channel='meta'):
+def economics_summary(store, campaign, spend_eur=0, *, channel='meta', window_start=None, window_end=None):
     if channel not in CHANNELS:
         raise ValueError('unsupported attribution channel')
+    clause, arguments = '', [campaign, channel]
+    if window_start is not None or window_end is not None:
+        start, end = instant(window_start), instant(window_end)
+        if end <= start:
+            raise ValueError('INVALID_ECONOMICS_WINDOW')
+        clause = ' AND julianday(o.paid_at)>=julianday(?) AND julianday(o.paid_at)<julianday(?)'
+        arguments += [start.isoformat(), end.isoformat()]
     with closing(store.connect()) as db:
         rows = db.execute('SELECT o.net_revenue,o.cogs,o.blocked,e.fulfillment,e.fees,e.returns_cost,e.other_cost '
                           'FROM pilot_order_economics o LEFT JOIN pilot_order_expenses e ON e.order_hash=o.order_hash '
-                          'WHERE o.campaign=? AND o.channel=?', (campaign, channel)).fetchall()
+                          'WHERE o.campaign=? AND o.channel=?' + clause, arguments).fetchall()
         costs = db.execute('SELECT count(*) FROM pilot_unit_costs').fetchone()[0]
     active = [row for row in rows if not row[2]]
     complete = bool(active) and len(active) == len(rows) and all(all(value is not None for value in (row[0], row[1], *row[3:])) for row in active)
@@ -218,6 +225,8 @@ def economics_summary(store, campaign, spend_eur=0, *, channel='meta'):
             'missing_unit_cost_orders': sum(row[1] is None for row in active),
             'missing_expense_orders': sum(row[3] is None for row in active),
             'contribution_after_ads_eur': float(contribution) if contribution is not None else None,
+            'contribution_after_ads_decimal_eur': str(contribution) if contribution is not None else None,
+            'window_start': window_start, 'window_end': window_end,
             'costs_complete': complete, 'ad_spend_available': spend_eur is not None, 'attribution_method': 'signed_landing_url_observation',
             'causal_attribution_verified': False, 'net_profit_verified': False,
             'scale_authorized': False}
