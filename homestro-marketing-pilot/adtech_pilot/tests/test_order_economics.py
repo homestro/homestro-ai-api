@@ -15,6 +15,7 @@ from adtech_pilot.order_economics import (
     economics_summary,
     sync_unit_costs,
     tracked_story,
+    tracked_url,
     tracking_ref,
 )
 from adtech_pilot.payment_webhooks import PaymentWebhookStore, receive_payment
@@ -45,6 +46,43 @@ class OrderEconomicsTests(unittest.TestCase):
         routes = {'orders/paid': 'orders-paid', 'refunds/create': 'refunds-created', 'orders/updated': 'orders-updated'}
         return asyncio.run(receive_payment(raw=raw, headers={'X-Shopify-Hmac-Sha256': signature,
             'X-Shopify-Topic': topic, 'X-Shopify-Shop-Domain': 'test.myshopify.com'}, route=routes[topic], env=self.env, now=self.now))
+
+    def test_channel_collision_cannot_credit_meta_or_double_count_order(self):
+        ref = tracking_ref('12345', '23456', 'a' * 24, secret=self.env['PILOT_ADMIN_KEY'],
+                           expires_at=self.now + timedelta(days=1), issued_at=self.now, channel='google')
+        payload = self.payload()
+        payload['landing_site'] = tracked_url('https://homestro.de/products/test?variant=123', ref,
+                                              secret=self.env['PILOT_ADMIN_KEY'], at=self.now)
+        self.send('orders/paid', payload)
+        self.send('orders/paid', payload)
+        self.assertEqual(economics_summary(self.store, '12345')['signed_url_tagged_paid_orders'], 0)
+        self.assertEqual(economics_summary(self.store, '12345', None, channel='google')['signed_url_tagged_paid_orders'], 1)
+        self.send('refunds/create', {'id': 54321, 'order_id': 99887766})
+        self.assertEqual(economics_summary(self.store, '12345', None, channel='google')['refund_or_cancelled_orders'], 1)
+
+    def test_channel_source_tampering_is_not_attributed(self):
+        ref = tracking_ref('12345', '23456', 'a' * 24, secret=self.env['PILOT_ADMIN_KEY'],
+                           expires_at=self.now + timedelta(days=1), issued_at=self.now, channel='microsoft')
+        payload = self.payload()
+        payload['landing_site'] = tracked_url('https://homestro.de/products/test', ref,
+                                              secret=self.env['PILOT_ADMIN_KEY'], at=self.now).replace('utm_source=microsoft', 'utm_source=google')
+        self.send('orders/paid', payload)
+        self.assertEqual(economics_summary(self.store, '12345', None, channel='microsoft')['signed_url_tagged_paid_orders'], 0)
+
+    def test_legacy_signature_and_database_migration_preserve_meta(self):
+        from adtech_pilot.order_economics import initialize
+        import sqlite3
+        data = {'campaign': '12345', 'ad': '23456', 'experiment': 'a' * 24,
+                'issued': self.now.isoformat(), 'expires': (self.now + timedelta(days=1)).isoformat()}
+        body = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip('=')
+        signature = hmac.new(self.env['PILOT_ADMIN_KEY'].encode(), ('pilot-attribution-v1:' + body).encode(), hashlib.sha256).hexdigest()
+        self.assertEqual(decode_ref(body + '.' + signature, secret=self.env['PILOT_ADMIN_KEY'], at=self.now)['channel'], 'meta')
+        with sqlite3.connect(':memory:') as db:
+            db.execute('CREATE TABLE pilot_order_economics(order_hash TEXT PRIMARY KEY,campaign TEXT,ad TEXT,experiment TEXT,paid_at TEXT,net_revenue TEXT,cogs TEXT,blocked INTEGER)')
+            db.execute("INSERT INTO pilot_order_economics VALUES('old','12345','23456','experiment','date','10','5',0)")
+            initialize(db)
+            initialize(db)
+            self.assertEqual(db.execute('SELECT channel,net_revenue FROM pilot_order_economics').fetchone(), ('meta', '10'))
 
     def test_signed_ref_rejects_tampering_expiry_and_wrong_key(self):
         self.assertEqual(decode_ref(self.ref, secret=self.env['PILOT_ADMIN_KEY'], at=self.now)['campaign'], '12345')

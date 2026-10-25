@@ -40,6 +40,16 @@ TRIGGER_HEADER = APIKeyHeader(name="X-Pilot-Token", auto_error=False)
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 
 
+class AttributionLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel: Literal['meta', 'google', 'microsoft', 'facebook', 'instagram', 'tiktok', 'pinterest']
+    campaign_id: str = Field(pattern=r'^\d{4,30}$')
+    content_id: str = Field(pattern=r'^\d{4,30}$')
+    experiment: str = Field(pattern=r'^[a-f0-9]{16,64}$')
+    url: str = Field(max_length=2048)
+    lifetime_hours: int = Field(default=24, ge=1, le=168)
+
+
 class CreativeProduct(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1, max_length=128)
@@ -261,6 +271,46 @@ def create_app(
         from .marketing_director import MarketingDirector
 
         return await asyncio.to_thread(MarketingDirector(audit).report, limit=limit)
+
+    @app.get("/pilot/search/readiness", dependencies=[Depends(require_admin)])
+    async def pilot_search_readiness():
+        from .search_channels import connection_requirements
+
+        return connection_requirements()
+
+    @app.post("/pilot/attribution/link", dependencies=[Depends(require_admin)])
+    async def pilot_attribution_link(body: AttributionLinkRequest):
+        from datetime import UTC, datetime, timedelta
+        from .order_economics import tracking_ref, tracked_url
+
+        at = datetime.now(UTC)
+        expires = at + timedelta(hours=body.lifetime_hours)
+        secret = os.getenv('PILOT_ATTRIBUTION_SECRET') or os.getenv('PILOT_ADMIN_KEY', '')
+        try:
+            ref = tracking_ref(body.campaign_id, body.content_id, body.experiment, secret=secret,
+                               issued_at=at, expires_at=expires, channel=body.channel)
+            url = tracked_url(body.url, ref, secret=secret, at=at)
+        except ValueError as exc:
+            raise HTTPException(422, 'ATTRIBUTION_DESTINATION_OR_CONFIGURATION_INVALID') from exc
+        return {"url": url, "expires_at": expires.isoformat(), "channel": body.channel,
+                "publication_confirmed": False, "campaign_ownership_verified": False,
+                "authorized_spend_eur": 0, "writes_performed": False}
+
+    @app.get("/pilot/attribution", dependencies=[Depends(require_admin)])
+    async def pilot_attribution():
+        from .order_economics import economics_summary
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+
+        store = PaymentWebhookStore(payment_database(os.environ))
+        def report():
+            with closing(store.connect()) as db:
+                keys = db.execute("SELECT DISTINCT channel,campaign FROM pilot_order_economics ORDER BY channel,campaign").fetchall()
+            return {"campaigns": [economics_summary(store, campaign, None, channel=channel)
+                                  for channel, campaign in keys],
+                    "attribution_method": "signed_landing_url_observation",
+                    "historical_untagged_orders_backfilled": False,
+                    "causal_attribution_verified": False, "scale_authorized": False}
+        return await asyncio.to_thread(report)
 
     @app.get("/pilot/search/drafts", dependencies=[Depends(require_admin)])
     async def pilot_search_drafts():

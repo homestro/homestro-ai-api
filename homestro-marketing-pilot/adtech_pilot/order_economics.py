@@ -27,12 +27,20 @@ def instant(value):
     return result.astimezone(UTC)
 
 
-def tracking_ref(campaign, ad, experiment, *, secret, expires_at, issued_at=None):
+CHANNELS = {'meta', 'google', 'microsoft', 'facebook', 'instagram', 'tiktok', 'pinterest'}
+
+
+def tracking_ref(campaign, ad, experiment, *, secret, expires_at, issued_at=None, channel='meta'):
     if not secret or not all(re.fullmatch(r'\d{4,30}', str(x)) for x in (campaign, ad)):
         raise ValueError('tracking configuration invalid')
     if not re.fullmatch(r'[a-f0-9]{16,64}', experiment):
         raise ValueError('invalid experiment')
-    payload = {'campaign': campaign, 'ad': ad, 'experiment': experiment,
+    if channel not in CHANNELS:
+        raise ValueError('unsupported attribution channel')
+    issued_at = issued_at or datetime.now(UTC)
+    if not timedelta(0) < instant(expires_at) - instant(issued_at) <= timedelta(days=7):
+        raise ValueError('invalid attribution lifetime')
+    payload = {'channel': channel, 'campaign': campaign, 'ad': ad, 'experiment': experiment,
                'issued': (issued_at or datetime.now(UTC)).isoformat(), 'expires': expires_at.isoformat()}
     body = base64.urlsafe_b64encode(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).decode().rstrip('=')
     signature = hmac.new(secret.encode(), ('pilot-attribution-v1:' + body).encode(), hashlib.sha256).hexdigest()
@@ -55,6 +63,9 @@ def decode_ref(token, *, secret, at):
                 or not instant(data['issued']) <= at <= instant(data['expires'])
                 or instant(data['expires']) - instant(data['issued']) > timedelta(days=7)):
             return None
+        if data.get('channel', 'meta') not in CHANNELS:
+            return None
+        data.setdefault('channel', 'meta')
         return data
     except (ValueError, TypeError, KeyError, UnicodeError):
         return None
@@ -77,6 +88,20 @@ def tracked_story(story, ref, campaign, ad):
     return result
 
 
+def tracked_url(value, ref, *, secret, at):
+    """One signed channel binding; arbitrary UTM tags alone never establish a sale."""
+    data = decode_ref(ref, secret=secret, at=at)
+    parsed = urlsplit(value)
+    if (not data or parsed.scheme != 'https' or parsed.hostname not in {'homestro.de', 'www.homestro.de'}
+            or parsed.username or parsed.password or parsed.port not in {None, 443}):
+        raise ValueError('unapproved attribution destination or signature')
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    medium = 'cpc' if data['channel'] in {'google', 'microsoft'} else ('paid_social' if data['channel'] == 'meta' else 'organic_social')
+    query.update({'utm_source': [data['channel']], 'utm_medium': [medium],
+                  'utm_campaign': [str(data['campaign'])], 'utm_content': [str(data['ad'])], 'pilot_ref': [ref]})
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query, doseq=True), parsed.fragment))
+
+
 def initialize(db):
     db.executescript('''
         CREATE TABLE IF NOT EXISTS pilot_unit_costs (
@@ -89,6 +114,8 @@ def initialize(db):
           order_hash TEXT PRIMARY KEY, fulfillment TEXT NOT NULL, fees TEXT NOT NULL,
           returns_cost TEXT NOT NULL, other_cost TEXT NOT NULL, recorded_at TEXT NOT NULL);
     ''')
+    if 'channel' not in {row[1] for row in db.execute('PRAGMA table_info(pilot_order_economics)')}:
+        db.execute("ALTER TABLE pilot_order_economics ADD COLUMN channel TEXT NOT NULL DEFAULT 'meta'")
 
 
 def financial_fingerprint(payload):
@@ -130,6 +157,8 @@ def record_paid_order(db, *, topic, payload, order_hash, blocked, env, now):
         ref = decode_ref(params['pilot_ref'][0], secret=env.get('PILOT_ATTRIBUTION_SECRET') or env.get('PILOT_ADMIN_KEY', ''), at=at)
         if not ref or params.get('utm_campaign') != [ref['campaign']] or params.get('utm_content') != [ref['ad']]:
             return
+        if ref['channel'] != 'meta' and params.get('utm_source') != [ref['channel']]:
+            return
         invalid = db.execute('SELECT blocked FROM payment_evidence WHERE order_hash=?', (order_hash,)).fetchone()
         if invalid and invalid[0]:
             return
@@ -156,9 +185,9 @@ def record_paid_order(db, *, topic, payload, order_hash, blocked, env, now):
                 break
             if cogs is not None:
                 cogs += money(cost[0]) * quantity
-        inserted = db.execute('INSERT OR IGNORE INTO pilot_order_economics VALUES (?,?,?,?,?,?,?,0)',
+        inserted = db.execute('INSERT OR IGNORE INTO pilot_order_economics (order_hash,campaign,ad,experiment,paid_at,net_revenue,cogs,blocked,channel) VALUES (?,?,?,?,?,?,?,0,?)',
                    (order_hash, ref['campaign'], ref['ad'], ref['experiment'], at.isoformat(), revenue,
-                    str(cogs) if cogs is not None else None)).rowcount
+                    str(cogs) if cogs is not None else None, ref['channel'])).rowcount
         fingerprint = financial_fingerprint(payload)
         if inserted and fingerprint:
             db.execute('INSERT OR IGNORE INTO pilot_order_fingerprints VALUES (?,?)', (order_hash, fingerprint))
@@ -166,17 +195,19 @@ def record_paid_order(db, *, topic, payload, order_hash, blocked, env, now):
         return
 
 
-def economics_summary(store, campaign, spend_eur=0):
+def economics_summary(store, campaign, spend_eur=0, *, channel='meta'):
+    if channel not in CHANNELS:
+        raise ValueError('unsupported attribution channel')
     with closing(store.connect()) as db:
         rows = db.execute('SELECT o.net_revenue,o.cogs,o.blocked,e.fulfillment,e.fees,e.returns_cost,e.other_cost '
                           'FROM pilot_order_economics o LEFT JOIN pilot_order_expenses e ON e.order_hash=o.order_hash '
-                          'WHERE o.campaign=?', (campaign,)).fetchall()
+                          'WHERE o.campaign=? AND o.channel=?', (campaign, channel)).fetchall()
         costs = db.execute('SELECT count(*) FROM pilot_unit_costs').fetchone()[0]
     active = [row for row in rows if not row[2]]
     complete = bool(active) and len(active) == len(rows) and all(all(value is not None for value in (row[0], row[1], *row[3:])) for row in active)
     contribution = (sum((Decimal(row[0]) - Decimal(row[1]) - sum(Decimal(value) for value in row[3:]) for row in active), Decimal('0'))
                     - money(spend_eur)) if complete and spend_eur is not None else None
-    return {'campaign_id': campaign, 'signed_url_tagged_paid_orders': len(active),
+    return {'channel': channel, 'campaign_id': campaign, 'signed_url_tagged_paid_orders': len(active),
             'refund_or_cancelled_orders': len(rows) - len(active), 'unit_cost_variants': costs,
             'missing_unit_cost_orders': sum(row[1] is None for row in active),
             'missing_expense_orders': sum(row[3] is None for row in active),

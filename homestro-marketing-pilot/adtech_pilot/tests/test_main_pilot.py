@@ -29,6 +29,26 @@ class MainPilotTests(unittest.TestCase):
 
         return asyncio.run(run())
 
+    def test_attribution_link_and_readiness_require_admin_and_never_enable_spend(self):
+        from unittest.mock import patch
+        headers = {'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}
+        for path in ('/pilot/attribution', '/pilot/search/readiness'):
+            self.assertEqual(self.request('GET', path).status_code, 401)
+        with patch.dict(os.environ, {'GOOGLE_ADS_CUSTOMER_ID': '', 'MICROSOFT_ADS_ACCOUNT_ID': ''}):
+            result = self.request('GET', '/pilot/search/readiness', headers=headers).json()
+        self.assertFalse(result['paid_activation_authorized'])
+        self.assertIn('GOOGLE_ADS_CUSTOMER_ID', result['channels']['google']['missing_settings'])
+        body = {'channel': 'google', 'campaign_id': '12345', 'content_id': '23456',
+                'experiment': 'a' * 24, 'url': 'https://homestro.de/products/test?variant=123'}
+        self.assertEqual(self.request('POST', '/pilot/attribution/link', json=body).status_code, 401)
+        response = self.request('POST', '/pilot/attribution/link', json=body, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('utm_source=google', response.json()['url'])
+        self.assertIn('variant=123', response.json()['url'])
+        self.assertEqual(response.json()['authorized_spend_eur'], 0)
+        for url in ('https://evil.example/products/test', 'https://user@homestro.de/products/test', 'https://homestro.de:444/products/test'):
+            self.assertEqual(self.request('POST', '/pilot/attribution/link', json={**body, 'url': url}, headers=headers).status_code, 422)
+
     def test_admin_key_required_for_feed_and_metrics(self):
         response = self.request(
             "POST",

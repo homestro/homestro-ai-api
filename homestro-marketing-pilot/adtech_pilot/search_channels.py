@@ -112,3 +112,23 @@ async def read_microsoft(*, env=None, client=None):
     finally:
         if own:
             await client.aclose()
+
+
+def connection_requirements(*, env=None):
+    """Names-only readiness. Merchant credentials do not grant Ads API access."""
+    env = os.environ if env is None else env
+    google = ['GOOGLE_ADS_CUSTOMER_ID', 'GOOGLE_ADS_DEVELOPER_TOKEN']
+    if not env.get('GOOGLE_ADS_ACCESS_TOKEN'):
+        google += ['GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN']
+    microsoft = ['MICROSOFT_ADS_ACCOUNT_ID', 'MICROSOFT_ADS_CUSTOMER_ID',
+                 'MICROSOFT_ADS_DEVELOPER_TOKEN', 'MICROSOFT_ADS_ACCESS_TOKEN']
+    return {'channels': {name: {
+        'missing_settings': [key for key in keys if not env.get(key)],
+        'credentials_present': all(bool(env.get(key)) for key in keys),
+        'live_connection_verified': False,
+        'capabilities': capabilities,
+    } for name, keys, capabilities in (
+        ('google', google, ['inventory_read', 'metrics_read', 'validate_only_campaign_bundle']),
+        ('microsoft', microsoft, ['inventory_read', 'offline_campaign_templates']))},
+        'campaign_write_transport_complete': False, 'paid_activation_authorized': False,
+        'authorized_spend_eur': 0, 'merchant_credentials_are_not_ads_credentials': True}
