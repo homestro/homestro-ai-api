@@ -176,7 +176,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const route=handler=>async(req,res)=>{try{await handler(req,res);}catch(e){res.status(400).json({error:codeOf(e)});}};
     app.get('/api/marketing/v2/catalog-brain',apiKeyMiddleware||auth,route(async(req,res)=>{
       if(!catalogBrain)return res.status(503).json({error:'CATALOG_BRAIN_NOT_CONFIGURED'});
-      res.json(await catalogBrain.report());
+      res.json(await catalogBrain.report({after:req.query.after??null}));
     }));
     app.post('/api/marketing/v2/catalog-brain/run',apiKeyMiddleware||auth,route(async(req,res)=>{
       if(!catalogBrain)return res.status(503).json({error:'CATALOG_BRAIN_NOT_CONFIGURED'});

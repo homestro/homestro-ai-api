@@ -89,3 +89,65 @@ test('brain report reads current native queues and excludes receipts from older 
   assert.equal(queries.filter(q=>q.sql.includes("payload->>'productRevision'")).length,2);
   assert.equal(result.paidGenerationAuthorized,false);
 });
+
+test('catalog report paginates every product with stable cursors and page-local receipt reads',async()=>{
+  const rows=Array.from({length:239},(_,i)=>{
+    const p=product(String(i+1).padStart(4,'0'));
+    return {product_id:p.id,decision:catalogDecision(p),state:'prepared',outcome:{}};
+  });
+  const queries=[],receiptBatches=[];
+  const pool={query:async(sql,args=[])=>{
+    queries.push({sql,args});
+    if(sql.includes('SELECT state,count'))return {rows:[{state:'prepared',count:rows.length}]};
+    if(sql.includes('SELECT product_id,decision,state,outcome')){
+      assert.match(sql,/ORDER BY product_id ASC LIMIT 101/);
+      assert.match(sql,/product_id>\$1/);assert.equal(args.length,1);
+      return {rows:rows.filter(r=>args[0]===null||r.product_id>args[0]).slice(0,101)};
+    }
+    if(sql.includes('to_regclass'))return {rows:[{present:null}]};
+    if(sql.includes("payload->>'productRevision'")){
+      assert.ok(args[0].length<=100);receiptBatches.push([...args[0]]);
+      return {rows:args[0].map(id=>({product_id:id,revision:rows.find(r=>r.product_id===id).decision.revision,
+        channel:'facebook',status:'approved',count:1}))};
+    }
+    throw Error(sql);
+  }};
+  const brain=new CatalogBrain({pool,clock:()=>now,processProduct:async()=>assert.fail('read only')});
+  const seen=[];let after=null;
+  for(let page=0;page<3;page++){
+    const result=await brain.report({after});
+    assert.equal(result.counts[0].count,239);
+    assert.equal(result.products.length,page<2?100:39);
+    assert.equal(result.pageInfo.hasNextPage,page<2);
+    assert.equal(result.pageInfo.endCursor,result.products.at(-1).product_id);
+    assert.ok(result.products.every(p=>p.currentReceipts[0].status==='approved'));
+    assert.deepEqual(receiptBatches[page],result.products.map(p=>p.product_id));
+    seen.push(...result.products.map(p=>p.product_id));after=result.pageInfo.endCursor;
+  }
+  assert.equal(new Set(seen).size,239);assert.deepEqual(seen,rows.map(r=>r.product_id));
+  assert.equal(seen.at(-1),product('0239').id);
+  const empty=await brain.report({after});
+  assert.deepEqual(empty.products,[]);assert.deepEqual(empty.pageInfo,{hasNextPage:false,endCursor:null});
+  assert.equal(receiptBatches.length,3);
+  assert.ok(queries.every(q=>!/^\s*(?:INSERT|UPDATE|DELETE|CREATE)/i.test(q.sql)));
+});
+
+test('catalog report rejects malformed cursors before any query and binds accepted cursors as SQL values',async()=>{
+  let calls=0;
+  const rejected=new CatalogBrain({pool:{query:async()=>{calls++;assert.fail('invalid cursor queried database');}}});
+  for(const after of ['',false,1,[],{},'a'.repeat(257),'bad\u0000cursor','bad\ncursor']){
+    await assert.rejects(rejected.report({after}),{code:'INVALID_CATALOG_CURSOR'});
+  }
+  assert.equal(calls,0);
+  const after="gid://shopify/Product/1' OR true; --",queries=[];
+  const brain=new CatalogBrain({pool:{query:async(sql,args=[])=>{
+    queries.push({sql,args});
+    if(sql.includes('to_regclass'))return {rows:[{present:null}]};
+    return {rows:[]};
+  }}});
+  const result=await brain.report({after});
+  assert.deepEqual(result.products,[]);
+  const page=queries.find(q=>q.sql.includes('LIMIT 101'));
+  assert.deepEqual(page.args,[after]);assert.ok(!page.sql.includes(after));
+  assert.equal(result.pageInfo.hasNextPage,false);
+});

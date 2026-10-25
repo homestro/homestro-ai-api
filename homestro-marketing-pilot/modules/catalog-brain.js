@@ -1,4 +1,4 @@
-import {codeOf,log,productURL} from './core.js';
+import {codeOf,fail,log,productURL} from './core.js';
 import {extractMedia} from './media.js';
 
 const sourceMedia=p=>extractMedia(Array.isArray(p.media)?p.media.filter(n=>n&&typeof n==='object'):[]);
@@ -130,15 +130,18 @@ export class CatalogBrain{
       client?.release();this.busy=false;
     }
   }
-  async report(){
+  async report({after=null}={}){
+    if(after!==null&&(typeof after!=='string'||after.length<1||after.length>256||/[\u0000-\u001f\u007f]/.test(after)))fail('INVALID_CATALOG_CURSOR');
     const counts=(await this.pool.query('SELECT state,count(*)::int AS count FROM marketing_catalog_brain GROUP BY state ORDER BY state')).rows;
-    const rows=(await this.pool.query(`SELECT product_id,decision,state,outcome,last_attempt_at,next_attempt_at
-      FROM marketing_catalog_brain ORDER BY priority DESC,product_id LIMIT 100`)).rows;
+    const page=(await this.pool.query(`SELECT product_id,decision,state,outcome,last_attempt_at,next_attempt_at
+      FROM marketing_catalog_brain WHERE ($1::text IS NULL OR product_id>$1)
+      ORDER BY product_id ASC LIMIT 101`,[after])).rows;
+    const rows=page.slice(0,100),pageInfo={hasNextPage:page.length>100,endCursor:rows.at(-1)?.product_id||null};
     // Current queue readback, bound to the exact source revision; older posts are not evidence for a new creative.
     const ids=rows.map(r=>r.product_id),receipts=[];
     const tables=['marketing_posts'];
     if((await this.pool.query("SELECT to_regclass('marketing_social_posts') AS present")).rows[0]?.present)tables.push('marketing_social_posts');
-    for(const table of tables){
+    for(const table of ids.length?tables:[]){
       const found=(await this.pool.query(`SELECT product_id,payload->>'productRevision' AS revision,
         channel,status,count(*)::int AS count FROM ${table} WHERE product_id=ANY($1::text[])
         GROUP BY product_id,payload->>'productRevision',channel,status`,[ids])).rows;
@@ -146,7 +149,7 @@ export class CatalogBrain{
     }
     const products=rows.map(r=>({...r,currentReceipts:receipts.filter(x=>x.product_id===r.product_id&&x.revision===r.decision?.revision)
       .map(({channel,status,count})=>({channel,status,count}))}));
-    return {generatedAt:this.clock().toISOString(),enabled:this.enabled,publicationAutoApprovalEnabled:this.autoApprovalEnabled,counts,products,adSpendEUR:0,paidGenerationAuthorized:false,
+    return {generatedAt:this.clock().toISOString(),enabled:this.enabled,publicationAutoApprovalEnabled:this.autoApprovalEnabled,counts,products,pageInfo,adSpendEUR:0,paidGenerationAuthorized:false,
       note:'Prepared or queued is distinct from published; motion generation requires an approved price.'};
   }
 }
