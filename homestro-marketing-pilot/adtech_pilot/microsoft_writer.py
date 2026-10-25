@@ -14,6 +14,12 @@ from datetime import UTC, datetime
 import httpx
 
 from .microsoft_auth import access_token, missing_auth
+from .microsoft_targeting import (
+    SETTING,
+    country_locations,
+    targeting_readback,
+    targeting_request,
+)
 from .search_campaigns import microsoft_request_templates, verify_draft
 from .search_channels import _bounded_json
 
@@ -50,6 +56,9 @@ class MicrosoftPausedWriter:
         missing = [key for key in keys if not env.get(key)] + missing_auth(env)
         if missing:
             return {'status': 'not_configured', 'missing_settings': missing, 'writes_performed': False}
+        locations = country_locations(env)
+        if locations is None:
+            return {'status': 'not_configured', 'missing_settings': [SETTING], 'writes_performed': False}
         account, customer = env[keys[0]], env[keys[1]]
         if any(not re.fullmatch(r'\d{1,20}', value) for value in (account, customer)):
             raise ValueError('MICROSOFT_ACCOUNT_INVALID')
@@ -90,10 +99,13 @@ class MicrosoftPausedWriter:
             if not self.save(identity, state, reserve=True):
                 return {'status': 'hold', 'reason': 'EXISTING_WRITE_INTENT', 'writes_performed': False}
             remote = {}
-            steps = [('Campaigns', 'CampaignIds', 1), ('AdGroups', 'AdGroupIds', 1),
+            steps = [('Campaigns', 'CampaignIds', 1), ('CampaignCriterions', 'CampaignCriterionIds', 3),
+                     ('AdGroups', 'AdGroupIds', 1),
                      ('Ads', 'AdIds', 1), ('Keywords', 'KeywordIds', len(draft['keywords']))]
             for index, (endpoint, field, count) in enumerate(steps):
-                body = templates['requests'][index]['body']
+                template_index = index if index == 0 else index - 1
+                body = (targeting_request(remote['Campaigns'][0], locations) if endpoint == 'CampaignCriterions'
+                        else templates['requests'][template_index]['body'])
                 def bind(value):
                     if isinstance(value, dict):
                         return {key: bind(item) for key, item in value.items()}
@@ -106,7 +118,7 @@ class MicrosoftPausedWriter:
                     return value
                 body = bind(body)
                 entities = body[endpoint]
-                if not entities or any(row.get('Status') != 'Paused' for row in entities):
+                if not entities or endpoint != 'CampaignCriterions' and any(row.get('Status') != 'Paused' for row in entities):
                     raise ValueError('MICROSOFT_PAUSED_ENTITIES_REQUIRED')
                 state['steps'][endpoint] = {'state': 'intent'}
                 self.save(identity, state)
@@ -128,6 +140,11 @@ class MicrosoftPausedWriter:
             self.save(identity, state)
             rows = [row for row in await inventory() if str(row.get('Id')) == state['campaign_id']]
             if len(rows) == 1 and rows[0].get('Status') == 'Paused' and rows[0].get('Name') == draft['campaign_name']:
+                state['targeting_readback'] = await targeting_readback(client, headers=headers,
+                    campaign_id=state['campaign_id'], locations=locations, campaign=rows[0], ad_group_id=remote['AdGroups'][0])
+                state['activation_blockers'] = ['COUNTRY_LOCATION_MAPPING_REVIEW_REQUIRED',
+                    'PURCHASE_VERIFICATION_REQUIRED',
+                    'CHANNEL_SPEND_AUTHORIZATION_REQUIRED']
                 state['status'] = 'campaign_paused_confirmed'
                 self.save(identity, state)
             return {**state, 'writes_performed': True, 'full_ad_delivery_verified': False}

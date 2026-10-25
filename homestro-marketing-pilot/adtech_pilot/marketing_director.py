@@ -20,8 +20,8 @@ OWNERS = {'meta_experiment': 'existing_meta_brain', 'seo_geo': 'existing_seo_wri
           'social_content': 'existing_organic_publisher', 'landing_content': 'existing_seo_guides',
           'email_sequence': 'email_delivery', 'google_search': 'google_ads',
           'bing_search': 'microsoft_ads', 'media_review': 'existing_media_review'}
-BLOCKERS = {'google_search': ['GOOGLE_ADS_RUNTIME_ADAPTER_AND_ACCOUNT', 'ADDITIONAL_CHANNEL_SPEND_NOT_AUTHORIZED'],
-            'bing_search': ['MICROSOFT_ADS_RUNTIME_ADAPTER_AND_ACCOUNT', 'ADDITIONAL_CHANNEL_SPEND_NOT_AUTHORIZED'],
+BLOCKERS = {'google_search': ['GOOGLE_ADS_ACCOUNT_CONNECTION_UNVERIFIED', 'ADDITIONAL_CHANNEL_SPEND_NOT_AUTHORIZED'],
+            'bing_search': ['MICROSOFT_ADS_ACCOUNT_CONNECTION_UNVERIFIED', 'ADDITIONAL_CHANNEL_SPEND_NOT_AUTHORIZED'],
             'email_sequence': ['RECIPIENT_CONSENT_SMTP_CONFIGURATION_AND_EXPLICIT_SEND_AUTHORIZATION'],
             'landing_content': ['EXISTING_SEO_GUIDE_CONSUMER_RECEIPT'],
             'social_content': ['EXISTING_ORGANIC_CONSUMER_RECEIPT'],
@@ -106,6 +106,22 @@ class MarketingDirector:
         cognitive = evidence.get('cognitive') or {}
         preferred = (cognitive.get('decision') or {}).get('editorial_product_priority', [])
         selected.sort(key=lambda item: (preferred.index(str(item[0]['id'])) if str(item[0]['id']) in preferred else len(preferred)))
+        catalog = evidence.get('catalog_work') or {}
+        consumers = {}
+        try:
+            checked = datetime.fromisoformat(str(catalog.get('generated_at', '')).replace('Z', '+00:00'))
+            fresh_catalog = (catalog.get('status') == 'observed' and catalog.get('enabled') is True
+                             and checked.tzinfo is not None and -60 <= (now - checked).total_seconds() <= 900)
+        except (ValueError, TypeError):
+            fresh_catalog = False
+        if fresh_catalog:
+            for item in catalog.get('products', [])[:100]:
+                try:
+                    path = canonical(item['source_url'])
+                    if item.get('eligible') is True and item.get('revision') and item.get('product_id'):
+                        consumers[path] = item
+                except (ValueError, TypeError, KeyError):
+                    continue
         at = now.isoformat()
         expires = (now + timedelta(hours=6)).isoformat()
         created, refreshed = 0, 0
@@ -117,18 +133,42 @@ class MarketingDirector:
                 for kind, content in pack.items():
                     key = digest(['Homestro', path, kind, revision])
                     blockers = list(BLOCKERS[kind])
+                    receipt = None
+                    if kind in {'google_search', 'bing_search'}:
+                        channel = 'google' if kind == 'google_search' else 'microsoft'
+                        if (evidence.get('search_channels') or {}).get(channel, {}).get('status') == 'observed':
+                            blockers = [b for b in blockers if 'ACCOUNT_CONNECTION_UNVERIFIED' not in b]
+                    if kind == 'social_content' and path in consumers:
+                        consumer = consumers[path]
+                        rows = consumer.get('receipts') or []
+                        if any(row.get('status') in {'draft_queued', 'approved', 'publishing', 'remote_pending', 'published'}
+                               and type(row.get('count')) is int and row['count'] > 0 for row in rows):
+                            receipt = {'observed_at': at, 'source_product_id': consumer['product_id'],
+                                'source_revision': consumer['revision'], 'source_url': consumer['source_url'],
+                                'queues': rows, 'evidence_level': 'exact_publisher_source_revision_database_readback',
+                                'platform_visibility_independently_verified': False,
+                                'feed_revision_equivalence_verified': False, 'fresh': True}
+                            blockers = []
                     claim = evidence.get('claim') or {}
                     if kind == 'meta_experiment':
                         if not claim.get('campaign_id'):
                             blockers.append('EXISTING_MANAGED_CAMPAIGN_REQUIRED')
                         if str(claim.get('status', '')).startswith('STOPPED_'):
                             blockers.append('DURABLE_CAMPAIGN_STOP')
-                    state = 'blocked' if blockers else 'managed_by_existing_consumer'
+                    state = ('consumer_evidence_observed' if receipt else
+                             'blocked' if blockers else 'managed_by_existing_consumer')
+                    if receipt is None:
+                        saved = db.execute('SELECT payload FROM pilot_marketing_work WHERE id=?', (key,)).fetchone()
+                        if saved:
+                            historical = json.loads(saved[0]).get('receipt')
+                            if historical:
+                                receipt = {**historical, 'fresh': False}
+
                     priority = 70 if str(raw['id']) in preferred else 40 if kind == 'seo_geo' else 20
                     payload = {'brand': 'Homestro', 'source_product_id': str(raw['id']), 'source_url': raw['link'],
                         'brief_version': BRIEF['version'], 'brief_hash': BRIEF_HASH, 'owner': OWNERS[kind],
                         'blockers': blockers, 'content': content, 'publication_confirmed': False,
-                        'receipt': None, 'paid_generation_performed': False,
+                        'receipt': receipt, 'paid_generation_performed': False,
                         'dispatch': 'existing_consumer_only_no_external_write'}
                     inserted = db.execute('INSERT OR IGNORE INTO pilot_marketing_work VALUES (?,?,?,?,?,?,?,?,?,?)',
                         (key, 'Homestro', path, kind, revision, state, priority,
@@ -163,9 +203,10 @@ class MarketingDirector:
                 'budget_increase_authorized': False, 'full_vendor_parity_verified': False,
                 'queue_is_not_publication': True, 'email_send_enabled': False,
                 'observed_organic_publisher': evidence.get('organic', {'status': 'not_observed'}),
+                'catalog_consumer_evidence': {'fresh': fresh_catalog, 'matched_product_count': len(consumers)},
                 'search_channel_observations': evidence.get('search_channels', {}),
                 'cognitive_strategy': cognitive,
-                'integration_dependencies': sorted({b for values in BLOCKERS.values() for b in values})}
+                'integration_dependencies': sorted({b for row in db.execute("SELECT payload FROM pilot_marketing_work WHERE state<>'superseded'").fetchall() for b in json.loads(row[0]).get('blockers', [])})}
             db.execute('INSERT INTO pilot_marketing_strategy VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
                        (json.dumps(strategy, ensure_ascii=False),))
         return strategy

@@ -130,9 +130,10 @@ def connection_requirements(*, env=None):
         'missing_settings': [key for key in keys if not env.get(key)],
         'credentials_present': all(bool(env.get(key)) for key in keys),
         'live_connection_verified': False,
+        'paused_creation_missing_settings': ([key for key in ['MICROSOFT_ADS_COUNTRY_LOCATION_IDS_JSON'] if not env.get(key)] if name == 'microsoft' else []),
         'capabilities': capabilities,
     } for name, keys, capabilities in (
         ('google', google, ['inventory_read', 'metrics_read', 'validate_only_campaign_bundle']),
-        ('microsoft', microsoft, ['inventory_read', 'persistent_performance_reports', 'offline_campaign_templates']))},
+        ('microsoft', microsoft, ['inventory_read', 'persistent_performance_reports', 'offline_campaign_templates', 'paused_campaign_creation', 'presence_targeting_write_and_readback']))},
         'campaign_write_transport_complete': False, 'stop_only_transport_implemented': True, 'google_paused_creation_transport_implemented': True, 'microsoft_paused_creation_transport_implemented': True, 'paid_activation_authorized': False,
         'authorized_spend_eur': 0, 'merchant_credentials_are_not_ads_credentials': True}

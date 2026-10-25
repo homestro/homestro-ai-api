@@ -70,3 +70,21 @@ class CatalogBrainBridgeTests(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
                 result = await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test'}, client=client)
             self.assertEqual(result['status'], 'unavailable')
+
+    async def test_revision_bound_receipts_are_sanitized_and_unverified_counts_rejected(self):
+        from adtech_pilot.organic_bridge import read_catalog_brain
+        product = {'product_id': 'gid://shopify/Product/123', 'state': 'prepared',
+            'decision': {'productId': 'gid://shopify/Product/123', 'revision': 'revision-2', 'eligible': True,
+                'creativeBrief': {'sourceProductURL': 'https://homestro.de/products/box'}},
+            'currentReceipts': [{'channel': 'facebook', 'status': 'published', 'count': 1}],
+            'outcome': {'untrusted_secret': 'must-not-forward'}}
+        body = {'generatedAt': datetime.now(UTC).isoformat(), 'enabled': True,
+                'counts': [{'state': 'prepared', 'count': 1}], 'products': [product]}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body))) as client:
+            result = await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test'}, client=client)
+        self.assertEqual(result['products'][0]['revision'], 'revision-2')
+        self.assertFalse(result['products'][0]['publication_confirmed'])
+        self.assertNotIn('must-not-forward', str(result))
+        product['currentReceipts'][0]['count'] = True
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body))) as client:
+            self.assertEqual((await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test'}, client=client))['status'], 'unavailable')

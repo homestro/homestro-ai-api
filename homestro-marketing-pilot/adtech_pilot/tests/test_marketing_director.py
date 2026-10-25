@@ -76,3 +76,41 @@ class DirectorTests(unittest.TestCase):
             'link': 'https://homestro.de/products/box?variant=124'}], self.evidence, now=self.now)
         self.assertEqual(result['distinct_eligible_products'], 1)
         self.assertEqual(result['new_tasks'], 7)
+
+    def test_exact_consumer_source_receipt_advances_social_work_and_survives_outage_as_history(self):
+        self.evidence['catalog_work'] = {'status': 'observed', 'enabled': True, 'generated_at': self.now.isoformat(),
+            'products': [{'product_id': 'gid://shopify/Product/999', 'revision': 'source-v2', 'eligible': True,
+                'source_url': self.product['link'], 'receipts': [{'channel': 'instagram', 'status': 'approved', 'count': 1}]}]}
+        result = self.director.reconcile([self.product], self.evidence, now=self.now)
+        task = next(t for t in self.director.report(now=self.now)['tasks'] if t['kind'] == 'social_content')
+        self.assertEqual(task['state'], 'consumer_evidence_observed')
+        self.assertEqual(task['receipt']['source_revision'], 'source-v2')
+        self.assertTrue(task['receipt']['fresh'])
+        self.assertFalse(task['publication_confirmed'])
+        self.assertNotIn('EXISTING_ORGANIC_CONSUMER_RECEIPT', result['integration_dependencies'])
+        self.evidence['catalog_work'] = {'status': 'unavailable'}
+        self.director.reconcile([self.product], self.evidence, now=self.now + timedelta(minutes=5))
+        task = next(t for t in self.director.report(now=self.now)['tasks'] if t['kind'] == 'social_content')
+        self.assertEqual(task['state'], 'blocked')
+        self.assertEqual(task['receipt']['source_revision'], 'source-v2')
+        self.assertFalse(task['receipt']['fresh'])
+
+    def test_aggregate_or_stale_or_other_product_cannot_resolve_social_dependencies(self):
+        for patch in ({'products': []}, {'generated_at': (self.now-timedelta(hours=2)).isoformat()},
+                      {'products': [{'source_url': 'https://homestro.de/products/other', 'eligible': True,
+                          'revision': 'r', 'product_id': 'gid://shopify/Product/2',
+                          'receipts': [{'channel': 'instagram', 'status': 'published', 'count': 50}]}]}):
+            self.evidence['catalog_work'] = {'status': 'observed', 'enabled': True, 'generated_at': self.now.isoformat(),
+                'catalog_records': 300, 'counts': [{'state': 'prepared', 'count': 300}], **patch}
+            self.director.reconcile([self.product], self.evidence, now=self.now)
+            task = next(t for t in self.director.report(now=self.now)['tasks'] if t['kind'] == 'social_content')
+            self.assertEqual(task['state'], 'blocked')
+            self.assertIsNone(task['receipt'])
+
+    def test_implemented_search_adapters_are_not_falsely_reported_as_missing(self):
+        self.evidence['search_channels'] = {'google': {'status': 'observed'}, 'microsoft': {'status': 'not_configured'}}
+        self.director.reconcile([self.product], self.evidence, now=self.now)
+        tasks = {t['kind']: t for t in self.director.report(now=self.now)['tasks']}
+        self.assertEqual(tasks['google_search']['blockers'], ['ADDITIONAL_CHANNEL_SPEND_NOT_AUTHORIZED'])
+        self.assertIn('MICROSOFT_ADS_ACCOUNT_CONNECTION_UNVERIFIED', tasks['bing_search']['blockers'])
+        self.assertFalse(any('RUNTIME_ADAPTER' in b for task in tasks.values() for b in task['blockers']))

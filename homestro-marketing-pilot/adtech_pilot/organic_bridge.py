@@ -90,8 +90,39 @@ async def read_catalog_brain(*, env=None, client=None):
                 raise ValueError('INVALID_CATALOG_BRAIN_COUNTS')
             seen.add(row['state'])
             counts.append({'state': row['state'], 'count': row['count']})
+        products, paths = [], set()
+        source_rows = body.get('products', [])
+        if not isinstance(source_rows, list) or len(source_rows) > 100:
+            raise ValueError('CATALOG_PRODUCT_EVIDENCE_LIMIT')
+        for row in source_rows:
+            decision = row.get('decision') or {}
+            product_id, revision = row.get('product_id'), decision.get('revision')
+            target = urlsplit(decision.get('creativeBrief', {}).get('sourceProductURL') or '')
+            if (not isinstance(product_id, str) or not product_id.startswith('gid://shopify/Product/')
+                or product_id != decision.get('productId') or not isinstance(revision, str) or not 1 <= len(revision) <= 200
+                or target.scheme != 'https' or target.hostname not in {'homestro.de', 'www.homestro.de'}
+                or target.username or target.password or target.port not in (None, 443)
+                or not target.path.startswith('/products/') or type(decision.get('eligible')) is not bool):
+                continue
+            if target.path in paths:
+                raise ValueError('AMBIGUOUS_CATALOG_PRODUCT_EVIDENCE')
+            paths.add(target.path)
+            receipts = []
+            current = row.get('currentReceipts', [])
+            if not isinstance(current, list) or len(current) > 100:
+                raise ValueError('INVALID_PRODUCT_RECEIPTS')
+            for receipt in current:
+                if (receipt.get('channel') not in {'facebook', 'instagram', 'pinterest', 'tiktok'}
+                    or receipt.get('status') not in {'draft_queued', 'approved', 'publishing', 'remote_pending',
+                        'published', 'recovery_required', 'rejected', 'superseded'}
+                    or type(receipt.get('count')) is not int or not 0 <= receipt['count'] <= 100000):
+                    raise ValueError('INVALID_PRODUCT_RECEIPTS')
+                receipts.append({key: receipt[key] for key in ('channel', 'status', 'count')})
+            products.append({'product_id': product_id, 'revision': revision, 'source_url': target.geturl(),
+                'eligible': decision['eligible'], 'state': row.get('state'), 'receipts': receipts,
+                'last_attempt_at': row.get('last_attempt_at'), 'publication_confirmed': False})
         return {'status': 'observed', 'enabled': body['enabled'], 'generated_at': body['generatedAt'],
-            'catalog_records': sum(row['count'] for row in counts), 'counts': counts,
+            'catalog_records': sum(row['count'] for row in counts), 'counts': counts, 'products': products,
             'publication_auto_approval_enabled': body.get('publicationAutoApprovalEnabled') if type(body.get('publicationAutoApprovalEnabled')) is bool else None,
             'publication_confirmed': False, 'evidence_level': 'catalog_work_ledger_not_platform_publication',
             'paid_generation_authorized': False, 'writes_performed': False}
