@@ -27,7 +27,7 @@ from .micro_budget import (
     live_ads_dry_run,
     measurement_risk_accepted,
 )
-from .performance_loader import load_meta_performance
+from .performance_loader import load_meta_performance, performance_decision
 
 logger = logging.getLogger("uvicorn.error")
 Job = Callable[[], Awaitable[dict[str, Any]]]
@@ -572,6 +572,7 @@ class PilotDaemon:
                        if performance.get("status") == "collected"
                        else "NO_VERIFIED_CHANNEL_METRICS_LOADER"),
             "performance": performance,
+            "performance_decision": performance_decision(performance),
             "execution": "READ_ONLY_PREFLIGHT_ONLY",
             "optimizer_dry_run": True,
             "optimizer_budget_limit_eur": 0.0,

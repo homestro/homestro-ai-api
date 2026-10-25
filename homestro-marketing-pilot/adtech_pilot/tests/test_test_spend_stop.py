@@ -12,7 +12,7 @@ from adtech_pilot.purchase_guard import PurchaseWatchdog
 
 class TestSpendStop(unittest.TestCase):
     def test_total_spend_stop_persists_and_cannot_resume_after_restart(self):
-        async def run():
+        async def run(spend, first_reason, restart_reason):
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'audit.sqlite'
                 audit = PlanAuditStore(path)
@@ -38,14 +38,15 @@ class TestSpendStop(unittest.TestCase):
                     'META_AD_ACCOUNT_ID': 'act_12345'}
                 evidence = AsyncMock()
                 evidence.check.return_value = {'verified': False}
-                metrics = AsyncMock(return_value={'status': 'collected', 'metrics': [{'spend_eur': 35}]})
+                metrics = AsyncMock(return_value={'status': 'collected', 'metrics': [{'spend_eur': spend, 'reported_purchases': 0, 'reported_purchase_value_eur': 0}]})
                 with patch.object(MetaPublisher, '_configuration', return_value=()), patch(
                     'adtech_pilot.performance_loader.load_meta_performance', new=metrics):
                     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
                         first = await PurchaseWatchdog(audit, evidence=evidence, env=env, client=client).cycle()
                         second = await PurchaseWatchdog(PlanAuditStore(path), evidence=evidence, env=env, client=client).cycle()
-                self.assertEqual(first['reason'], 'TEST_TOTAL_BUDGET_REACHED')
-                self.assertEqual(second['reason'], 'TEST_TOTAL_BUDGET_REACHED')
+                self.assertEqual(first['reason'], first_reason)
+                self.assertEqual(second['reason'], restart_reason)
                 self.assertEqual(metrics.await_count, 1)
                 self.assertEqual(writes, [b'status=PAUSED', b'status=PAUSED'])
-        asyncio.run(run())
+        asyncio.run(run(35, 'TEST_TOTAL_BUDGET_REACHED', 'TEST_TOTAL_BUDGET_REACHED'))
+        asyncio.run(run(15.01, 'SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE', 'PERFORMANCE_STOP_LATCHED'))

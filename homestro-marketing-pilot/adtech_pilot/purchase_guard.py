@@ -246,8 +246,10 @@ class PurchaseWatchdog:
 
         try:
             claim = await self.audit.get_meta_micro_campaign_claim()
-            if (claim or {}).get("status") == "STOPPED_TEST_BUDGET":
-                return {**await pause(), "reason": "TEST_TOTAL_BUDGET_REACHED"}
+            if (claim or {}).get("status") in {"STOPPED_TEST_BUDGET", "STOPPED_PERFORMANCE"}:
+                reason = ("TEST_TOTAL_BUDGET_REACHED" if claim["status"] == "STOPPED_TEST_BUDGET"
+                          else "PERFORMANCE_STOP_LATCHED")
+                return {**await pause(), "reason": reason}
             # A failed purchase read must still pause the known campaign.
             if (requires_recent_purchase(self.env) and not evidence.get("verified")) or live_ads_dry_run(self.env) or self.env.get("ALLOW_MICRO_BUDGET") != "true":
                 return await pause()
@@ -287,16 +289,21 @@ class PurchaseWatchdog:
                                      ("daily_budget", "lifetime_budget", "status", "start_time", "end_time")},
                         "countries": row.get("targeting", {}).get("geo_locations", {}).get("countries", [])}
             if self.env.get("PILOT_LAUNCH_POLICY") == "bounded_acquisition_test":
-                from .performance_loader import load_meta_performance
+                from .performance_loader import (
+                    load_meta_performance,
+                    performance_decision,
+                )
 
                 performance = await load_meta_performance(self.audit, env=self.env, client=client)
                 if performance.get("status") != "collected":
                     return {**await pause(), "reason": "TEST_SPEND_NOT_READABLE"}
-                spend = sum(Decimal(str(item["spend_eur"])) for item in performance["metrics"])
-                if spend >= Decimal("35"):
-                    # Persist before pausing: a restart or fresh purchase cannot reopen this test.
-                    await self.audit.update_meta_micro_campaign(status="STOPPED_TEST_BUDGET", campaign_id=campaign)
-                    return {**await pause(), "reason": "TEST_TOTAL_BUDGET_REACHED", "reported_spend_eur": float(spend)}
+                decision = performance_decision(performance)
+                await self.audit.record("meta_performance_decision", decision)
+                if decision["action"] == "pause":
+                    status = ("STOPPED_TEST_BUDGET" if decision["reason"] == "TEST_TOTAL_BUDGET_REACHED"
+                              else "STOPPED_PERFORMANCE")
+                    await self.audit.update_meta_micro_campaign(status=status, campaign_id=campaign)
+                    return {**await pause(), "reason": decision["reason"], "decision": decision}
             readiness = await publisher.check_readiness()
             account_ready = readiness.get("account", {})
             if (readiness.get("status") != "checked" or not account_ready.get("pixel_access_verified")
