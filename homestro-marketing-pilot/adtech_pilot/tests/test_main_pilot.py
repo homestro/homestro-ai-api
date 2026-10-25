@@ -47,6 +47,14 @@ class MainPilotTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/webhooks/shopify/unknown", content=b"{}").status_code, 404)
         self.assertEqual(self.request("POST", "/webhooks/shopify/orders-paid", content=b"x" * 1_048_577).status_code, 413)
 
+    def test_brain_status_is_protected_and_does_not_enable_spend(self):
+        self.assertEqual(self.request("GET", "/pilot/brain").status_code, 401)
+        response = self.request("GET", "/pilot/brain", headers={
+            "X-Pilot-Admin-Key": "test-admin-key-with-at-least-32-characters"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["budget_increase_authorized"])
+        self.assertFalse(response.json()["full_autonomous_profit_optimization_verified"])
+
     def test_order_expense_api_requires_admin_actual_cost_confirmation_and_known_order(self):
         payload = {"order_hash": "a" * 64, "fulfillment_eur": "4.00", "payment_fees_eur": "1.00",
                    "returns_cost_eur": "0", "other_cost_eur": "0", "actual_costs_confirmed": True}

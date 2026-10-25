@@ -229,6 +229,14 @@ def create_app(
                 "fresh_purchase_window_minutes": 15, "watchdog_interval_seconds": 60,
                 "paid_generation_enabled": os.getenv("PILOT_CREATIVE_ENABLED", "false").lower() == "true"}
 
+    @app.get("/pilot/brain", dependencies=[Depends(require_admin)])
+    async def pilot_brain():
+        from .brain_status import operating_report
+
+        latest = await audit.latest_brain_evidence()
+        claim = await audit.get_meta_micro_campaign_claim()
+        return operating_report(latest, claim, daily_cap_eur=configured_daily_budget_limit_eur())
+
     @app.get("/pilot/economics", dependencies=[Depends(require_admin)])
     async def pilot_economics():
         from .order_economics import economics_summary

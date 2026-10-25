@@ -305,6 +305,7 @@ class PlanAuditStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS adtech_audit_created ON adtech_audit(created_at)"
             )
+            connection.execute("CREATE INDEX IF NOT EXISTS adtech_audit_kind_created ON adtech_audit(kind,created_at)")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS meta_micro_campaign_claim ("
                 "slot TEXT PRIMARY KEY, account_id TEXT NOT NULL, product_id TEXT NOT NULL, "
@@ -420,6 +421,30 @@ class PlanAuditStore:
 
         await asyncio.to_thread(write)
         return record_id
+
+    async def latest_brain_evidence(self) -> dict[str, Any]:
+        from .brain_status import KINDS
+
+        def read():
+            result = {}
+            with closing(self._connect()) as connection:
+                for kind in KINDS:
+                    row = connection.execute(
+                        "SELECT created_at,payload_json FROM adtech_audit WHERE kind=? ORDER BY created_at DESC LIMIT 1",
+                        (kind,)).fetchone()
+                    if row:
+                        result[kind] = {"created_at": row[0], "payload": json.loads(row[1])}
+                table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pilot_brain_memory'").fetchone()
+                claim = connection.execute("SELECT campaign_id FROM meta_micro_campaign_claim WHERE slot=?",
+                                           ("single_live_meta_campaign",)).fetchone()
+                if table and claim and claim[0]:
+                    row = connection.execute("SELECT payload FROM pilot_brain_memory WHERE campaign=?", (claim[0],)).fetchone()
+                    if row:
+                        state = json.loads(row[0])
+                        allowed = ("ad_id", "creative_id", "tracking_installed", "current_product_ids", "last_rotation_at", "inflight")
+                        result["brain_memory"] = {"payload": {key: state.get(key) for key in allowed}}
+            return result
+        return await asyncio.to_thread(read)
 
     async def list(self, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(limit, 200))

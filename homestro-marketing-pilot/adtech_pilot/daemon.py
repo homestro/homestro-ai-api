@@ -521,6 +521,7 @@ class PilotDaemon:
             trends = scan.get("matched_product_candidates", []) if scan.get("status") == "completed" else []
             brain_result = await AutonomousBrain(self.audit).cycle(candidates, trend_candidates=trends)
             await self.audit.record("autonomous_brain", brain_result)
+            logger.info("autonomous_brain %s", json.dumps(brain_result, separators=(",", ":")))
         await self.audit.record(
             "daemon_catalog_campaign_attempt",
             {
