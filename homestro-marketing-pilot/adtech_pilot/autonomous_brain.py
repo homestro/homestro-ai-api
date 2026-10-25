@@ -97,10 +97,11 @@ class BrainMemory:
     def finish(self, campaign, state, intent):
         counts = dict(state['counts'])
         for product_id in intent['product_ids']:
-            counts[product_id] = counts.get(product_id, 0) + 1
+            if not intent.get('tracking_only'):
+                counts[product_id] = counts.get(product_id, 0) + 1
         state = {**state, 'counts': counts, 'creative_id': intent['creative_id'], 'inflight': None,
                  'last_rotation_at': intent['planned_at'], 'baseline_spend_eur': intent['spend_eur'],
-                 'current_product_ids': intent['product_ids']}
+                 'current_product_ids': intent['product_ids'], 'tracking_installed': True}
         with closing(self.audit._connect()) as connection, connection:
             connection.execute('UPDATE pilot_brain_memory SET payload=? WHERE campaign=?', (json.dumps(state), campaign))
             connection.execute('UPDATE pilot_brain_intents SET payload=? WHERE intent=?',
@@ -167,7 +168,8 @@ class AutonomousBrain:
             performance = await load_meta_performance(self.audit, env=self.env, client=client)
             decision = performance_decision(performance)
             if decision['action'] == 'pause' or not performance.get('metrics'):
-                return {'status': 'hold', 'reason': decision['reason'], 'performance': decision}
+                return {'status': 'hold', 'reason': decision['reason'], 'performance': decision,
+                        'ad_effective_status': ad.get('effective_status')}
             spend = Decimal(str(performance['metrics'][0]['spend_eur']))
             state = await asyncio.to_thread(self.memory.state, campaign)
             if state is None:
@@ -185,7 +187,7 @@ class AutonomousBrain:
                 state = await asyncio.to_thread(self.memory.initialize, campaign, {
                     'creative_id': creative_id, 'ad_id': ad['id'], 'counts': dict.fromkeys(used, 1),
                     'last_rotation_at': now.isoformat(), 'baseline_spend_eur': float(spend), 'inflight': None,
-                    'current_product_ids': used})
+                    'current_product_ids': used, 'tracking_installed': False})
                 return {'status': 'memory_initialized', 'selected_product_ids': used, 'campaign_id': campaign}
             if state['ad_id'] != ad['id']:
                 return {'status': 'hold', 'reason': 'AD_ID_CHANGED_EXTERNALLY'}
@@ -203,16 +205,18 @@ class AutonomousBrain:
                     return {'status': 'hold', 'reason': 'EXTERNAL_CREATIVE_CHANGE'}
                 if ad.get('effective_status') != 'ACTIVE':
                     return {'status': 'hold', 'reason': 'AD_REVIEW_OR_DELIVERY_NOT_ACTIVE', 'effective_status': ad.get('effective_status')}
-                if (decision.get('reported_purchases', 0) >= 1
+                tracking_only = not state.get('tracking_installed', False)
+                if (not tracking_only and decision.get('reported_purchases', 0) >= 1
                         and (decision.get('reported_roas') or 0) >= 1.5):
                     return {'status': 'hold', 'reason': 'PRESERVE_CAMPAIGN_WITH_REPORTED_PURCHASES',
                             'performance': decision}
-                if now - timestamp(state['last_rotation_at']) < timedelta(hours=24):
+                if not tracking_only and now - timestamp(state['last_rotation_at']) < timedelta(hours=24):
                     return {'status': 'learning', 'reason': 'MINIMUM_24H_EXPERIMENT', 'next_eligible_at':
                             (timestamp(state['last_rotation_at']) + timedelta(hours=24)).isoformat()}
-                if spend - Decimal(str(state['baseline_spend_eur'])) < Decimal('2.50'):
+                if not tracking_only and spend - Decimal(str(state['baseline_spend_eur'])) < Decimal('2.50'):
                     return {'status': 'learning', 'reason': 'MINIMUM_2_50_EUR_EXPERIMENT_SPEND'}
-                batch = next_product_batch(products, state['counts'], trend_candidates=trend_candidates)
+                batch = ([p for p in products if str(p.get('id')) in state.get('current_product_ids', [])]
+                         if tracking_only else next_product_batch(products, state['counts'], trend_candidates=trend_candidates))
                 story, ids = website_story(batch, page)
                 messages = (
                     'Was passt zu deinem Alltag? Entdecke Produkte, Varianten und aktuelle Preise bei Homestro.',
@@ -220,9 +224,17 @@ class AutonomousBrain:
                     'Deine nächste Entdeckung bei Homestro: Produkte vergleichen und alle Details im Shop ansehen.',
                 )
                 story['link_data']['message'] = messages[sum(state['counts'].values()) % len(messages)]
-                if set(ids) == set(state.get('current_product_ids', [])):
+                if not tracking_only and set(ids) == set(state.get('current_product_ids', [])):
                     return {'status': 'hold', 'reason': 'NO_NEW_PRODUCT_BATCH'}
+                from .order_economics import tracked_story, tracking_ref
+
+                experiment = hashlib.sha256((campaign + ad['id'] + creative_id + now.isoformat()).encode()).hexdigest()[:24]
+                ref = tracking_ref(campaign, ad['id'], experiment,
+                                   secret=self.env.get('PILOT_ATTRIBUTION_SECRET') or self.env.get('PILOT_ADMIN_KEY', ''),
+                                   expires_at=timestamp(adset['end_time']), issued_at=now)
+                story = tracked_story(story, ref, campaign, ad['id'])
                 intent = await asyncio.to_thread(self.memory.reserve, campaign, state, {
+                    'tracking_only': tracking_only, 'experiment': experiment,
                     'product_ids': ids, 'story': story, 'planned_at': now.isoformat(), 'spend_eur': float(spend)})
                 if intent is None:
                     return {'status': 'hold', 'reason': 'ROTATION_ALREADY_RESERVED'}

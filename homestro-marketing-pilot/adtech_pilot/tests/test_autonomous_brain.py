@@ -36,7 +36,7 @@ class AutonomousBrainTests(unittest.TestCase):
         self.assertEqual(next_product_batch(items, {}, limit=1, trend_candidates=trends)[0]['id'], '2')
         self.assertNotEqual(next_product_batch(items, {'2': 1}, limit=1, trend_candidates=trends)[0]['id'], '2')
 
-    def scenario(self, failure=None, age=25, spend=3):
+    def scenario(self, failure=None, age=25, spend=3, tracking_installed=True):
         async def run():
             with tempfile.TemporaryDirectory() as directory:
                 audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
@@ -45,9 +45,9 @@ class AutonomousBrainTests(unittest.TestCase):
                 now = datetime.now(UTC)
                 memory = BrainMemory(audit)
                 memory.initialize('98765', {'ad_id': '34567', 'creative_id': '45678', 'inflight': None,
-                    'counts': {str(i): 1 for i in range(10)}, 'current_product_ids': [str(i) for i in range(10)],
+                    'tracking_installed': tracking_installed, 'counts': {str(i): 1 for i in range(10)}, 'current_product_ids': [str(i) for i in range(10)],
                     'last_rotation_at': (now - timedelta(hours=age)).isoformat(), 'baseline_spend_eur': 0})
-                env = {'ALLOW_MICRO_BUDGET': 'true', 'DRY_RUN': 'false', 'PILOT_AD_DRY_RUN': 'false',
+                env = {'PILOT_ADMIN_KEY': 'unit-test-signing-key-000000000000000000', 'ALLOW_MICRO_BUDGET': 'true', 'DRY_RUN': 'false', 'PILOT_AD_DRY_RUN': 'false',
                     'PILOT_AD_MAX_BUDGET_EUR': '5', 'META_ACCESS_TOKEN': 'secret', 'META_AD_ACCOUNT_ID': 'act_12345',
                     'META_PAGE_ID': '4444', 'META_PIXEL_ID': '5555', 'META_DSA_BENEFICIARY': 'Homestro',
                     'META_DSA_PAYOR': 'Homestro', 'META_BILLING_VERIFIED': 'true',
@@ -108,6 +108,16 @@ class AutonomousBrainTests(unittest.TestCase):
         self.assertEqual(len(attaches), 1)
         self.assertEqual(state['creative_id'], '56789')
         self.assertTrue(all(int(i) >= 10 for i in state['current_product_ids']))
+
+    def test_tracking_bootstrap_keeps_same_products_without_waiting_another_day(self):
+        first, _, creates, attaches, state = self.scenario(age=1, tracking_installed=False)
+        self.assertEqual(first['status'], 'rotation_confirmed')
+        self.assertEqual(set(state['current_product_ids']), {str(i) for i in range(10)})
+        self.assertEqual(state['counts'], {str(i): 1 for i in range(10)})
+        self.assertTrue(state['tracking_installed'])
+        self.assertEqual(len(attaches), 1)
+        story = json.loads(creates[0]['object_story_spec'][0])
+        self.assertIn('pilot_ref=', story['link_data']['link'])
 
     def test_lost_create_response_is_never_blindly_retried(self):
         first, second, creates, attaches, _ = self.scenario(failure='create')

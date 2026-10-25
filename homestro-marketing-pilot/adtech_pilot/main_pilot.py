@@ -6,9 +6,9 @@ import asyncio
 import base64
 import hmac
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.responses import JSONResponse
@@ -65,6 +65,16 @@ class CreativeRequest(BaseModel):
     product_image_b64: str = Field(min_length=80, max_length=8_000_000)
     logo_image_b64: str = Field(min_length=80, max_length=1_000_000)
     historical_winners: list[HistoricalWin] = Field(default_factory=list, max_length=10)
+
+
+class ActualOrderExpenses(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    order_hash: str = Field(pattern="^[a-f0-9]{64}$")
+    fulfillment_eur: str = Field(pattern=r"^[0-9]{1,8}(\.[0-9]{1,2})?$")
+    payment_fees_eur: str = Field(pattern=r"^[0-9]{1,8}(\.[0-9]{1,2})?$")
+    returns_cost_eur: str = Field(pattern=r"^[0-9]{1,8}(\.[0-9]{1,2})?$")
+    other_cost_eur: str = Field(pattern=r"^[0-9]{1,8}(\.[0-9]{1,2})?$")
+    actual_costs_confirmed: Literal[True]
 
 
 class OptimizationRequest(BaseModel):
@@ -218,6 +228,51 @@ def create_app(
                 "ad_mode": os.getenv("PILOT_AD_MODE", "catalog"),
                 "fresh_purchase_window_minutes": 15, "watchdog_interval_seconds": 60,
                 "paid_generation_enabled": os.getenv("PILOT_CREATIVE_ENABLED", "false").lower() == "true"}
+
+    @app.get("/pilot/economics", dependencies=[Depends(require_admin)])
+    async def pilot_economics():
+        from .order_economics import economics_summary
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+        from .performance_loader import load_meta_performance
+
+        claim = await audit.get_meta_micro_campaign_claim()
+        performance = await load_meta_performance(audit)
+        spend = (sum(row["spend_eur"] for row in performance.get("metrics", []))
+                 if performance.get("status") == "collected" else None)
+        return await asyncio.to_thread(economics_summary, PaymentWebhookStore(payment_database(os.environ)),
+                                       str((claim or {}).get("campaign_id") or ""), spend)
+
+    @app.get("/pilot/economics/orders", dependencies=[Depends(require_admin)])
+    async def pilot_order_cost_status():
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+
+        def read():
+            with closing(PaymentWebhookStore(payment_database(os.environ)).connect()) as db:
+                rows = db.execute("SELECT o.order_hash,o.campaign,o.experiment,o.paid_at,o.blocked,"
+                                  "o.cogs IS NULL,e.order_hash IS NULL FROM pilot_order_economics o "
+                                  "LEFT JOIN pilot_order_expenses e ON e.order_hash=o.order_hash "
+                                  "ORDER BY o.paid_at DESC LIMIT 100").fetchall()
+            return {"orders": [dict(zip(("order_hash", "campaign_id", "experiment", "paid_at", "invalidated",
+                                         "unit_cost_missing", "actual_expenses_missing"), row)) for row in rows]}
+        return await asyncio.to_thread(read)
+
+    @app.post("/pilot/economics/expenses", dependencies=[Depends(require_admin)])
+    async def actual_order_expenses(body: ActualOrderExpenses):
+        from datetime import UTC, datetime
+
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+
+        def write():
+            with closing(PaymentWebhookStore(payment_database(os.environ)).connect()) as db, db:
+                if not db.execute("SELECT 1 FROM pilot_order_economics WHERE order_hash=?", (body.order_hash,)).fetchone():
+                    raise HTTPException(404, "UNKNOWN_ATTRIBUTED_ORDER")
+                db.execute("INSERT INTO pilot_order_expenses VALUES (?,?,?,?,?,?) ON CONFLICT(order_hash) DO UPDATE SET "
+                           "fulfillment=excluded.fulfillment,fees=excluded.fees,returns_cost=excluded.returns_cost,"
+                           "other_cost=excluded.other_cost,recorded_at=excluded.recorded_at",
+                           (body.order_hash, body.fulfillment_eur, body.payment_fees_eur, body.returns_cost_eur,
+                            body.other_cost_eur, datetime.now(UTC).isoformat()))
+            return {"recorded": True, "budget_writes": False, "scale_authorized": False}
+        return await asyncio.to_thread(write)
 
     @app.middleware("http")
     async def request_size_limit(request: Request, call_next):

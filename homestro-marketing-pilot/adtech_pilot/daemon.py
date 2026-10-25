@@ -262,8 +262,16 @@ class PilotDaemon:
         await self.audit.record(
             "daemon_feed_diagnostics", report.model_dump(mode="json")
         )
+        from .order_economics import sync_unit_costs
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+
+        try:
+            async with asyncio.timeout(40):
+                unit_costs = await sync_unit_costs(PaymentWebhookStore(payment_database(os.environ)))
+        except TimeoutError:
+            unit_costs = {"status": "unavailable", "reason": "COST_SYNC_TIMEOUT"}
         return {
-            "status": "diagnosed",
+            "status": "diagnosed", "unit_costs": unit_costs,
             "source_format": report.source_format,
             "products_checked": len(report.products),
             "rejected_rows": report.rejected_rows,
@@ -589,9 +597,19 @@ class PilotDaemon:
             # This optimization pass is intentionally read-only and cannot publish.
             dry_run=True,
         )
+        from .order_economics import economics_summary
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+
+        claim = (await self.audit.get_meta_micro_campaign_claim()
+                 if hasattr(self.audit, "get_meta_micro_campaign_claim") else None)
+        ad_spend = (sum(float(row["spend_eur"]) for row in performance.get("metrics", []) if isinstance(row, dict))
+                    if performance.get("status") == "collected" else None)
+        economics = (await asyncio.to_thread(economics_summary,
+            PaymentWebhookStore(payment_database(os.environ)), str(claim.get("campaign_id") or ""), ad_spend)
+            if claim else {"status": "no_managed_campaign"})
         daily_budget_limit = configured_daily_budget_limit_eur()
         return {
-            "status": "blocked",
+            "status": "blocked", "order_economics": economics,
             "reason": ("ORDER_ATTRIBUTION_AND_LANDED_COST_REQUIRED"
                        if performance.get("status") == "collected"
                        else "NO_VERIFIED_CHANNEL_METRICS_LOADER"),

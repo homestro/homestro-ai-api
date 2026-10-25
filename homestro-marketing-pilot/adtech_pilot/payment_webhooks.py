@@ -51,6 +51,9 @@ class PaymentWebhookStore:
                     order_hash TEXT PRIMARY KEY, paid_at TEXT, blocked INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS payment_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """)
+            from .order_economics import initialize
+
+            initialize(db)
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=5)
@@ -59,7 +62,7 @@ class PaymentWebhookStore:
         return db
 
     def accept(self, *, topic: str, payload: dict[str, Any], body_hash: str,
-               shop: str, now: datetime) -> dict[str, Any]:
+               shop: str, now: datetime, env: Mapping[str, str] | None = None) -> dict[str, Any]:
         order_id = payload.get("order_id") if topic == "refunds/create" else payload.get("id")
         if not re.fullmatch(r"[1-9]\d{0,29}", str(order_id or "")):
             raise HTTPException(422, "ORDER_ID_REQUIRED")
@@ -98,6 +101,10 @@ class PaymentWebhookStore:
                            (order_hash, paid_at)).rowcount == 1
             elif topic == "orders/updated" and payload.get("financial_status") != "paid":
                 db.execute("UPDATE payment_evidence SET blocked=1 WHERE order_hash=?", (order_hash,))
+            from .order_economics import record_paid_order
+
+            record_paid_order(db, topic=topic, payload=payload, order_hash=order_hash,
+                              blocked=blocked, env=env or {}, now=now)
             db.execute("INSERT INTO payment_state VALUES ('last_authenticated_delivery',?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (now.isoformat(),))
         return {"accepted": True, "duplicate": False, "purchase_evidence_added": added}
@@ -145,5 +152,5 @@ async def receive_payment(*, raw: bytes, headers: Mapping[str, str], route: str,
     body_hash = hashlib.sha256(raw).hexdigest()
     def save():
         return PaymentWebhookStore(payment_database(env)).accept(topic=topic, payload=payload,
-                    body_hash=body_hash, shop=shop, now=now or datetime.now(UTC))
+                    body_hash=body_hash, shop=shop, now=now or datetime.now(UTC), env=env)
     return await asyncio.to_thread(save)

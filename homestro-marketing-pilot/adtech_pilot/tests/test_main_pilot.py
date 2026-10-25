@@ -47,6 +47,19 @@ class MainPilotTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/webhooks/shopify/unknown", content=b"{}").status_code, 404)
         self.assertEqual(self.request("POST", "/webhooks/shopify/orders-paid", content=b"x" * 1_048_577).status_code, 413)
 
+    def test_order_expense_api_requires_admin_actual_cost_confirmation_and_known_order(self):
+        payload = {"order_hash": "a" * 64, "fulfillment_eur": "4.00", "payment_fees_eur": "1.00",
+                   "returns_cost_eur": "0", "other_cost_eur": "0", "actual_costs_confirmed": True}
+        self.assertEqual(self.request("GET", "/pilot/economics/orders").status_code, 401)
+        self.assertEqual(self.request("POST", "/pilot/economics/expenses", json=payload).status_code, 401)
+        headers = {"X-Pilot-Admin-Key": "test-admin-key-with-at-least-32-characters"}
+        self.assertEqual(self.request("POST", "/pilot/economics/expenses", headers=headers,
+                                      json={**payload, "actual_costs_confirmed": False}).status_code, 422)
+        self.assertEqual(self.request("POST", "/pilot/economics/expenses", headers=headers,
+                                      json={**payload, "fulfillment_eur": "-1"}).status_code, 422)
+        self.assertEqual(self.request("POST", "/pilot/economics/expenses", headers=headers,
+                                      json=payload).status_code, 404)
+
     def test_trigger_requires_exact_secret_and_does_not_accept_admin_header(self):
         self.assertEqual(self.request("POST", "/trigger").status_code, 401)
         self.assertEqual(self.request("POST", "/trigger", headers={"X-Pilot-Token": "wrong"}).status_code, 401)

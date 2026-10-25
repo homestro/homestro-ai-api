@@ -298,6 +298,15 @@ class PurchaseWatchdog:
                 if performance.get("status") != "collected":
                     return {**await pause(), "reason": "TEST_SPEND_NOT_READABLE"}
                 decision = performance_decision(performance)
+                if decision.get("reason") == "SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE":
+                    from .order_economics import economics_summary
+                    from .payment_webhooks import PaymentWebhookStore, payment_database
+
+                    orders = await asyncio.to_thread(economics_summary,
+                        PaymentWebhookStore(payment_database(self.env)), campaign, decision.get("spend_eur"))
+                    if orders["signed_url_tagged_paid_orders"] > 0:
+                        decision = {**decision, "action": "hold", "reason": "SIGNED_TAGGED_PAID_ORDER_PRESENT",
+                                    "signed_url_tagged_paid_orders": orders["signed_url_tagged_paid_orders"]}
                 await self.audit.record("meta_performance_decision", decision)
                 if decision["action"] == "pause":
                     status = ("STOPPED_TEST_BUDGET" if decision["reason"] == "TEST_TOTAL_BUDGET_REACHED"
