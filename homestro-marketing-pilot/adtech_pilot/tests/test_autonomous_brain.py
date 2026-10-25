@@ -64,7 +64,7 @@ class AutonomousBrainTests(unittest.TestCase):
                         self.assertNotIn('status', values)
                         if path == 'act_12345/adcreatives':
                             creates.append(values)
-                            if failure == 'create':
+                            if failure in {'create', 'create_recover'}:
                                 raise httpx.ReadTimeout('lost create response', request=request)
                             return httpx.Response(200, json={'id': '56789'})
                         self.assertEqual(path, '34567')
@@ -73,6 +73,11 @@ class AutonomousBrainTests(unittest.TestCase):
                         if failure == 'attach' and len(attaches) == 1:
                             raise httpx.ReadTimeout('lost attach response', request=request)
                         return httpx.Response(200, json={'success': True})
+                    if path == 'act_12345/adcreatives':
+                        candidates = ([{'id': '56789', 'name': creates[0]['name'][0],
+                            'object_story_spec': json.loads(creates[0]['object_story_spec'][0])}]
+                            if failure == 'create_recover' else [])
+                        return httpx.Response(200, json={'data': candidates})
                     if path == '98765':
                         return httpx.Response(200, json={'id': '98765', 'account_id': '12345',
                             'name': 'Homestro Website Sales', 'objective': 'OUTCOME_SALES', 'status': 'ACTIVE'})
@@ -141,6 +146,13 @@ class AutonomousBrainTests(unittest.TestCase):
         self.assertEqual(second['reason'], 'CREATIVE_CREATE_UNCERTAIN_NO_RETRY')
         self.assertEqual(len(creates), 1)
         self.assertEqual(attaches, [])
+
+    def test_lost_create_response_can_recover_only_matching_existing_creative(self):
+        _, second, creates, attaches, state = self.scenario(failure='create_recover')
+        self.assertEqual(second['status'], 'rotation_confirmed')
+        self.assertEqual(state['creative_id'], '56789')
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(len(attaches), 1)
 
     def test_lost_attachment_response_reconciles_without_duplicate_creative(self):
         _, second, creates, attaches, state = self.scenario(failure='attach')

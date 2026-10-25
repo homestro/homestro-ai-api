@@ -193,7 +193,42 @@ class AutonomousBrain:
             intent = await asyncio.to_thread(self.memory.intent, state['inflight']) if state.get('inflight') else None
             if intent:
                 if not intent.get('creative_id'):
-                    return {'status': 'blocked', 'reason': 'CREATIVE_CREATE_UNCERTAIN_NO_RETRY', 'intent': intent['key']}
+                    stage = 'reconcile_creative'
+                    matches, cursor, seen = [], None, set()
+                    def links(story):
+                        data = story.get('link_data') or {}
+                        return sorted(str(item.get('link', '')) for item in [data, *data.get('child_attachments', [])])
+                    for _ in range(5):
+                        params = {'fields': 'id,name,object_story_spec', 'limit': '100'}
+                        if cursor:
+                            params['after'] = cursor
+                        response = await client.get(f'{base}/{account}/adcreatives', headers=headers, params=params)
+                        response.raise_for_status()
+                        body = response.json()
+                        if not isinstance(body.get('data'), list) or body.get('error'):
+                            raise ValueError('creative reconciliation unreadable')
+                        for candidate in body['data']:
+                            observed = candidate.get('object_story_spec') or {}
+                            expected = intent['story']
+                            if (candidate.get('name') == 'Homestro Exploration ' + intent['key'][:16]
+                                    and str(observed.get('page_id')) == str(expected['page_id'])
+                                    and links(observed) == links(expected)
+                                    and (observed.get('link_data') or {}).get('message') == expected['link_data']['message']
+                                    and str(candidate.get('id', '')).isdigit()):
+                                matches.append(str(candidate['id']))
+                        paging = body.get('paging') or {}
+                        if not paging.get('next'):
+                            break
+                        cursor = (paging.get('cursors') or {}).get('after')
+                        if not cursor or cursor in seen or len(cursor) > 2048:
+                            raise ValueError('creative reconciliation incomplete')
+                        seen.add(cursor)
+                    else:
+                        raise ValueError('creative reconciliation page limit')
+                    if len(set(matches)) != 1:
+                        return {'status': 'blocked', 'reason': 'CREATIVE_CREATE_UNCERTAIN_NO_RETRY',
+                                'matches': len(set(matches)), 'intent': intent['key']}
+                    intent = await asyncio.to_thread(self.memory.created, intent, matches[0])
                 if creative_id == intent['creative_id']:
                     await asyncio.to_thread(self.memory.finish, campaign, state, intent)
                     return {'status': 'rotation_confirmed', 'selected_product_ids': intent['product_ids'], 'ad_id': ad['id']}
@@ -242,7 +277,7 @@ class AutonomousBrain:
                 stage = 'create_creative'
                 response = await client.post(f'{base}/{account}/adcreatives', headers=headers, data={
                     'name': 'Homestro Exploration ' + intent['key'][:16],
-                    'object_story_spec': json.dumps(intent['story'], ensure_ascii=False)})
+                    'object_story_spec': json.dumps(intent['story'], ensure_ascii=False)}, timeout=60)
                 response.raise_for_status()
                 created = response.json()
                 if not str(created.get('id', '')).isdigit():
