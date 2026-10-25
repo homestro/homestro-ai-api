@@ -167,10 +167,10 @@ class AutonomousBrain:
             creative_id = str(ad['creative']['id'])
             performance = await load_meta_performance(self.audit, env=self.env, client=client)
             decision = performance_decision(performance)
-            if decision['action'] == 'pause' or not performance.get('metrics'):
+            if decision['action'] == 'pause':
                 return {'status': 'hold', 'reason': decision['reason'], 'performance': decision,
                         'ad_effective_status': ad.get('effective_status')}
-            spend = Decimal(str(performance['metrics'][0]['spend_eur']))
+            spend = Decimal(str(performance['metrics'][0]['spend_eur'])) if performance.get('metrics') else Decimal('0')
             state = await asyncio.to_thread(self.memory.state, campaign)
             if state is None:
                 creative = await get(creative_id, 'id,object_story_spec')
@@ -188,7 +188,6 @@ class AutonomousBrain:
                     'creative_id': creative_id, 'ad_id': ad['id'], 'counts': dict.fromkeys(used, 1),
                     'last_rotation_at': now.isoformat(), 'baseline_spend_eur': float(spend), 'inflight': None,
                     'current_product_ids': used, 'tracking_installed': False})
-                return {'status': 'memory_initialized', 'selected_product_ids': used, 'campaign_id': campaign}
             if state['ad_id'] != ad['id']:
                 return {'status': 'hold', 'reason': 'AD_ID_CHANGED_EXTERNALLY'}
             intent = await asyncio.to_thread(self.memory.intent, state['inflight']) if state.get('inflight') else None
@@ -206,6 +205,8 @@ class AutonomousBrain:
                 if ad.get('effective_status') != 'ACTIVE':
                     return {'status': 'hold', 'reason': 'AD_REVIEW_OR_DELIVERY_NOT_ACTIVE', 'effective_status': ad.get('effective_status')}
                 tracking_only = not state.get('tracking_installed', False)
+                if not tracking_only and not performance.get('metrics'):
+                    return {'status': 'hold', 'reason': 'NO_DELIVERY_DATA', 'ad_effective_status': ad.get('effective_status')}
                 if (not tracking_only and decision.get('reported_purchases', 0) >= 1
                         and (decision.get('reported_roas') or 0) >= 1.5):
                     return {'status': 'hold', 'reason': 'PRESERVE_CAMPAIGN_WITH_REPORTED_PURCHASES',
@@ -263,10 +264,21 @@ class AutonomousBrain:
             await asyncio.to_thread(self.memory.finish, campaign, state, intent)
             return {'status': 'rotation_confirmed', 'ad_id': ad['id'], 'creative_id': intent['creative_id'],
                     'selected_product_ids': intent['product_ids'], 'effective_status': confirmed.get('effective_status'),
-                    'reason': 'LEAST_EXPLORED_ELIGIBLE_PRODUCTS', 'budget_writes': False, 'paid_generation': False}
+                    'reason': 'TRACKING_BOOTSTRAP' if intent.get('tracking_only') else 'LEAST_EXPLORED_ELIGIBLE_PRODUCTS',
+                    'tracking_installed': True, 'budget_writes': False, 'paid_generation': False}
         except Exception as exc:
+            diagnostics = {}
+            if isinstance(exc, httpx.HTTPStatusError):
+                diagnostics['http_status'] = exc.response.status_code
+                try:
+                    error = exc.response.json().get('error') or {}
+                    for key in ('code', 'error_subcode'):
+                        if type(error.get(key)) is int:
+                            diagnostics['meta_' + key] = error[key]
+                except (ValueError, TypeError, AttributeError):
+                    pass
             return {'status': 'blocked', 'reason': 'BRAIN_PROVIDER_OR_STATE_UNAVAILABLE',
-                    'stage': stage, 'error_type': type(exc).__name__}
+                    'stage': stage, 'error_type': type(exc).__name__, **diagnostics}
         finally:
             if self.client is None:
                 await client.aclose()

@@ -437,3 +437,8 @@ Current validation97tests/Ruff/mypy pass: signed webhook end-to-end attribution/
 
 
 Economics deployment24791fe3-40c4-4adc-be1f-ae37311e2bb6 SUCCESS. Runtime10:10UTC confirms ad_effective_statusACTIVE and no delivery metrics; no impressions or sales claimed. Runtime cost sync reports COST_SOURCE_NOT_CONFIGURED because the new adapter required direct SHOPIFY_ACCESS_TOKEN although existing installed app uses client-credentials flow. Repair reuses the already configured app client ID/secret to obtain an ephemeral token only when direct token is absent, without reinstalling/resetting/storing new credentials or adding scopes. Existing direct token behavior preserved. Added transport test verifies bounded grant and read without changing environment credentials;98tests expected after validation.
+
+
+Cost-flow deployment6a4dfc98-0a4e-4b56-aba9-ce10fd39e06f SUCCESS. Runtime10:12UTC synchronized1461EURunit-cost variants, missing0, with existing app credentials; feed384products preserved. Actual fulfillment/fees/returns costs still not inferred. Ad effective statusACTIVE, Insights empty.
+
+Follow-up removes the unnecessary delivery prerequisite ONLY for one-time same-product tracking installation: an owned ACTIVE ad may receive signed URLs before its first recorded impression/click. It preserves product batch and selection counts and uses durable same-ad reconciliation; tagged ads still cannot rotate without actual delivery and the24h/2.50EUR guards. This avoids losing initial untagged-click attribution and is not a general no-data creative refresh. Additional transport tests cover bootstrap with empty Insights and no-data hold after tracking is installed.100tests expected after validation. Actual live attachment must be observed.

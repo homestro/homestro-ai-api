@@ -85,6 +85,8 @@ class AutonomousBrainTests(unittest.TestCase):
                     if path == '23456/ads':
                         return httpx.Response(200, json={'data': [{'id': '34567', 'status': 'ACTIVE',
                             'effective_status': 'ACTIVE', 'creative': {'id': creative}}]})
+                    if path == '98765/insights' and spend is None:
+                        return httpx.Response(200, json={'data': []})
                     if path == '98765/insights':
                         return httpx.Response(200, json={'data': [{'campaign_id': '98765', 'account_currency': 'EUR',
                             'spend': str(spend), 'clicks': '10', 'impressions': '200',
@@ -118,6 +120,20 @@ class AutonomousBrainTests(unittest.TestCase):
         self.assertEqual(len(attaches), 1)
         story = json.loads(creates[0]['object_story_spec'][0])
         self.assertIn('pilot_ref=', story['link_data']['link'])
+
+    def test_first_click_tracking_does_not_require_prior_delivery(self):
+        first, _, creates, attaches, state = self.scenario(age=0, spend=None, tracking_installed=False)
+        self.assertEqual(first['status'], 'rotation_confirmed')
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(len(attaches), 1)
+        self.assertTrue(state['tracking_installed'])
+        self.assertEqual(set(state['current_product_ids']), {str(i) for i in range(10)})
+
+    def test_no_delivery_does_not_rotate_already_tagged_ad(self):
+        first, _, creates, attaches, _ = self.scenario(age=25, spend=None)
+        self.assertEqual(first['reason'], 'NO_DELIVERY_DATA')
+        self.assertEqual(creates, [])
+        self.assertEqual(attaches, [])
 
     def test_lost_create_response_is_never_blindly_retried(self):
         first, second, creates, attaches, _ = self.scenario(failure='create')
