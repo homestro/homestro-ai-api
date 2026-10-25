@@ -36,6 +36,20 @@ class AutonomousBrainTests(unittest.TestCase):
         self.assertEqual(next_product_batch(items, {}, limit=1, trend_candidates=trends)[0]['id'], '2')
         self.assertNotEqual(next_product_batch(items, {'2': 1}, limit=1, trend_candidates=trends)[0]['id'], '2')
 
+    def test_confirmed_absence_requires_two_reads_and_cooldowns_and_allows_only_one_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
+            memory = BrainMemory(audit)
+            now = datetime.now(UTC)
+            state = memory.initialize('98765', {'creative_id': '45678', 'counts': {}, 'inflight': None})
+            intent = memory.reserve('98765', state, {'product_ids': ['1'], 'planned_at': now.isoformat()})
+            _, allowed = memory.confirm_absence(intent, now + timedelta(minutes=10))
+            self.assertFalse(allowed)
+            intent, allowed = memory.confirm_absence(intent, now + timedelta(minutes=16))
+            self.assertTrue(allowed)
+            _, allowed = memory.confirm_absence(intent, now + timedelta(hours=2))
+            self.assertFalse(allowed)
+
     def scenario(self, failure=None, age=25, spend=3, tracking_installed=True):
         async def run():
             with tempfile.TemporaryDirectory() as directory:

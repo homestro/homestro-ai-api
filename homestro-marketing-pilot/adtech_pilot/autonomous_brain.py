@@ -94,13 +94,35 @@ class BrainMemory:
             connection.execute('UPDATE pilot_brain_intents SET payload=? WHERE intent=?', (json.dumps(intent), intent['key']))
         return intent
 
+    def confirm_absence(self, intent, now):
+        """One bounded recovery retry after two complete negative reads over time.
+
+        Never creates another ad/campaign, and never retries an ambiguous match.
+        """
+        with closing(self.audit._connect()) as connection, connection:
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute('SELECT payload FROM pilot_brain_intents WHERE intent=?', (intent['key'],)).fetchone()
+            current = json.loads(row[0])
+            if current.get('creative_id') or current.get('recovery_retry_reserved'):
+                return current, False
+            first = current.get('first_confirmed_absent_at') or now.isoformat()
+            current['first_confirmed_absent_at'] = first
+            current['negative_reads'] = current.get('negative_reads', 0) + 1
+            planned = datetime.fromisoformat(current['planned_at'])
+            eligible = (current['negative_reads'] >= 2 and now - planned >= timedelta(minutes=15)
+                        and now - datetime.fromisoformat(first) >= timedelta(minutes=5))
+            if eligible:
+                current['recovery_retry_reserved'] = True
+            connection.execute('UPDATE pilot_brain_intents SET payload=? WHERE intent=?', (json.dumps(current), intent['key']))
+        return current, eligible
+
     def finish(self, campaign, state, intent):
         counts = dict(state['counts'])
         for product_id in intent['product_ids']:
             if not intent.get('tracking_only'):
                 counts[product_id] = counts.get(product_id, 0) + 1
         state = {**state, 'counts': counts, 'creative_id': intent['creative_id'], 'inflight': None,
-                 'last_rotation_at': intent['planned_at'], 'baseline_spend_eur': intent['spend_eur'],
+                 'last_rotation_at': datetime.now(UTC).isoformat(), 'baseline_spend_eur': intent['spend_eur'],
                  'current_product_ids': intent['product_ids'], 'tracking_installed': True}
         with closing(self.audit._connect()) as connection, connection:
             connection.execute('UPDATE pilot_brain_memory SET payload=? WHERE campaign=?', (json.dumps(state), campaign))
@@ -231,12 +253,29 @@ class AutonomousBrain:
                         seen.add(cursor)
                     else:
                         raise ValueError('creative reconciliation page limit')
-                    if len(set(matches)) != 1:
-                        return {'status': 'blocked', 'reason': 'CREATIVE_CREATE_UNCERTAIN_NO_RETRY',
-                                'matches': len(set(matches)), 'named_candidates': named_candidates, 'intent': intent['key']}
-                    intent = await asyncio.to_thread(self.memory.created, intent, matches[0])
+                    if len(set(matches)) == 1:
+                        intent = await asyncio.to_thread(self.memory.created, intent, matches[0])
+                    elif not matches and named_candidates == 0:
+                        intent, retry_allowed = await asyncio.to_thread(self.memory.confirm_absence, intent, now)
+                        if not retry_allowed:
+                            return {'status': 'blocked', 'reason': 'CREATIVE_CREATE_UNCERTAIN_NO_RETRY',
+                                    'matches': 0, 'named_candidates': 0, 'intent': intent['key'],
+                                    'negative_reads': intent.get('negative_reads', 0),
+                                    'recovery_retry_already_used': bool(intent.get('recovery_retry_reserved'))}
+                        stage = 'create_creative_after_confirmed_absence'
+                        response = await client.post(f'{base}/{account}/adcreatives', headers=headers, data={
+                            'name': 'Homestro Exploration ' + intent['key'][:16],
+                            'object_story_spec': json.dumps(intent['story'], ensure_ascii=False)}, timeout=60)
+                        response.raise_for_status()
+                        created = response.json()
+                        if not str(created.get('id', '')).isdigit():
+                            raise ValueError('recovered creative id missing')
+                        intent = await asyncio.to_thread(self.memory.created, intent, str(created['id']))
+                    else:
+                        return {'status': 'blocked', 'reason': 'CREATIVE_RECONCILIATION_AMBIGUOUS',
+                                'matches': len(set(matches)), 'named_candidates': named_candidates}
                 if creative_id == intent['creative_id']:
-                    await asyncio.to_thread(self.memory.finish, campaign, state, intent)
+                    await asyncio.to_thread(self.memory.finish, campaign, state, {**intent, 'spend_eur': float(spend)})
                     return {'status': 'rotation_confirmed', 'selected_product_ids': intent['product_ids'], 'ad_id': ad['id']}
                 if creative_id != intent['previous_creative_id']:
                     return {'status': 'blocked', 'reason': 'EXTERNAL_CREATIVE_CHANGE'}
@@ -302,7 +341,7 @@ class AutonomousBrain:
             confirmed = await get(ad['id'], 'id,creative{id},effective_status')
             if str(confirmed.get('creative', {}).get('id')) != intent['creative_id']:
                 return {'status': 'pending_reconciliation', 'reason': 'CREATIVE_ATTACHMENT_NOT_CONFIRMED'}
-            await asyncio.to_thread(self.memory.finish, campaign, state, intent)
+            await asyncio.to_thread(self.memory.finish, campaign, state, {**intent, 'spend_eur': float(spend)})
             return {'status': 'rotation_confirmed', 'ad_id': ad['id'], 'creative_id': intent['creative_id'],
                     'selected_product_ids': intent['product_ids'], 'effective_status': confirmed.get('effective_status'),
                     'reason': 'TRACKING_BOOTSTRAP' if intent.get('tracking_only') else 'LEAST_EXPLORED_ELIGIBLE_PRODUCTS',
