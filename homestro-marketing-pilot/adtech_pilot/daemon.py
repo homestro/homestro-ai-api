@@ -582,6 +582,15 @@ class PilotDaemon:
                 media_imports = await MediaRegistry(self.audit).seed_existing(candidates, limit=11)
         except TimeoutError:
             media_imports = {"status": "partial", "reason": "MEDIA_IMPORT_CYCLE_TIMEOUT", "publication_confirmed": False}
+        from .publisher_handoff import PublisherHandoff
+
+        try:
+            async with asyncio.timeout(90):
+                handoff = await PublisherHandoff(self.audit).cycle()
+        except TimeoutError:
+            handoff = {"status": "partial", "reason": "PUBLISHER_HANDOFF_CYCLE_TIMEOUT", "publication_confirmed": False}
+        await self.audit.record("publisher_media_handoff", handoff)
+        logger.info("publisher_media_handoff %s", json.dumps(handoff, separators=(",", ":")))
         await self.audit.record("existing_media_import", media_imports)
         logger.info("existing_media_import %s", json.dumps(media_imports, separators=(",", ":")))
         content = content_batch(ranked_candidates)

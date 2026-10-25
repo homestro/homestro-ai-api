@@ -265,9 +265,11 @@ def create_app(
     @app.get("/pilot/media", dependencies=[Depends(require_admin)])
     async def pilot_media():
         from .media_registry import MediaRegistry
+        from .publisher_handoff import PublisherHandoff
 
         return {"assets": await asyncio.to_thread(MediaRegistry(audit).list),
-                "publication_confirmed": False, "generation_performed": False}
+                "publisher_handoff": await asyncio.to_thread(PublisherHandoff(audit).records),
+                "generation_performed": False}
 
     @app.post("/pilot/email/consent", dependencies=[Depends(require_admin)])
     async def email_consent(body: EmailConsentRequest):
