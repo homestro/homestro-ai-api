@@ -246,3 +246,17 @@ test('TikTok connection check uses an approved preview for dry-run and never sub
   assert.equal(checked.payload.tiktokSettings.express_consent_given,true);
 });
 
+
+test('Pinterest signs only the submitted copy and keeps reviewed draft preparation stable',async()=>{
+  const f=fixture();f.c.cfg.adminKey='o'.repeat(40);
+  const before=prepareSocial(source(),'pinterest',{...base,...providerCfg,adminKey:f.c.cfg.adminKey});
+  assert.equal(new URL(before.productURL).searchParams.has('pilot_ref'),false);
+  let submitted;
+  const submit=f.c.provider.submit;
+  f.c.provider.submit=async(post,checkpoint)=>{submitted=post.payload;return submit(post,checkpoint);};
+  await f.c.tick(new Date('2026-10-25T12:00:00Z'));
+  assert.equal(f.submits,1);
+  assert.ok(new URL(submitted.productURL).searchParams.has('pilot_ref'));
+  assert.equal(new URL(submitted.productURL).hostname,'homestro.de');
+  assert.deepEqual(prepareSocial(source(),'pinterest',{...base,...providerCfg,adminKey:f.c.cfg.adminKey}),before);
+});
