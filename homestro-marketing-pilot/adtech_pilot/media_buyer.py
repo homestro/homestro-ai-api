@@ -933,10 +933,10 @@ class MetaPublisher:
         config = self._configuration()
         if isinstance(config, dict):
             return {"status": "blocked", **config}
-        from .purchase_guard import PurchaseEvidence
+        from .purchase_guard import PurchaseEvidence, requires_recent_purchase
 
         evidence = await PurchaseEvidence(env=self.env, client=self.client).check()
-        if not evidence["verified"]:
+        if requires_recent_purchase(self.env) and not evidence["verified"]:
             return {"status": "blocked", "reason": "FRESH_PURCHASE_REQUIRED", "purchase": evidence}
         account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id = config
         website_mode = self.env.get("PILOT_AD_MODE", "catalog") == "website_sales"
@@ -1537,10 +1537,10 @@ class MetaPublisher:
     async def _activate(
         self, client: httpx.AsyncClient, object_id: str, headers: dict[str, str]
     ) -> None:
-        from .purchase_guard import PurchaseEvidence
+        from .purchase_guard import PurchaseEvidence, requires_recent_purchase
 
         evidence = await PurchaseEvidence(env=self.env, client=client).check()
-        if not evidence["verified"]:
+        if requires_recent_purchase(self.env) and not evidence["verified"]:
             raise RuntimeError("FRESH_PURCHASE_REQUIRED_BEFORE_ACTIVATION")
         response = await client.post(
             f"{self.ENDPOINT}/{self._version()}/{object_id}",

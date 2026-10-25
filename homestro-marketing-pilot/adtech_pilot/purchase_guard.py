@@ -58,6 +58,15 @@ def paid_in_window(order: dict[str, Any], now: datetime) -> bool:
     return False
 
 
+def requires_recent_purchase(env: Mapping[str, str]) -> bool:
+    """Only an explicit bounded acquisition test may start before its first sale.
+
+    This changes authorization policy, never the truth of payment evidence.
+    Budget, seven-day schedule and Purchase measurement gates remain separate.
+    """
+    return env.get("PILOT_LAUNCH_POLICY") != "bounded_acquisition_test"
+
+
 class PurchaseEvidence:
     def __init__(self, *, env: Mapping[str, str] | None = None, client=None):
         self.env = os.environ if env is None else env
@@ -237,7 +246,7 @@ class PurchaseWatchdog:
 
         try:
             # A failed purchase read must still pause the known campaign.
-            if not evidence.get("verified") or live_ads_dry_run(self.env) or self.env.get("ALLOW_MICRO_BUDGET") != "true":
+            if (requires_recent_purchase(self.env) and not evidence.get("verified")) or live_ads_dry_run(self.env) or self.env.get("ALLOW_MICRO_BUDGET") != "true":
                 return await pause()
             from .media_buyer import MetaPublisher
 
@@ -277,10 +286,10 @@ class PurchaseWatchdog:
                     or account_ready.get("currency") != "EUR"):
                 return {**await pause(), "reason": "META_PREFLIGHT_NOT_READY"}
             if remote.get("status") == "ACTIVE":
-                return {"status": "active_with_fresh_purchase", "campaign_id": campaign}
+                return {"status": "active_with_fresh_purchase" if requires_recent_purchase(self.env) else "active_bounded_acquisition_test", "campaign_id": campaign}
             # Check again immediately before spending; never reuse a stale heartbeat.
             fresh = await self.evidence.check()
-            if not fresh.get("verified"):
+            if requires_recent_purchase(self.env) and not fresh.get("verified"):
                 return {**await pause(), "reason": "FRESH_PURCHASE_EXPIRED"}
             response = await client.post(url, headers=headers, data={"status": "ACTIVE"})
             response.raise_for_status()
