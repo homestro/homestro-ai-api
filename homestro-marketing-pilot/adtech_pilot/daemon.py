@@ -162,6 +162,7 @@ class PilotDaemon:
                     if name == "feed_diagnostics":
                         if result.get("status") == "diagnosed" and result.get("products_checked", 0) > 0:
                             self._evidence_times[name] = time.monotonic()
+                            self._next_run['creative_candidates'] = 0
                     elif name == "media_buying_plan":
                         if (result.get("performance") or {}).get("status") in {"collected", "no_managed_campaign"}:
                             self._evidence_times[name] = time.monotonic()
@@ -511,45 +512,8 @@ class PilotDaemon:
         await self.audit.record("merchant_center_diagnostics", report)
         return report
 
-    async def _creative_job(self) -> dict[str, Any]:
-        """Submit the catalog-based pilot without paid AI creative generation.
-
-        Meta's catalog creative uses approved item images and destinations from the
-        connected product set, so this path must not depend on an OpenAI image,
-        logo URL, or a one-product creative candidate.
-        """
-        reconciliation = await MetaPublisher(self.audit).reconcile_retired_campaign()
-        await self.audit.record("retired_campaign_reconciliation", reconciliation)
-        claim = (await self.audit.get_meta_micro_campaign_claim()
-                 if hasattr(self.audit, "get_meta_micro_campaign_claim") else None)
-        current = time.monotonic()
-        metrics = self._last_results.get("media_buying_plan", {}).get("performance", {})
-        plan = control_plan(
-            product_count=len(self._latest_products),
-            feed_age_seconds=(current - self._evidence_times["feed_diagnostics"]
-                              if "feed_diagnostics" in self._evidence_times else None),
-            metrics_age_seconds=(current - self._evidence_times["media_buying_plan"]
-                                 if "media_buying_plan" in self._evidence_times else None),
-            performance_status=metrics.get("status"), campaign_status=(claim or {}).get("status"),
-            live_enabled=(os.getenv("ALLOW_MICRO_BUDGET") == "true" and not live_ads_dry_run()),
-            daily_cap_eur=configured_daily_budget_limit_eur())
-        await self.audit.record("pilot_control_cycle", plan)
-        logger.info("pilot_control_cycle %s", json.dumps(plan, separators=(",", ":")))
-        if not plan["creative_cycle_allowed"]:
-            if plan["next_action"] == "REFRESH_SHOPIFY_FEED":
-                self._next_run["feed_diagnostics"] = 0
-            elif plan["next_action"] == "REFRESH_META_METRICS":
-                self._next_run["media_buying_plan"] = 0
-            return {"status": "hold", "reason": plan["reason"], "controller": plan,
-                    "retired_campaign": reconciliation, "campaign_writes_performed": False}
-        candidates = [
-            product
-            for product in self._latest_products
-            if str(product.get("id", "")).strip()
-            and str(product.get("link", "")).strip()
-        ]
-        if not candidates:
-            return {"status": "blocked", "reason": "NO_VALIDATED_CATALOG_PRODUCTS"}
+    async def _unpaid_marketing_job(self, candidates, claim, plan):
+        """Read evidence, prepare drafts and transfer existing media without paid gates."""
         from .payment_webhooks import PaymentWebhookStore, payment_database
         from .product_selection import read_cost_candidates
 
@@ -604,6 +568,53 @@ class PilotDaemon:
                     if key != "drafts"}, separators=(",", ":")))
         await self.audit.record("product_selection", selection)
         logger.info("product_selection %s", json.dumps(selection, separators=(",", ":")))
+        return {"ranked_candidates": ranked_candidates, "selection": selection}
+
+    async def _creative_job(self) -> dict[str, Any]:
+        """Submit the catalog-based pilot without paid AI creative generation.
+
+        Meta's catalog creative uses approved item images and destinations from the
+        connected product set, so this path must not depend on an OpenAI image,
+        logo URL, or a one-product creative candidate.
+        """
+        reconciliation = {"status": "not_requested"}
+        claim = (await self.audit.get_meta_micro_campaign_claim()
+                 if hasattr(self.audit, "get_meta_micro_campaign_claim") else None)
+        current = time.monotonic()
+        metrics = self._last_results.get("media_buying_plan", {}).get("performance", {})
+        plan = control_plan(
+            product_count=len(self._latest_products),
+            feed_age_seconds=(current - self._evidence_times["feed_diagnostics"]
+                              if "feed_diagnostics" in self._evidence_times else None),
+            metrics_age_seconds=(current - self._evidence_times["media_buying_plan"]
+                                 if "media_buying_plan" in self._evidence_times else None),
+            performance_status=metrics.get("status"), campaign_status=(claim or {}).get("status"),
+            live_enabled=(os.getenv("ALLOW_MICRO_BUDGET") == "true" and not live_ads_dry_run()),
+            daily_cap_eur=configured_daily_budget_limit_eur())
+        await self.audit.record("pilot_control_cycle", plan)
+        logger.info("pilot_control_cycle %s", json.dumps(plan, separators=(",", ":")))
+        age = plan["feed_age_seconds"]
+        if not self._latest_products or age is None or not 0 <= age <= 21600:
+            self._next_run["feed_diagnostics"] = 0
+            return {"status": "hold", "reason": "NO_CURRENT_PRODUCT_SNAPSHOT", "controller": plan,
+                    "retired_campaign": reconciliation, "campaign_writes_performed": False}
+        candidates = [
+            product
+            for product in self._latest_products
+            if str(product.get("id", "")).strip()
+            and str(product.get("link", "")).strip()
+        ]
+        if not candidates:
+            return {"status": "blocked", "reason": "NO_VALIDATED_CATALOG_PRODUCTS"}
+        unpaid = await self._unpaid_marketing_job(candidates, claim, plan)
+        ranked_candidates, selection = unpaid['ranked_candidates'], unpaid['selection']
+        if not plan["creative_cycle_allowed"]:
+            if plan["next_action"] == "REFRESH_META_METRICS":
+                self._next_run["media_buying_plan"] = 0
+            return {"status": "hold", "reason": plan["reason"], "controller": plan,
+                    "unpaid_marketing": "completed", "campaign_writes_performed": False}
+        reconciliation = await MetaPublisher(self.audit).reconcile_retired_campaign()
+        await self.audit.record("retired_campaign_reconciliation", reconciliation)
         if not claim or not claim.get("campaign_id"):
             if not ranked_candidates:
                 return {"status": "hold", "reason": "NO_COST_ELIGIBLE_EXPERIMENT_PRODUCTS", "product_selection": selection}

@@ -37,6 +37,43 @@ class ControlCycleTests(unittest.TestCase):
 
 
 class ControlDispatchTests(unittest.TestCase):
+    def test_unpaid_marketing_survives_paid_stop_and_dry_run_without_meta_writes(self):
+        from adtech_pilot.daemon import PilotDaemon
+        from adtech_pilot.tests.test_daemon import MemoryAudit
+
+        async def run():
+            for status in ('STOPPED_PERFORMANCE', None):
+                audit = MemoryAudit()
+                audit.get_meta_micro_campaign_claim = AsyncMock(return_value={'status': status})
+                daemon = PilotDaemon(audit)
+                daemon._latest_products = [{'id': '123', 'link': 'https://homestro.de/products/test'}]
+                daemon._evidence_times['feed_diagnostics'] = time.monotonic()
+                daemon._unpaid_marketing_job = AsyncMock(return_value={'ranked_candidates': [], 'selection': {}})
+                with patch.dict('os.environ', {'ALLOW_MICRO_BUDGET': 'false'}), patch('adtech_pilot.daemon.MetaPublisher') as publisher:
+                    result = await daemon._creative_job()
+                    publisher.assert_not_called()
+                daemon._unpaid_marketing_job.assert_awaited_once()
+                self.assertEqual(result['unpaid_marketing'], 'completed')
+                self.assertFalse(result['campaign_writes_performed'])
+        asyncio.run(run())
+
+    def test_stale_feed_blocks_unpaid_source_preparation_and_requests_refresh(self):
+        from adtech_pilot.daemon import PilotDaemon
+        from adtech_pilot.tests.test_daemon import MemoryAudit
+
+        async def run():
+            daemon = PilotDaemon(MemoryAudit())
+            daemon._latest_products = [{'id': '123'}]
+            daemon._evidence_times['feed_diagnostics'] = time.monotonic() - 21601
+            daemon._unpaid_marketing_job = AsyncMock()
+            with patch('adtech_pilot.daemon.MetaPublisher') as publisher:
+                result = await daemon._creative_job()
+                publisher.assert_not_called()
+            daemon._unpaid_marketing_job.assert_not_awaited()
+            self.assertEqual(result['reason'], 'NO_CURRENT_PRODUCT_SNAPSHOT')
+            self.assertEqual(daemon._next_run['feed_diagnostics'], 0)
+        asyncio.run(run())
+
     def test_stale_metrics_prevent_actual_publisher_call(self):
         from adtech_pilot.daemon import PilotDaemon
         from adtech_pilot.tests.test_daemon import MemoryAudit
@@ -45,6 +82,7 @@ class ControlDispatchTests(unittest.TestCase):
             daemon = PilotDaemon(MemoryAudit())
             daemon._latest_products = [{'id': '123', 'link': 'https://homestro.de/products/test'}]
             daemon._evidence_times['feed_diagnostics'] = time.monotonic()
+            daemon._unpaid_marketing_job = AsyncMock(return_value={'ranked_candidates': [], 'selection': {}})
             with patch.dict('os.environ', {'ALLOW_MICRO_BUDGET': 'true', 'DRY_RUN': 'false',
                 'PILOT_AD_DRY_RUN': 'false', 'PILOT_AD_MAX_BUDGET_EUR': '5'}), patch('adtech_pilot.daemon.MetaPublisher') as publisher:
                 publisher.return_value.reconcile_retired_campaign = AsyncMock(return_value={'status': 'not_applicable'})
@@ -52,6 +90,7 @@ class ControlDispatchTests(unittest.TestCase):
                 result = await daemon._creative_job()
                 publisher.return_value.publish_one.assert_not_awaited()
             self.assertEqual(result['reason'], 'METRICS_SNAPSHOT_STALE')
+            daemon._unpaid_marketing_job.assert_awaited_once()
             self.assertEqual(daemon._next_run['media_buying_plan'], 0)
         asyncio.run(run())
 

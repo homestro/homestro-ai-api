@@ -27,9 +27,9 @@ Marketing descriptions do not establish these products' internal algorithms, API
 | Store diagnostics | Read-only sample of homepage and up to three product pages; HTTP, metadata, H1, canonical, alt and JSON-LD checks | Recorded sampled URLs/issues; no claim of full SEO audit, rankings or Core Web Vitals |
 | Organic social | Separate existing main-service publisher | Platform receipts/URLs per brand/channel; historical service records do not prove current publication |
 | Competitor trends | Existing Meta archive adapter and matching, failure reported explicitly | Authorized source response; current source rejection is not trend data; 14-day longevity does not prove profit |
-| Higgsfield imports | Existing integration scaffolding; observed completed Ads Studio runs without downloadable output URLs | Actual accessible export/job URLs, persisted downloads and queue receipts; no generation claimed |
+| Higgsfield imports | Eleven existing images downloaded, hashed and mapped; authenticated handoff verified44native drafts (11perFB/IG/TikTok/Pinterest) | Visual approval still required; no imported image published; no new generation or proven video output |
 | Generative ads in 9:16 and 1:1 | Existing creative-factory scaffolding, paid generation disabled | Approved cost plus actual outputs, aspect validation and publishing receipts |
-| Google/Bing advertising | Not complete for this Pilot | Valid account connector, campaign identity, dry-run preview, conversion and budget controls, authorized live activation |
+| Google/Bing advertising | Persistent source-bound drafts and provider-specific paused request compilers; default-off Google validateOnly transport; Bing offline dependency templates | Live account connections, real provider validation, reviewed German copy/demand, verified targeting; full write/recovery/optimization adapters and authorized activation remain missing |
 | Cross-channel budget allocation | Not implemented | Reliable common attribution/cost basis, channel-specific safeguards, explicit total budget; never scale current EUR5 test by inference |
 | Brand knowledge and campaign strategy | Not complete | Versioned real business facts, factual-claim validation, generated strategy/copy tests and provider integration |
 | Email/newsletter/customer support | Not implemented as a live channel | Store consent/suppression inputs, delivery connector, reviewed recipient scope, unsubscribe handling and actual delivery evidence |
@@ -40,7 +40,7 @@ Marketing descriptions do not establish these products' internal algorithms, API
 
 Current authorization is the existing EUR5/day, seven-day Meta test, EUR35 reported-spend stop, plus stop after over EUR15 without reported purchases unless valid signed payment evidence supports holding. A provider's daily budget is not an exact hard real-time spending ceiling; polling and reporting delay remain. No other paid campaigns/channels, new subscription or paid AI generation is enabled by this contract.
 
-The measurement waiver is explicit and separate from verification: `META_PURCHASE_EVENT_VERIFIED` remains false. No prior sale is required for the bounded acquisition test. Refunds, cancelled/test/sample orders and stale costs cannot become profit evidence.
+Current owner instruction restores the hard lock: PILOT_LAUNCH_POLICY=prove_it_first, PILOT_ACCEPT_UNVERIFIED_MEASUREMENT=false, META_PURCHASE_EVENT_VERIFIED remains false. Existing campaign120254444566440274 is confirmed PAUSED. The earlier bounded-acquisition waiver is superseded; previous fiveEUR/day/seven-day/35EUR limits are ceilings, not current permission to spend without verified measurement. Refunds, cancelled/test/sample orders and stale costs cannot become profit evidence.
 
 ## Remaining implementation order
 
@@ -65,3 +65,11 @@ Persistent common strategy/work queue and seven-day calendar now produce grounde
 - All11existing Higgsfield files actually stored and exact job/product metadata recovered; format is image, not video. Publication still requires visual/source validation and real consumer handoff, not merely downloaded files.
 
 No row above establishes full four-vendor parity or verified profit.178tests pass for implemented paths; real external activation and some write adapters remain incomplete.
+
+
+## Verified continuation — 25 October 2026
+
+- Receiver main9aa5895/productionc12ae2fdSUCCESS and sender90d9c35/productionfe264a14SUCCESS:11existing images,44draft_queued receipts,0approved/scheduled/published among these imports,0blocked. TikTok still requires independent express consent and privacy settings. Same-job uploads and lost responses reconcile idempotently.
+- Search preparation1d36e6a/production4b2fad7eSUCCESS: stable expiring per-product/channel draft ledger, grounded German text and exact/phrase keyword hypotheses; executable Google validateOnly request path tested with fake transport, no actual Google account call; Bing paused API templates remain offline pending actual IDs/targeting and write/recovery adapter. Additional channel spend0EUR.
+- Follow-up separates free marketing preparation and media handoff from paid Meta stop/metrics gates. Fresh product evidence remains mandatory; paid campaign calls remain gated and stopped campaigns cannot unlock them. Feed recovery schedules the preparation consumer immediately.193Python/219Node tests, Ruff and mypy pass; follow-up runtime readback pending at edit time.
+- Historical sections describing missing downloads/mappings/handoff are superseded by the receipts above. Paid reasoning/generation remain disabled pending explicit price approval, SMTP delivery remains disabled, no new products/videos created, no customer messages sent. GEO theme publication, live search connections/writers, full unified attribution and cross-channel budget allocation remain incomplete. No full four-vendor parity or profit claim.
