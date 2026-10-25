@@ -152,7 +152,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         const source=parseTrackedLink(req.params.payload,req.params.signature,cfg.adminKey);
         const row=(await pool.query('SELECT document FROM marketing_products WHERE id=$1',[source.productId])).rows[0];
         if(!row)return res.status(404).send('Link nicht verfügbar.');
-        const destination=trackedDestination(row.document,source.channel,source.format);
+        const destination=trackedDestination(row.document,source.channel,source.format,{secret:cfg.adminKey});
         try {
           await pool.query('INSERT INTO marketing_clicks(product_id,channel,format) VALUES($1,$2,$3)',
             [source.productId,source.channel,source.format]);

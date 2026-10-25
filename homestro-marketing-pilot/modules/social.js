@@ -2,6 +2,7 @@ import {validateImportedReview} from './imported-media.js';
 import {randomUUID} from 'node:crypto';
 import {hash,fail,codeOf,log,productURL,trackingLink} from './core.js';
 import {compilePost} from './localization.js';
+import {trackedDestination} from './tracking.js';
 import {ZernioOrganic} from './zernio.js';
 import {channelPolicy,repeatedMedia} from './publishing-policy.js';
 
@@ -241,7 +242,11 @@ export class SocialCoordinator {
           if(this.ensureAssets)await this.ensureAssets(job,p);
           await client.query("UPDATE marketing_social_posts SET status='publishing',attempted_at=now(),updated_at=now() WHERE id=$1",[job.id]);
           claimed=true;
-          const state=await this.provider.submit({...job,status:'publishing'},remote=>this.checkpoint(job.id,remote));
+          // Mint only on the actual send; time-dependent tags must never change draft hashes.
+          const payload=job.channel==='pinterest'&&this.cfg.adminKey
+            ? {...job.payload,productURL:trackedDestination(p,'pinterest',job.payload.format,{secret:this.cfg.adminKey,now})}
+            : job.payload;
+          const state=await this.provider.submit({...job,payload,status:'publishing'},remote=>this.checkpoint(job.id,remote));
           await this.settle(job.id,state);
         }catch(e){
           await client.query(`UPDATE marketing_social_posts SET status=$3,error_code=$2,updated_at=now() WHERE id=$1`,
