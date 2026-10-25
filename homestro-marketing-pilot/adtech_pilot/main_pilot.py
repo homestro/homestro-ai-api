@@ -281,7 +281,8 @@ def create_app(
     @app.post("/pilot/attribution/link", dependencies=[Depends(require_admin)])
     async def pilot_attribution_link(body: AttributionLinkRequest):
         from datetime import UTC, datetime, timedelta
-        from .order_economics import tracking_ref, tracked_url
+
+        from .order_economics import tracked_url, tracking_ref
 
         at = datetime.now(UTC)
         expires = at + timedelta(hours=body.lifetime_hours)

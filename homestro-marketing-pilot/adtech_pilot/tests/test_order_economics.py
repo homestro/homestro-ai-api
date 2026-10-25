@@ -70,8 +70,9 @@ class OrderEconomicsTests(unittest.TestCase):
         self.assertEqual(economics_summary(self.store, '12345', None, channel='microsoft')['signed_url_tagged_paid_orders'], 0)
 
     def test_legacy_signature_and_database_migration_preserve_meta(self):
-        from adtech_pilot.order_economics import initialize
         import sqlite3
+
+        from adtech_pilot.order_economics import initialize
         data = {'campaign': '12345', 'ad': '23456', 'experiment': 'a' * 24,
                 'issued': self.now.isoformat(), 'expires': (self.now + timedelta(days=1)).isoformat()}
         body = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip('=')
