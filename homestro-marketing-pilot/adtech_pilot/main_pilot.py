@@ -262,6 +262,51 @@ def create_app(
 
         return await asyncio.to_thread(MarketingDirector(audit).report, limit=limit)
 
+    @app.get("/pilot/search/drafts", dependencies=[Depends(require_admin)])
+    async def pilot_search_drafts():
+        from .search_campaigns import SearchCampaignDrafts
+
+        return {"drafts": await asyncio.to_thread(SearchCampaignDrafts(audit).list),
+                "authorized_spend_eur": 0, "writes_performed": False}
+
+    @app.post("/pilot/search/drafts/{draft_id}/validate-google", dependencies=[Depends(require_admin)])
+    async def validate_search_draft(draft_id: str):
+        from .search_campaigns import SearchCampaignDrafts, validate_google_draft
+
+        drafts = await asyncio.to_thread(SearchCampaignDrafts(audit).list)
+        draft = next((row for row in drafts if row['id'] == draft_id and row['channel'] == 'google'), None)
+        if draft is None:
+            raise HTTPException(404, "CURRENT_GOOGLE_DRAFT_NOT_FOUND")
+        # Five EUR is a proposed schema fixture only; validateOnly cannot create a budget.
+        result = await validate_google_draft(draft, proposed_daily_eur='5.00')
+        await audit.record("google_draft_validation", result)
+        return result
+
+    @app.get("/pilot/search/drafts/{draft_id}/request-template", dependencies=[Depends(require_admin)])
+    async def search_request_template(draft_id: str):
+        from .search_campaigns import (
+            SearchCampaignDrafts,
+            google_validation_request,
+            microsoft_request_templates,
+        )
+
+        drafts = await asyncio.to_thread(SearchCampaignDrafts(audit).list)
+        draft = next((row for row in drafts if row['id'] == draft_id), None)
+        if draft is None:
+            raise HTTPException(404, "CURRENT_SEARCH_DRAFT_NOT_FOUND")
+        setting = 'GOOGLE_ADS_CUSTOMER_ID' if draft['channel'] == 'google' else 'MICROSOFT_ADS_ACCOUNT_ID'
+        account = os.environ.get(setting, '').replace('-', '')
+        if not account:
+            return {"status": "not_configured", "missing_settings": [setting], "writes_performed": False}
+        try:
+            compiler = google_validation_request if draft['channel'] == 'google' else microsoft_request_templates
+            request = compiler(draft, account, proposed_daily_eur='5.00')
+        except (ValueError, ArithmeticError) as exc:
+            raise HTTPException(422, "SEARCH_TEMPLATE_REQUIRES_REVIEW") from exc
+        return {"draft_id": draft_id, "revision": draft['revision'], "request_template": request,
+                "targets_resolved": False, "ready_to_submit": False,
+                "proposed_schema_budget_eur": 5, "authorized_spend_eur": 0, "writes_performed": False}
+
     @app.get("/pilot/media", dependencies=[Depends(require_admin)])
     async def pilot_media():
         from .media_registry import MediaRegistry

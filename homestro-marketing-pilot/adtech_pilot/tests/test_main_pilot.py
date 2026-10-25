@@ -57,13 +57,18 @@ class MainPilotTests(unittest.TestCase):
         self.assertFalse(response.json()["full_autonomous_profit_optimization_verified"])
 
     def test_marketing_and_media_reports_require_admin_and_cannot_claim_publication(self):
-        for path in ('/pilot/marketing', '/pilot/media'):
+        for path in ('/pilot/marketing', '/pilot/media', '/pilot/search/drafts'):
             self.assertEqual(self.request('GET', path).status_code, 401)
             response = self.request('GET', path, headers={
                 'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'})
             self.assertEqual(response.status_code, 200)
         self.assertFalse(self.request('GET', '/pilot/marketing', headers={
             'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}).json()['publication_performed_by_this_endpoint'])
+
+    def test_search_validation_and_template_endpoints_require_admin_and_current_draft(self):
+        for method, path in (("POST", "/pilot/search/drafts/missing/validate-google"), ("GET", "/pilot/search/drafts/missing/request-template")):
+            self.assertEqual(self.request(method, path).status_code, 401)
+            self.assertEqual(self.request(method, path, headers={"X-Pilot-Admin-Key": "test-admin-key-with-at-least-32-characters"}).status_code, 404)
 
     def test_email_authority_and_non_mutating_unsubscribe_get(self):
         from adtech_pilot.email_delivery import EmailDelivery

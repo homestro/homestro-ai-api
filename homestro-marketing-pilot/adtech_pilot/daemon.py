@@ -593,6 +593,11 @@ class PilotDaemon:
         logger.info("publisher_media_handoff %s", json.dumps(handoff, separators=(",", ":")))
         await self.audit.record("existing_media_import", media_imports)
         logger.info("existing_media_import %s", json.dumps(media_imports, separators=(",", ":")))
+        from .search_campaigns import SearchCampaignDrafts
+
+        search_drafts = await asyncio.to_thread(SearchCampaignDrafts(self.audit).reconcile, ranked_candidates)
+        await self.audit.record("search_campaign_drafts", search_drafts)
+        logger.info("search_campaign_drafts %s", json.dumps(search_drafts, separators=(",", ":")))
         content = content_batch(ranked_candidates)
         await self.audit.record("content_drafts", content)
         logger.info("content_drafts %s", json.dumps({key: value for key, value in content.items()
