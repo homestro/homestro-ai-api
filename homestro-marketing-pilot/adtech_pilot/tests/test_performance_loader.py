@@ -17,6 +17,7 @@ class PerformanceLoaderTests(unittest.TestCase):
                 await audit.update_meta_micro_campaign(status="ACTIVE_PENDING_REVIEW", campaign_id="98765")
                 def handler(request):
                     self.assertEqual(request.method, "GET")
+                    self.assertEqual(request.url.params["date_preset"], "maximum")
                     self.assertEqual(request.url.path, "/v26.0/98765/insights")
                     return httpx.Response(200, json={"data": [{"campaign_id": "98765", "account_currency": "EUR",
                         "spend": "4.5", "clicks": "5", "impressions": "200", "date_start": "2026-10-20", "date_stop": "2026-10-25",

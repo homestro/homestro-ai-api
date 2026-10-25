@@ -23,7 +23,7 @@ async def load_meta_performance(audit, *, env=None, client=None):
         response = await client.get(f"https://graph.facebook.com/{version}/{campaign}/insights",
             headers={"Authorization": f"Bearer {token}"}, params={
                 "fields": "campaign_id,account_currency,spend,impressions,clicks,actions,action_values,date_start,date_stop",
-                "date_preset": "last_7d", "level": "campaign", "limit": "100"})
+                "date_preset": "maximum", "level": "campaign", "limit": "100"})
         response.raise_for_status()
         body = response.json()
         if not isinstance(body.get("data"), list) or (body.get("paging") or {}).get("next"):

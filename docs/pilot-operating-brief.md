@@ -389,3 +389,10 @@ After automatic approval review rejected falsely setting META_PURCHASE_EVENT_VER
 
 
 Live bounded test created on25October2026: deployment92ff7e43-bc38-442a-ab62-d62ee0fc8f4e SUCCESS, campaign120254444566440274/adset120254444566670274/ad120254444567960274 accepted ACTIVE_PENDING_REVIEW. Website carousel10products, DE/AT, daily500cents, planned7days. Watchdog paused this same campaign because publisher deliberately schedules start15minutes ahead but watchdog wrongly demanded start<=now. Diagnostic deployment1c9a2f8a-095d-45f8-b087-e2e407adc8c8 SUCCESS proves exact remote daily_budget500/lifetime_budget0/statusACTIVE/countriesAT,DE/start2026-10-25T10:43:01+0100/end2026-11-01T10:43:01+0100. Repair accepts an upcoming start at most15minutes ahead while retaining exact500cent, single-adset, DE/AT, expiry and maximum7day checks. No campaign recreation or schedule extension. Actual resumed state must be verified after deployment.
+
+
+## Autonomous total-test spend protection — 25 October 2026
+
+Production schedule repair fde458f6-2414-42a7-9c84-845350f99251 SUCCESS; watchdog at09:31UTC confirmed managed campaign120254444566440274 ACTIVE, later cycles active_bounded_acquisition_test. This proves configured active state, not impressions, review approval or sales.
+
+Added bounded-test lifecycle spend control to existing watchdog: reads Meta campaign-lifetime Insights (maximum, replacing moving last7d), pauses on unreadable spend, and at reported spend>=35EUR persists STOPPED_TEST_BUDGET before remote PAUSED confirmation. This durable status is checked before any reactivation and survives restarts; publisher retains existing single-campaign claim. No zero-sale/zero-purchase automatic performance kill is enabled because attribution is unverified. Daily500cent DE/AT seven-day controls remain unchanged; optimizer cannot raise budgets. Insights reporting and polling delay mean this is not an exact cent-level spending guarantee. Local74tests/Ruff/mypy pass; new test exercises a scheduled future start, total-spend stop, persisted restart and no ACTIVE writes. Deployment/live readback remains to be observed.
