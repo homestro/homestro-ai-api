@@ -522,8 +522,11 @@ class PilotDaemon:
         from .content_engine import content_batch
         from .marketing_director import MarketingDirector
         from .media_registry import MediaRegistry
-        from .organic_bridge import read_organic_results
+        from .organic_bridge import read_catalog_brain, read_organic_results
 
+        catalog_work = await read_catalog_brain()
+        await self.audit.record("organic_catalog_brain", catalog_work)
+        logger.info("organic_catalog_brain %s", json.dumps(catalog_work, separators=(",", ":")))
         organic = await read_organic_results()
         await self.audit.record("organic_publisher_evidence", organic)
         from .search_channels import read_google, read_microsoft
@@ -549,7 +552,7 @@ class PilotDaemon:
         cognitive = await CognitiveStrategy(self.audit).cycle(ranked_candidates, controller=plan)
         await self.audit.record("cognitive_strategy", cognitive)
         strategy = await asyncio.to_thread(MarketingDirector(self.audit).reconcile,
-            ranked_candidates, {"claim": claim, "controller": plan, "organic": organic,
+            ranked_candidates, {"claim": claim, "controller": plan, "organic": organic, "catalog_work": catalog_work,
                                 "search_channels": search_channels, "cognitive": cognitive})
         await self.audit.record("marketing_director", strategy)
         logger.info("marketing_director %s", json.dumps(strategy, separators=(",", ":")))

@@ -590,3 +590,7 @@ Official references checked this continuation: https://learn.microsoft.com/en-us
 
 
 Packaging correction found before shipping: the prior explicit Docker COPY list omitted channel_control.py, although healthcheck SUCCESS did not execute that import. Changed module copying to the package's top-level *.py only (no tests), keeping the root entrypoint copy, so all runtime modules including new search/report/auth code are present. This repairs the missing-module failure in the unpaid job; healthy HTTP alone was insufficient evidence. Packaging/import smoke and live unpaid-cycle readback are required below.
+
+
+## Observe whole-catalog preparation — 25 October 2026
+Added a counts-only bridge to the existing main-service CatalogBrain through the existing PILOT_ORGANIC_API_KEY. It accepts only fresh generatedAt/boolean-enabled/known distinct work-state integer counts; limits response size, forbids redirects and exposes neither credentials nor source copy. Its report explicitly distinguishes catalog work-ledger evidence from platform publication. New organic_catalog_brain evidence is recorded by the unpaid marketing consumer and shown in /pilot/brain. No second publisher, new product/media, paid generation, campaign call or credential change. Missing/unavailable coordinator does not stop other unpaid consumers. User confirms no Google/Bing accounts yet while awaiting court verification; both remain unconfigured and paused creation/activation remains disabled. Validation220Python tests/Ruff/mypy74files; live main/adtech deployment readback remains required.

@@ -39,3 +39,34 @@ class OrganicBridgeTests(unittest.IsolatedAsyncioTestCase):
         body = self.payload()
         body['guides'] = [{'handle': 'evil', 'url': 'https://external.example/'}]
         self.assertEqual((await self.result(body))['published_guide_records'], [])
+
+
+class CatalogBrainBridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_credential_reads_only_counts_without_claiming_publication(self):
+        from adtech_pilot.organic_bridge import read_catalog_brain
+        body = {'generatedAt': datetime.now(UTC).isoformat(), 'enabled': True,
+                'counts': [{'state': 'prepared', 'count': 20}, {'state': 'blocked', 'count': 4}]}
+        def handle(request):
+            self.assertEqual(request.method, 'GET')
+            self.assertTrue(request.url.path.endswith('/catalog-brain'))
+            self.assertEqual(request.headers['Authorization'], 'Bearer test-internal-key')
+            self.assertNotIn('test-internal-key', str(request.url))
+            return httpx.Response(200, json=body)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            result = await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test-internal-key'}, client=client)
+        self.assertEqual(result['status'], 'observed')
+        self.assertEqual(result['catalog_records'], 24)
+        self.assertFalse(result['publication_confirmed'])
+        self.assertFalse(result['writes_performed'])
+
+    async def test_no_key_is_offline_and_stale_or_invalid_counts_are_not_evidence(self):
+        from adtech_pilot.organic_bridge import read_catalog_brain
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: self.fail('network'))) as client:
+            self.assertEqual((await read_catalog_brain(env={}, client=client))['status'], 'not_configured')
+        for generated, counts in ((datetime.now(UTC)-timedelta(hours=1), []),
+                                  (datetime.now(UTC), [{'state': 'prepared', 'count': True}])):
+            def handle(_):
+                return httpx.Response(200, json={'generatedAt': generated.isoformat(), 'enabled': True, 'counts': counts})
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+                result = await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test'}, client=client)
+            self.assertEqual(result['status'], 'unavailable')

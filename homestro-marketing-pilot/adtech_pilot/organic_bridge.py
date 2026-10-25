@@ -55,3 +55,48 @@ async def read_organic_results(*, client=None):
     finally:
         if own:
             await client.aclose()
+
+
+async def read_catalog_brain(*, env=None, client=None):
+    """Observe the sole catalog coordinator using the existing internal credential."""
+    import json
+    import os
+
+    env = os.environ if env is None else env
+    key = env.get('PILOT_ORGANIC_API_KEY', '')
+    if not key or key.startswith('${{'):
+        return {'status': 'not_configured', 'reason': 'EXISTING_PUBLISHER_INTERNAL_CREDENTIAL_REFERENCE_REQUIRED'}
+    own = client is None
+    client = client or httpx.AsyncClient(timeout=httpx.Timeout(10, connect=4), follow_redirects=False)
+    try:
+        async with client.stream('GET', ORIGIN + '/api/marketing/v2/catalog-brain',
+                headers={'Authorization': 'Bearer ' + key}, follow_redirects=False) as response:
+            response.raise_for_status()
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                data.extend(chunk)
+                if len(data) > 1024 * 1024:
+                    raise ValueError('CATALOG_BRAIN_REPORT_SIZE_LIMIT')
+        body = json.loads(data)
+        generated = datetime.fromisoformat(body['generatedAt'].replace('Z', '+00:00'))
+        if generated.tzinfo is None or not -60 <= (datetime.now(UTC) - generated).total_seconds() <= 900:
+            raise ValueError('STALE_CATALOG_BRAIN_REPORT')
+        if type(body.get('enabled')) is not bool or not isinstance(body.get('counts'), list):
+            raise ValueError('INVALID_CATALOG_BRAIN_REPORT')
+        counts, seen = [], set()
+        for row in body['counts']:
+            if (row.get('state') not in {'due', 'blocked', 'processing', 'prepared', 'waiting'}
+                or row['state'] in seen or type(row.get('count')) is not int or not 0 <= row['count'] <= 100000):
+                raise ValueError('INVALID_CATALOG_BRAIN_COUNTS')
+            seen.add(row['state'])
+            counts.append({'state': row['state'], 'count': row['count']})
+        return {'status': 'observed', 'enabled': body['enabled'], 'generated_at': body['generatedAt'],
+            'catalog_records': sum(row['count'] for row in counts), 'counts': counts,
+            'publication_auto_approval_enabled': body.get('publicationAutoApprovalEnabled') if type(body.get('publicationAutoApprovalEnabled')) is bool else None,
+            'publication_confirmed': False, 'evidence_level': 'catalog_work_ledger_not_platform_publication',
+            'paid_generation_authorized': False, 'writes_performed': False}
+    except (ValueError, TypeError, KeyError, AttributeError, httpx.HTTPError) as exc:
+        return {'status': 'unavailable', 'error_type': type(exc).__name__, 'writes_performed': False}
+    finally:
+        if own:
+            await client.aclose()
