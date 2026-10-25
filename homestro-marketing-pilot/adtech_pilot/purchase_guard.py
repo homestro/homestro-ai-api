@@ -276,7 +276,8 @@ class PurchaseWatchdog:
             if (str(row.get("daily_budget")) != "500" or row.get("lifetime_budget") not in (None, "0", 0)
                     or row.get("status") != "ACTIVE"
                     or set(row.get("targeting", {}).get("geo_locations", {}).get("countries", [])) != {"DE", "AT"}
-                    or not timestamp(row["start_time"]) <= now < timestamp(row["end_time"])
+                    or not (now < timestamp(row["end_time"])
+                            and timestamp(row["start_time"]) <= now + timedelta(minutes=15))
                     or timestamp(row["end_time"]) - timestamp(row["start_time"]) > timedelta(days=7)):
                 return {**await pause(), "reason": "EXISTING_SCHEDULE_OR_BUDGET_NOT_SAFE",
                         "observed": {key: row.get(key) for key in
