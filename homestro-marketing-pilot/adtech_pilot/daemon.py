@@ -26,6 +26,7 @@ from .micro_budget import (
     configured_daily_budget_limit_eur,
     live_ads_dry_run,
 )
+from .performance_loader import load_meta_performance
 
 logger = logging.getLogger("uvicorn.error")
 Job = Callable[[], Awaitable[dict[str, Any]]]
@@ -111,7 +112,7 @@ class PilotDaemon:
                 competitor_job or self._competitor_job,
             ),
             "creative_candidates": (
-                competitor_interval_hours * 3600,
+                300,
                 creative_job or self._creative_job,
             ),
             "media_buying_plan": (
@@ -131,6 +132,7 @@ class PilotDaemon:
 
     async def run(self, stop: asyncio.Event) -> None:
         """Runs immediately, then emits hourly heartbeats until shutdown."""
+        next_heartbeat = 0.0
         while not stop.is_set():
             cycle_started = datetime.now(UTC).isoformat()
             for name, (interval, job) in self.jobs.items():
@@ -168,6 +170,13 @@ class PilotDaemon:
                         delay,
                     )
 
+            if time.monotonic() < next_heartbeat:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=60)
+                except TimeoutError:
+                    pass
+                continue
+            next_heartbeat = time.monotonic() + self.heartbeat_interval_seconds
             daily_budget_limit = configured_daily_budget_limit_eur()
             report = {
                 "generated_at": datetime.now(UTC).isoformat(),
@@ -211,7 +220,7 @@ class PilotDaemon:
                     logger.exception("pilot_github_report_failed")
             try:
                 await asyncio.wait_for(
-                    stop.wait(), timeout=self.heartbeat_interval_seconds
+                    stop.wait(), timeout=min(60, self.heartbeat_interval_seconds)
                 )
             except TimeoutError:
                 continue
@@ -382,7 +391,7 @@ class PilotDaemon:
                         longevity_days.get(product_id, 0), age_days
                     )
 
-        candidates = [
+        candidates: list[dict[str, Any]] = [
             {
                 "product_id": str(product.get("id", "")),
                 "title": str(product.get("title", ""))[:200],
@@ -516,6 +525,11 @@ class PilotDaemon:
         return result
 
     async def _metrics_job(self) -> dict[str, Any]:
+        performance = (
+            await load_meta_performance(self.audit)
+            if hasattr(self.audit, "get_meta_micro_campaign_claim")
+            else {"status": "audit_not_persistent"}
+        )
         meta_preflight = await MetaPublisher(self.audit).check_readiness()
         account = (
             MetaAccountReadiness.model_validate(meta_preflight["account"])
@@ -535,7 +549,10 @@ class PilotDaemon:
         daily_budget_limit = configured_daily_budget_limit_eur()
         return {
             "status": "blocked",
-            "reason": "NO_VERIFIED_CHANNEL_METRICS_LOADER",
+            "reason": ("ORDER_ATTRIBUTION_AND_LANDED_COST_REQUIRED"
+                       if performance.get("status") == "collected"
+                       else "NO_VERIFIED_CHANNEL_METRICS_LOADER"),
+            "performance": performance,
             "execution": "READ_ONLY_PREFLIGHT_ONLY",
             "optimizer_dry_run": True,
             "optimizer_budget_limit_eur": 0.0,

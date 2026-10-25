@@ -932,6 +932,11 @@ class MetaPublisher:
         config = self._configuration()
         if isinstance(config, dict):
             return {"status": "blocked", **config}
+        from .purchase_guard import PurchaseEvidence
+
+        evidence = await PurchaseEvidence(env=self.env, client=self.client).check()
+        if not evidence["verified"]:
+            return {"status": "blocked", "reason": "FRESH_PURCHASE_REQUIRED", "purchase": evidence}
         account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id = config
         product_id = str(product.get("id", ""))
         # Catalog items supply their own images and destination URLs.
@@ -1012,37 +1017,9 @@ class MetaPublisher:
                     and prior_claim["status"]
                     in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}
                 ):
-                    # The local one-campaign slot can be reused only after Meta
-                    # confirms the prior campaign and every ad set are paused.
-                    campaign_id = str(prior_claim["campaign_id"])
-                    reconciliation = await self._reconcile_paused_campaign(
-                        client, headers, campaign_id
-                    )
-                    if reconciliation != "ready":
-                        return {
-                            "status": "blocked",
-                            "reason": "PRIOR_CAMPAIGN_NOT_CONFIRMED_PAUSED",
-                            "campaign_id": campaign_id,
-                            "reconciliation": reconciliation,
-                        }
-                    released = await self.audit.release_inactive_claim(
-                        campaign_id=campaign_id,
-                        expected_status=str(prior_claim["status"]),
-                    )
-                    if not released:
-                        return {
-                            "status": "blocked",
-                            "reason": "PRIOR_CAMPAIGN_CLAIM_CHANGED_DURING_RECONCILIATION",
-                            "campaign_id": campaign_id,
-                        }
-                    await self.audit.record(
-                        "meta_micro_campaign_claim_released",
-                        {
-                            "campaign_id": campaign_id,
-                            "reason": "Meta confirmed campaign and ad sets paused",
-                        },
-                    )
-                    prior_claim = None
+                    # Keep identity through watchdog pauses; never recreate it.
+                    return {"status": "existing_campaign", "campaign_id": prior_claim["campaign_id"],
+                            "reason": "EXISTING_CAMPAIGN_RETAINED_NO_DUPLICATE"}
                 else:
                     return {
                         "status": "blocked",
@@ -1060,7 +1037,7 @@ class MetaPublisher:
             )
             gate = MicroBudgetGate(enabled=True).evaluate(
                 account=readiness,
-                product_id=product_id,
+                purchase_event_verified=True,
                 product_ids_in_feed=product_ids_in_feed,
                 previously_submitted_campaigns=0,
                 dry_run=False,
@@ -1535,6 +1512,11 @@ class MetaPublisher:
     async def _activate(
         self, client: httpx.AsyncClient, object_id: str, headers: dict[str, str]
     ) -> None:
+        from .purchase_guard import PurchaseEvidence
+
+        evidence = await PurchaseEvidence(env=self.env, client=client).check()
+        if not evidence["verified"]:
+            raise RuntimeError("FRESH_PURCHASE_REQUIRED_BEFORE_ACTIVATION")
         response = await client.post(
             f"{self.ENDPOINT}/{self._version()}/{object_id}",
             headers=headers,

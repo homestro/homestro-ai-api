@@ -37,6 +37,16 @@ class MainPilotTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
 
+    def test_trigger_requires_exact_secret_and_does_not_accept_admin_header(self):
+        self.assertEqual(self.request("POST", "/trigger").status_code, 401)
+        self.assertEqual(self.request("POST", "/trigger", headers={"X-Pilot-Token": "wrong"}).status_code, 401)
+        self.assertEqual(self.request("POST", "/trigger", headers={
+            "X-Pilot-Admin-Key": "test-admin-key-with-at-least-32-characters"}).status_code, 401)
+        result = self.request("POST", "/trigger", headers={
+            "X-Pilot-Token": "test-admin-key-with-at-least-32-characters"})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["status"], "no_managed_campaign")
+
     def test_feed_validation_and_preparation_routes_do_not_publish(self):
         feed = {
             "products": [

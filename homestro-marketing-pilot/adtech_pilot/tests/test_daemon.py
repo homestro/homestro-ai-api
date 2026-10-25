@@ -94,7 +94,7 @@ class DaemonTests(unittest.TestCase):
             self.assertTrue(heartbeat["micro_budget_submission_enabled"])
             self.assertTrue(heartbeat["optimizer"]["dry_run"])
             self.assertEqual(heartbeat["optimizer"]["budget_limit_eur"], 0.0)
-            self.assertEqual(len(heartbeat["jobs"]), 5)
+            self.assertEqual(len(heartbeat["jobs"]), 6)
 
         asyncio.run(run())
 

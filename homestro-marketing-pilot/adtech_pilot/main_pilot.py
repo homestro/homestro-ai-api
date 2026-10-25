@@ -31,8 +31,10 @@ from .media_buyer import (
     build_optimization_plan,
 )
 from .micro_budget import configured_daily_budget_limit_eur, live_ads_dry_run
+from .purchase_guard import PurchaseWatchdog
 
 ADMIN_HEADER = APIKeyHeader(name="X-Pilot-Admin-Key", auto_error=False)
+TRIGGER_HEADER = APIKeyHeader(name="X-Pilot-Token", auto_error=False)
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 
 
@@ -102,13 +104,22 @@ def create_app(
     )
     tasks: set[asyncio.Task] = set()
     stop_daemon = asyncio.Event()
+    watchdog = PurchaseWatchdog(audit)
 
     async def require_admin(provided: str | None = Security(ADMIN_HEADER)) -> None:
         if provided is None or not hmac.compare_digest(provided, admin_key):
             raise HTTPException(status_code=401, detail="UNAUTHORIZED")
 
+    async def require_trigger(provided: str | None = Security(TRIGGER_HEADER)) -> None:
+        # Reuse the persisted administrator secret unless a separate token is set.
+        expected = os.getenv("PILOT_TRIGGER_TOKEN", "") or admin_key
+        if provided is None or not hmac.compare_digest(provided, expected):
+            raise HTTPException(status_code=401, detail="UNAUTHORIZED")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        task = asyncio.create_task(watchdog.run(stop_daemon), name="purchase-watchdog")
+        tasks.add(task)
         if os.getenv("PILOT_DAEMON_ENABLED", "true").lower() == "true":
             github_token = os.getenv("PILOT_GITHUB_TOKEN", "")
             reporter = (
@@ -169,6 +180,16 @@ def create_app(
             await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title="Homestro AdTech Pilot", version="0.1.0", lifespan=lifespan)
+
+    @app.post("/trigger", dependencies=[Depends(require_trigger)])
+    async def trigger():
+        return await watchdog.cycle()
+
+    @app.get("/pilot/status", dependencies=[Depends(require_admin)])
+    async def pilot_status():
+        return {"purchase_watchdog": watchdog.last_result,
+                "fresh_purchase_window_minutes": 15, "watchdog_interval_seconds": 60,
+                "paid_generation_enabled": os.getenv("PILOT_CREATIVE_ENABLED", "false").lower() == "true"}
 
     @app.middleware("http")
     async def request_size_limit(request: Request, call_next):

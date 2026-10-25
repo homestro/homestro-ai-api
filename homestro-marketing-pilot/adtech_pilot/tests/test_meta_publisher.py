@@ -2,6 +2,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs
 
 import httpx
@@ -16,6 +17,9 @@ from PIL import Image
 
 class MetaPublisherTests(unittest.TestCase):
     def setUp(self):
+        evidence_patch = patch("adtech_pilot.purchase_guard.PurchaseEvidence.check", new=AsyncMock(return_value={"verified": True}))
+        evidence_patch.start()
+        self.addCleanup(evidence_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.image_path = self.root / "approved.png"
@@ -261,7 +265,7 @@ class MetaPublisherTests(unittest.TestCase):
         self.assertEqual(result["lifetime_budget_eur"], 0.0)
         self.assertEqual(result["planned_total_eur"], 35.0)
         self.assertEqual(result["budget_type"], "daily")
-        self.assertEqual(repeat["reason"], "PRIOR_CAMPAIGN_NOT_CONFIRMED_PAUSED")
+        self.assertEqual(repeat["reason"], "EXISTING_CAMPAIGN_RETAINED_NO_DUPLICATE")
         self.assertEqual(
             sum(event[0] == "POST" and event[1] == "campaigns" for event in events),
             1,
@@ -305,7 +309,7 @@ class MetaPublisherTests(unittest.TestCase):
 
         self.assertIsNone(asyncio.run(run()))
 
-    def test_paused_prior_campaign_is_reconciled_before_releasing_single_campaign_slot(self):
+    def test_paused_prior_campaign_keeps_identity_without_creating_duplicate(self):
         async def run():
             events = []
 
@@ -349,11 +353,9 @@ class MetaPublisherTests(unittest.TestCase):
             return result, claim, events
 
         result, claim, events = asyncio.run(run())
-        self.assertEqual(result["status"], "ACTIVE_PENDING_REVIEW")
-        self.assertEqual(claim["campaign_id"], result["campaign_id"])
-        self.assertEqual(result["campaign_id"], "campaign-new")
-        self.assertIn(("GET", "/v26.0/old-campaign"), events)
-        self.assertIn(("GET", "/v26.0/old-campaign/adsets"), events)
+        self.assertEqual(result["status"], "existing_campaign")
+        self.assertEqual(claim["campaign_id"], "old-campaign")
+        self.assertFalse(any(method == "POST" for method, _ in events))
 
     def test_retirement_works_without_purchase_but_never_releases_active_campaign(self):
         async def run(remote_status):
