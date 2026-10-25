@@ -7,7 +7,7 @@ function marketingGraphqlAllowed(query) {
   const allowed=new Set([
     'mutation PilotProductSeoUpdate($input: ProductInput!) { productUpdate(input: $input) { product { id seo { title description } } userErrors { field message } } }',
     'mutation PilotFileAltUpdate($files:[FileUpdateInput!]!) { fileUpdate(files:$files) { files { id alt fileStatus } userErrors { field message code } } }',
-    'mutation PilotArticleDraft($article: ArticleCreateInput!) { articleCreate(article: $article) { article { id title handle isPublished onlineStoreUrl } userErrors { field message } } }',
+    'mutation PilotArticleDraft($article: ArticleCreateInput!) { articleCreate(article: $article) { article { id title handle isPublished } userErrors { field message } } }',
     'mutation PilotGuideCreate($page: PageCreateInput!) { pageCreate(page: $page) { page { id handle isPublished } userErrors { field message } } }',
     'mutation PilotGuideUpdate($id: ID!, $page: PageUpdateInput!) { pageUpdate(id: $id, page: $page) { page { id handle isPublished } userErrors { field message } } }'
   ]);

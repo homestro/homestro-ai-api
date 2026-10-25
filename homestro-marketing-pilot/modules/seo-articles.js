@@ -2,7 +2,7 @@ import {hash,fail,productURL} from './core.js';
 
 export const ARTICLE_CREATE = `mutation PilotArticleDraft($article: ArticleCreateInput!) {
   articleCreate(article: $article) {
-    article { id title handle isPublished onlineStoreUrl }
+    article { id title handle isPublished }
     userErrors { field message }
   }
 }`;

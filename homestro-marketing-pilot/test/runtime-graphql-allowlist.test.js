@@ -12,7 +12,7 @@ test('allows Shopify reads and only the required pilot write operations',()=>{
   assert.equal(marketingGraphqlAllowed('query{shop{name}}'),true);
   assert.equal(marketingGraphqlAllowed('mutation PilotProductSeoUpdate($input: ProductInput!) { productUpdate(input: $input) { product { id seo { title description } } userErrors { field message } } }'),true);
   assert.equal(marketingGraphqlAllowed(FILE_ALT_UPDATE),true);
-  assert.equal(marketingGraphqlAllowed('mutation PilotArticleDraft($article: ArticleCreateInput!) { articleCreate(article: $article) { article { id title handle isPublished onlineStoreUrl } userErrors { field message } } }'),true);
+  assert.equal(marketingGraphqlAllowed('mutation PilotArticleDraft($article: ArticleCreateInput!) { articleCreate(article: $article) { article { id title handle isPublished } userErrors { field message } } }'),true);
   assert.equal(marketingGraphqlAllowed(GUIDE_CREATE),true);
   assert.equal(marketingGraphqlAllowed(GUIDE_UPDATE),true);
 });
