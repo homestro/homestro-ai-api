@@ -28,6 +28,8 @@ function db(){
   }
   if(q.includes('SELECT id,status FROM marketing_'))return {rows:[posts.get(args.join('|'))].filter(Boolean)};
   if(q.includes("UPDATE marketing_imported_media SET state='queued'"))Object.assign(imports.get(args[0]),{state:'queued',asset:args[1],receipt:args[2]});
+  if(q.includes('SELECT receipt,state FROM marketing_imported_media'))return {rows:[imports.get(args[0])].filter(Boolean)};
+  if(q.includes('SELECT id,status,remote,payload FROM marketing_'))return {rows:[...posts.values()].filter(p=>p.id===args[0])};
   return {rows:[],rowCount:0};
  };
  return {imports,posts,sql,query,connect:async()=>({query,release(){}})};
@@ -89,4 +91,36 @@ test('imported approval binds exact visual SHA and revision; TikTok keeps its in
 test('automatic native approvals explicitly exclude imported media',async()=>{
  let sql;await approveReviewed({pool:{query:async q=>{sql=q;return {rowCount:0};}}},{autonomyEnabled:true});
  assert.match(sql,/COALESCE\(s.payload->>'importedMedia','false'\)<>'true'/);
+});
+test('queue status distinguishes draft, approval and actual publication receipt',async()=>{
+ const {dir,bytes}=await fixture();try{
+  const pool=db(),cfg={dataDir:dir,publicOrigin:'https://publisher.example'};
+  const coordinator=new ImportedMediaCoordinator({pool,cfg,fresh:async()=>product});
+  await coordinator.receive(metadata(bytes),bytes);
+  const draft=await coordinator.status(job);
+  assert.equal(draft.requires_visual_review,true);assert.equal(draft.publication_confirmed,false);
+  for(const row of pool.posts.values()){row.status='approved';row.payload.requiresVisualReview=false;}
+  const approved=await coordinator.status(job);
+  assert.equal(approved.requires_visual_review,false);assert.equal(approved.publication_confirmed,false);
+  const row=[...pool.posts.values()].find(p=>p.channel==='instagram');
+  row.status='published';row.remote={permalink:'https://www.instagram.com/p/Test123/'};
+  assert.equal((await coordinator.status(job)).publication_confirmed,true);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('publication verifier holds unreviewed, corrupted source and changed normalized asset',async()=>{
+ const {dir,bytes}=await fixture();try{
+  const pool=db(),cfg={dataDir:dir,publicOrigin:'https://publisher.example'};
+  const coordinator=new ImportedMediaCoordinator({pool,cfg,fresh:async()=>product});
+  await coordinator.receive(metadata(bytes),bytes);
+  const post=[...pool.posts.values()][0];
+  await assert.rejects(coordinator.ensure(post,product),{code:'IMPORTED_VISUAL_REVIEW_REQUIRED'});
+  post.payload.requiresVisualReview=false;await coordinator.ensure(post,product);
+  const source=join(dir,'import-sources',metadata(bytes).sha256+'.bin');
+  await writeFile(source,'corrupted');
+  await assert.rejects(coordinator.ensure(post,product),{code:'IMPORTED_SOURCE_CORRUPTED'});
+  await writeFile(source,bytes);
+  const name=new URL(post.payload.imageURLs[0]).pathname.split('/').pop();
+  await writeFile(join(dir,'assets',name),'changed rendition');
+  await assert.rejects(coordinator.ensure(post,product),{code:'IMPORTED_NORMALIZED_MEDIA_CORRUPTED'});
+ }finally{await rm(dir,{recursive:true,force:true});}
 });
