@@ -96,6 +96,27 @@ class PurchaseGuardTests(unittest.TestCase):
                         await publisher._activate(client, "98765", {})
         asyncio.run(run())
 
+    def test_scope_update_uses_current_credentials_once_without_reinstall_or_secret_overwrite(self):
+        async def run():
+            grants = []
+            env = {"SHOPIFY_STORE_DOMAIN": "homestro.myshopify.com", "SHOPIFY_ACCESS_TOKEN": "old",
+                   "SHOPIFY_CLIENT_ID": "existing-app", "SHOPIFY_CLIENT_SECRET": "existing-secret"}
+            def handler(request):
+                if request.url.path.endswith("/access_token"):
+                    grants.append(request)
+                    return httpx.Response(200, json={"access_token": "current", "expires_in": 86400})
+                if request.headers.get("X-Shopify-Access-Token") == "old":
+                    return httpx.Response(200, json={"errors": [{"extensions": {"code": "ACCESS_DENIED"}}]})
+                return httpx.Response(200, json={"data": {"orders": {"nodes": [self.order],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None}}}})
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                evidence = PurchaseEvidence(env=env, client=client)
+                self.assertTrue((await evidence.check(now=self.now))["verified"])
+                self.assertTrue((await evidence.check(now=self.now))["verified"])
+            self.assertEqual(len(grants), 1)
+            self.assertEqual(env["SHOPIFY_ACCESS_TOKEN"], "old")
+        asyncio.run(run())
+
     def test_resume_reuses_campaign_and_rejects_excess_budget_or_ambiguous_activation(self):
         async def run(budget, ambiguous=False):
             with tempfile.TemporaryDirectory() as directory:

@@ -64,6 +64,8 @@ class PurchaseEvidence:
         self.client = client
         self._token = ""
         self._expires = datetime.min.replace(tzinfo=UTC)
+        self._prefer_client_token = False
+        self._client_refresh_attempted = False
 
     async def check(self, *, now: datetime | None = None) -> dict[str, Any]:
         try:
@@ -85,6 +87,8 @@ class PurchaseEvidence:
         client = self.client or httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5), follow_redirects=False)
         try:
             token = self.env.get("SHOPIFY_ACCESS_TOKEN", "").strip()
+            if self._prefer_client_token:
+                token = self._token if now < self._expires else ""
             if not token:
                 if now >= self._expires:
                     app_id, secret = self.env.get("SHOPIFY_CLIENT_ID"), self.env.get("SHOPIFY_CLIENT_SECRET")
@@ -108,6 +112,29 @@ class PurchaseEvidence:
                         "query": "updated_at:>=" + (now - timedelta(minutes=15)).isoformat(), "after": cursor}})
                 response.raise_for_status()
                 body = response.json()
+                if (any((error.get("extensions") or {}).get("code") == "ACCESS_DENIED"
+                        for error in body.get("errors", []) if isinstance(error, dict))
+                        and not self._client_refresh_attempted
+                        and self.env.get("SHOPIFY_CLIENT_ID") and self.env.get("SHOPIFY_CLIENT_SECRET")):
+                    # The same installed app can have a stale direct token after
+                    # a scope update. Obtain one current client-credentials token;
+                    # never reinstall the app or overwrite the existing secret.
+                    self._client_refresh_attempted = True
+                    refreshed = await client.post(f"https://{domain}/admin/oauth/access_token", data={
+                        "grant_type": "client_credentials", "client_id": self.env["SHOPIFY_CLIENT_ID"],
+                        "client_secret": self.env["SHOPIFY_CLIENT_SECRET"]})
+                    if refreshed.is_success:
+                        credentials = refreshed.json()
+                        candidate = credentials.get("access_token")
+                        if candidate:
+                            self._token = token = candidate
+                            self._expires = now + timedelta(seconds=max(0, int(credentials.get("expires_in", 0)) - 60))
+                            self._prefer_client_token = True
+                            response = await client.post(f"https://{domain}/admin/api/{version}/graphql.json",
+                                headers={"X-Shopify-Access-Token": token}, json={"query": ORDER_QUERY,
+                                "variables": {"query": "updated_at:>=" + (now - timedelta(minutes=15)).isoformat(), "after": cursor}})
+                            response.raise_for_status()
+                            body = response.json()
                 if body.get("errors"):
                     errors = body["errors"]
                     # Schema/permission diagnostics only, never provider messages,
@@ -116,8 +143,17 @@ class PurchaseEvidence:
                         "code": str((error.get("extensions") or {}).get("code", ""))[:80],
                         "field": str((error.get("extensions") or {}).get("fieldName", ""))[:80],
                         "type": str((error.get("extensions") or {}).get("typeName", ""))[:80],
+                        "path": [str(part)[:80] for part in (error.get("path") or [])[:5]],
                     } for error in errors[:5] if isinstance(error, dict)]
-                    return {**result, "reason": "SHOPIFY_ORDER_QUERY_REJECTED", "diagnostics": diagnostics}
+                    scope_response = await client.post(f"https://{domain}/admin/api/{version}/graphql.json",
+                        headers={"X-Shopify-Access-Token": token}, json={"query":
+                        "query PilotOrderAccess { currentAppInstallation { accessScopes { handle } } }"})
+                    scope_response.raise_for_status()
+                    scope_body = scope_response.json()
+                    installation = (scope_body.get("data") or {}).get("currentAppInstallation") or {}
+                    handles = [scope.get("handle") for scope in installation.get("accessScopes", [])]
+                    return {**result, "reason": "SHOPIFY_ORDER_QUERY_REJECTED", "diagnostics": diagnostics,
+                            "read_orders_granted_to_runtime_app": "read_orders" in handles}
                 orders = body["data"]["orders"]
                 for order in orders["nodes"]:
                     order_id = order.get("id")
