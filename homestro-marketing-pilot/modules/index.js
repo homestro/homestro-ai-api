@@ -1,10 +1,13 @@
+import {CatalogBrain} from './catalog-brain.js';
+import {createSourceLocalizer} from './source-localizer.js';
 import {ImportedMediaCoordinator,importMetadata} from './imported-media.js';
 import {GeneratedVideoDrafts} from './generative-video.js';
 import {checkMetaOrganicAudience} from './meta-audience-check.js';
 import express from 'express';
 import {join} from 'node:path';
 import {randomBytes} from 'node:crypto';
-import {secureEqual,codeOf,log,fail,config} from './core.js';
+import {secureEqual,codeOf,log,fail,config,hash} from './core.js';
+import {compilePost} from './localization.js';
 import {Store} from './store.js';
 import {fetchProduct,syncCatalog} from './shopify.js';
 import {MediaRenderer} from './media.js';
@@ -70,11 +73,27 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }catch(e){social=null;log('SOCIAL_DISABLED',{reason:codeOf(e)});}
     try{importedMedia=new ImportedMediaCoordinator({pool,cfg,fresh,social});await importedMedia.migrate();}
     catch(e){importedMedia=null;log('MEDIA_IMPORT_DISABLED',{reason:codeOf(e)});}
-    const processProduct=async id=>{
+    const freeRenderer=new MediaRenderer({...cfg,aiVideoEnabled:false,openaiApiKey:''});
+    const freeIngestion=new Ingestion({store,renderer:freeRenderer,localizer:createSourceLocalizer(),feeRate:cfg.feeRate,cfg});
+    const processProduct=async (id,{freeOnly=false}={})=>{
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
-        const result=await ingestion.process(raw,inputs);
+        if(freeOnly){
+          const previous=await store.product(id),source=snapshot(raw,inputs,cfg.feeRate);
+          if(previous?.status==='ready'&&previous.document.revision===source.revision&&previous.document.localized&&previous.document.localizationPrepared===true&&previous.document.asset&&!previous.document.asset.previewOnly){
+            await ensureApprovedAssets({job:{id:'catalog-brain',payload:{...previous.document.asset,productRevision:source.revision}},source,cfg,renderer:freeRenderer});
+            let queued=0;
+            const prepared={...source,localized:previous.document.localized,asset:previous.document.asset};
+            for(const channel of ['facebook','instagram']){
+              if(prepared.previouslyPublished?.[channel])continue;
+              const payload=compilePost(prepared,channel,prepared.asset,cfg);
+              if(await store.queue(id,channel,hash(payload),payload))queued++;
+            }
+            return {processed:1,status:'draft_queued',queued,assetFormat:prepared.asset.format,existingAssetReused:true};
+          }
+        }
+        const result=await (freeOnly?freeIngestion:ingestion).process(raw,inputs);
         if(result.status==='draft_queued' && result.processed) {
           const prepared=await store.product(id);
           try {
@@ -99,6 +118,12 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,ensureImportedAssets:(job,source)=>{
       if(!importedMedia)fail('IMPORTED_ASSET_VERIFIER_UNAVAILABLE');return importedMedia.ensure(job,source);
     }});
+    let catalogBrain=null,brainTimer;
+    try{
+      catalogBrain=new CatalogBrain({pool,processProduct:id=>processProduct(id,{freeOnly:true}),enabled:cfg.workerEnabled,
+        autoApprovalEnabled:cfg.autonomyEnabled,afterPrepare:async()=>{await approveReviewed(store,cfg);if(social)await social.prepare();}});
+      await catalogBrain.migrate();
+    }catch(e){catalogBrain=null;log('CATALOG_BRAIN_DISABLED',{reason:codeOf(e)});}
     let syncBusy=false,syncTimer;
     const sync=async()=>{
       if(syncBusy)return {busy:true};syncBusy=true;
@@ -110,8 +135,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         await queueEditorial(store,cfg);
         await approveReviewed(store,cfg);
         // Refresh previously ready items too: active catalog omits archived/deleted products.
-        for(const p of await store.feedRows())await processProduct(p.id,cfg.autonomyEnabled);
-        const r=await syncCatalog(graphql,id=>processProduct(id,cfg.autonomyEnabled));
+        for(const p of await store.feedRows())await processProduct(p.id);
+        const r=await syncCatalog(graphql,id=>processProduct(id));
         await approveReviewed(store,cfg);
         try {
           const seoBatch=await syncSeoCatalogBatch({pool,graphql,fetchProduct,batchSize:cfg.seoCatalogBatchSize});
@@ -129,6 +154,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
           CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason
           WHERE p.status='pending_marketing' GROUP BY reason ORDER BY count DESC,reason`)).rows;
         log('CATALOG_SYNC',{...r,pendingReasons});
+        if(catalogBrain)try{log('CATALOG_BRAIN_COVERAGE',await catalogBrain.reconcile());}
+        catch(e){log('CATALOG_BRAIN_RECONCILE_FAILED',{reason:codeOf(e)});}
         try {await syncSeoGuides({pool,graphql,products:await store.seoRows(),cfg,freshSnapshot:fresh});}
         catch(e){log('SEO_PIPELINE_PENDING',{reason:codeOf(e)});}
         try {await refreshPerformance({pool,graphql,enabled:cfg.analyticsEnabled});}
@@ -147,6 +174,14 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       next();
     };
     const route=handler=>async(req,res)=>{try{await handler(req,res);}catch(e){res.status(400).json({error:codeOf(e)});}};
+    app.get('/api/marketing/v2/catalog-brain',auth,route(async(req,res)=>{
+      if(!catalogBrain)return res.status(503).json({error:'CATALOG_BRAIN_NOT_CONFIGURED'});
+      res.json(await catalogBrain.report());
+    }));
+    app.post('/api/marketing/v2/catalog-brain/run',auth,route(async(req,res)=>{
+      if(!catalogBrain)return res.status(503).json({error:'CATALOG_BRAIN_NOT_CONFIGURED'});
+      res.json(await catalogBrain.tick());
+    }));
     app.get('/marketing-click/:payload/:signature',async(req,res)=>{
       try {
         const source=parseTrackedLink(req.params.payload,req.params.signature,cfg.adminKey);
@@ -356,9 +391,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       } catch(e) { log('SYNC_ONCE_FAILED',{reason:codeOf(e)}); }
     }
     if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();if(!cfg.autonomyEnabled)void sync();}
+    if(catalogBrain?.enabled){
+      const runBrain=()=>catalogBrain.tick().catch(e=>log('CATALOG_BRAIN_FAILED',{reason:codeOf(e)}));
+      brainTimer=setInterval(()=>void runBrain(),5*60000);brainTimer.unref();void runBrain();
+    }
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
     return {enabled:true,processProduct,sync,store,worker,social,feedXML:freshFeedXML,
-      stop(){worker.stop();social?.stop();clearInterval(syncTimer);}};
+      stop(){worker.stop();social?.stop();clearInterval(syncTimer);clearInterval(brainTimer);}};
   }catch(e){log('DISABLED',{reason:codeOf(e)});return {enabled:false,processProduct:async()=>({processed:0,status:'marketing_disabled'}),stop(){}};}
 }
 
