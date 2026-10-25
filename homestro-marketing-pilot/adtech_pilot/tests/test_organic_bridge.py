@@ -88,3 +88,44 @@ class CatalogBrainBridgeTests(unittest.IsolatedAsyncioTestCase):
         product['currentReceipts'][0]['count'] = True
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body))) as client:
             self.assertEqual((await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test'}, client=client))['status'], 'unavailable')
+
+
+    async def test_pagination_reads_and_validates_receipts_beyond_first_hundred(self):
+        from adtech_pilot.organic_bridge import read_catalog_brain
+        rows = [{'product_id': f'gid://shopify/Product/{n}', 'decision': {
+            'productId': f'gid://shopify/Product/{n}', 'revision': f'r-{n}', 'eligible': True,
+            'creativeBrief': {'sourceProductURL': f'https://homestro.de/products/box-{n}'}},
+            'state': 'prepared', 'currentReceipts': [{'channel': 'facebook', 'status': 'approved', 'count': 1}]} for n in range(1, 202)]
+        cursors = []
+        def handle(request):
+            self.assertEqual(request.method, 'GET')
+            after = request.url.params.get('after')
+            cursors.append(after)
+            offset = 0 if after is None else next(i+1 for i, row in enumerate(rows) if row['product_id'] == after)
+            page = rows[offset:offset+100]
+            return httpx.Response(200, json={'generatedAt': datetime.now(UTC).isoformat(), 'enabled': True,
+                'counts': [{'state': 'prepared', 'count': 201}], 'products': page,
+                'pageInfo': {'hasNextPage': offset+100 < len(rows), 'endCursor': page[-1]['product_id']}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            result = await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test'}, client=client)
+        self.assertEqual(result['status'], 'observed')
+        self.assertEqual(result['pages_read'], 3)
+        self.assertEqual(result['source_records_read'], 201)
+        self.assertTrue(result['coverage_complete'])
+        self.assertEqual(result['products'][-1]['product_id'], 'gid://shopify/Product/201')
+        self.assertEqual(result['products'][-1]['receipts'][0]['count'], 1)
+        self.assertEqual(cursors, [None, 'gid://shopify/Product/100', 'gid://shopify/Product/200'])
+
+    async def test_repeating_or_incomplete_pagination_never_claims_full_coverage(self):
+        from adtech_pilot.organic_bridge import read_catalog_brain
+        for mode in ('repeat', 'missing_rows'):
+            requests = []
+            def handle(request):
+                requests.append(request)
+                return httpx.Response(200, json={'generatedAt': datetime.now(UTC).isoformat(), 'enabled': True,
+                    'counts': [{'state': 'prepared', 'count': 200}], 'products': [],
+                    'pageInfo': {'hasNextPage': mode == 'repeat', 'endCursor': 'same'}})
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+                result = await read_catalog_brain(env={'PILOT_ORGANIC_API_KEY': 'test'}, client=client)
+            self.assertEqual(result['status'], 'unavailable')
+            self.assertLessEqual(len(requests), 2)

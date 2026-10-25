@@ -69,20 +69,49 @@ async def read_catalog_brain(*, env=None, client=None):
     own = client is None
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(10, connect=4), follow_redirects=False)
     try:
-        async with client.stream('GET', ORIGIN + '/api/marketing/v2/catalog-brain',
-                headers={'Authorization': 'Bearer ' + key}, follow_redirects=False) as response:
-            response.raise_for_status()
-            data = bytearray()
-            async for chunk in response.aiter_bytes():
-                data.extend(chunk)
-                if len(data) > 1024 * 1024:
-                    raise ValueError('CATALOG_BRAIN_REPORT_SIZE_LIMIT')
-        body = json.loads(data)
-        generated = datetime.fromisoformat(body['generatedAt'].replace('Z', '+00:00'))
-        if generated.tzinfo is None or not -60 <= (datetime.now(UTC) - generated).total_seconds() <= 900:
-            raise ValueError('STALE_CATALOG_BRAIN_REPORT')
-        if type(body.get('enabled')) is not bool or not isinstance(body.get('counts'), list):
-            raise ValueError('INVALID_CATALOG_BRAIN_REPORT')
+        async def page(after=None):
+            async with client.stream('GET', ORIGIN + '/api/marketing/v2/catalog-brain',
+                    params={'after': after} if after else None,
+                    headers={'Authorization': 'Bearer ' + key}, follow_redirects=False) as response:
+                response.raise_for_status()
+                data = bytearray()
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > 1024 * 1024:
+                        raise ValueError('CATALOG_BRAIN_REPORT_SIZE_LIMIT')
+            value = json.loads(data)
+            generated = datetime.fromisoformat(value['generatedAt'].replace('Z', '+00:00'))
+            if generated.tzinfo is None or not -60 <= (datetime.now(UTC) - generated).total_seconds() <= 900:
+                raise ValueError('STALE_CATALOG_BRAIN_REPORT')
+            if type(value.get('enabled')) is not bool or not isinstance(value.get('counts'), list):
+                raise ValueError('INVALID_CATALOG_BRAIN_REPORT')
+            if not isinstance(value.get('products', []), list) or len(value.get('products', [])) > 100:
+                raise ValueError('CATALOG_PRODUCT_PAGE_LIMIT')
+            return value
+
+        body = await page()
+        source_rows, page_count, cursors = list(body.get('products', [])), 1, set()
+        info = body.get('pageInfo')
+        coverage_complete = False
+        while info is not None:
+            if not isinstance(info, dict) or type(info.get('hasNextPage')) is not bool:
+                raise ValueError('INVALID_CATALOG_PAGINATION')
+            if info['hasNextPage'] is False:
+                coverage_complete = True
+                break
+            cursor = info.get('endCursor')
+            if (not isinstance(cursor, str) or not 1 <= len(cursor) <= 256 or cursor in cursors
+                or page_count >= 20):
+                raise ValueError('CATALOG_PAGINATION_UNCONFIRMED_OR_LIMIT')
+            cursors.add(cursor)
+            following = await page(cursor)
+            if following['enabled'] != body['enabled'] or following['counts'] != body['counts']:
+                raise ValueError('CATALOG_CHANGED_DURING_PAGINATION')
+            source_rows.extend(following.get('products', []))
+            page_count += 1
+            info = following.get('pageInfo')
+            if info is None:
+                raise ValueError('CATALOG_PAGINATION_DISAPPEARED')
         counts, seen = [], set()
         for row in body['counts']:
             if (row.get('state') not in {'due', 'blocked', 'processing', 'prepared', 'waiting'}
@@ -90,9 +119,13 @@ async def read_catalog_brain(*, env=None, client=None):
                 raise ValueError('INVALID_CATALOG_BRAIN_COUNTS')
             seen.add(row['state'])
             counts.append({'state': row['state'], 'count': row['count']})
+        if coverage_complete:
+            source_ids = [row.get('product_id') for row in source_rows if isinstance(row, dict)]
+            if (len(source_rows) != sum(row['count'] for row in counts) or len(source_ids) != len(source_rows)
+                or any(not isinstance(key, str) for key in source_ids) or len(set(source_ids)) != len(source_ids)):
+                raise ValueError('CATALOG_PAGINATION_COVERAGE_UNCONFIRMED')
         products, paths = [], set()
-        source_rows = body.get('products', [])
-        if not isinstance(source_rows, list) or len(source_rows) > 100:
+        if len(source_rows) > 2000:
             raise ValueError('CATALOG_PRODUCT_EVIDENCE_LIMIT')
         for row in source_rows:
             decision = row.get('decision') or {}
@@ -123,6 +156,7 @@ async def read_catalog_brain(*, env=None, client=None):
                 'last_attempt_at': row.get('last_attempt_at'), 'publication_confirmed': False})
         return {'status': 'observed', 'enabled': body['enabled'], 'generated_at': body['generatedAt'],
             'catalog_records': sum(row['count'] for row in counts), 'counts': counts, 'products': products,
+            'source_records_read': len(source_rows), 'pages_read': page_count, 'coverage_complete': coverage_complete,
             'publication_auto_approval_enabled': body.get('publicationAutoApprovalEnabled') if type(body.get('publicationAutoApprovalEnabled')) is bool else None,
             'publication_confirmed': False, 'evidence_level': 'catalog_work_ledger_not_platform_publication',
             'paid_generation_authorized': False, 'writes_performed': False}

@@ -115,7 +115,7 @@ class MarketingDirector:
         except (ValueError, TypeError):
             fresh_catalog = False
         if fresh_catalog:
-            for item in catalog.get('products', [])[:100]:
+            for item in catalog.get('products', [])[:2000]:
                 try:
                     path = canonical(item['source_url'])
                     if item.get('eligible') is True and item.get('revision') and item.get('product_id'):
@@ -203,7 +203,8 @@ class MarketingDirector:
                 'budget_increase_authorized': False, 'full_vendor_parity_verified': False,
                 'queue_is_not_publication': True, 'email_send_enabled': False,
                 'observed_organic_publisher': evidence.get('organic', {'status': 'not_observed'}),
-                'catalog_consumer_evidence': {'fresh': fresh_catalog, 'matched_product_count': len(consumers)},
+                'catalog_consumer_evidence': {'fresh': fresh_catalog, 'matched_product_count': len(consumers),
+                    'coverage_complete': catalog.get('coverage_complete') is True, 'pages_read': catalog.get('pages_read')},
                 'search_channel_observations': evidence.get('search_channels', {}),
                 'cognitive_strategy': cognitive,
                 'integration_dependencies': sorted({b for row in db.execute("SELECT payload FROM pilot_marketing_work WHERE state<>'superseded'").fetchall() for b in json.loads(row[0]).get('blockers', [])})}
