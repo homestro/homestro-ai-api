@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 KINDS = ('autonomous_brain', 'meta_performance_snapshot', 'meta_performance_decision',
-         'daemon_heartbeat', 'purchase_watchdog', 'pilot_control_cycle', 'product_selection', 'storefront_diagnostics', 'content_drafts', 'seo_publication', 'marketing_director', 'existing_media_import', 'organic_publisher_evidence')
+         'daemon_heartbeat', 'purchase_watchdog', 'pilot_control_cycle', 'product_selection', 'storefront_diagnostics', 'content_drafts', 'seo_publication', 'marketing_director', 'existing_media_import', 'organic_publisher_evidence', 'search_channel_evidence', 'cognitive_strategy')
 
 
 def operating_report(latest, claim, *, daily_cap_eur, now=None):
@@ -58,6 +58,8 @@ def operating_report(latest, claim, *, daily_cap_eur, now=None):
         'storefront_diagnostics': payload('storefront_diagnostics'),
         'content_drafts': payload('content_drafts'),
         'seo_publication': payload('seo_publication'),
+        'cognitive_strategy': payload('cognitive_strategy'),
+        'search_channel_evidence': payload('search_channel_evidence'),
         'organic_publisher_evidence': payload('organic_publisher_evidence'),
         'marketing_director': payload('marketing_director'), 'existing_media_import': payload('existing_media_import'),
         'external_trend_sources': trends, 'source_timestamps': timestamps, 'stale_sources': stale,

@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("PILOT_ADMIN_KEY", "test-admin-key-with-at-least-32-characters")
 os.environ.setdefault("PILOT_AUDIT_DB_PATH", tempfile.mktemp(suffix=".sqlite3"))
@@ -63,6 +64,27 @@ class MainPilotTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
         self.assertFalse(self.request('GET', '/pilot/marketing', headers={
             'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}).json()['publication_performed_by_this_endpoint'])
+
+    def test_email_authority_and_non_mutating_unsubscribe_get(self):
+        from adtech_pilot.email_delivery import EmailDelivery
+        from adtech_pilot.media_buyer import PlanAuditStore
+
+        headers = {'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}
+        payload = {'recipient': 'customer@example.test', 'subject': 'Produktdetails', 'body': 'Details ansehen',
+                   'campaign_id': 'reviewed-1', 'owner_authorized': True}
+        self.assertEqual(self.request('POST', '/pilot/email/send', json=payload).status_code, 401)
+        from unittest.mock import patch
+        with patch.dict(os.environ, {'PILOT_EMAIL_SEND_ENABLED': 'false'}):
+            result = self.request('POST', '/pilot/email/send', json=payload, headers=headers)
+            self.assertEqual(result.json()['status'], 'blocked')
+        email = EmailDelivery(PlanAuditStore(Path(self.db)), secret='test-admin-key-with-at-least-32-characters')
+        key = email.recipient_key('customer@example.test')
+        url = '/email/unsubscribe/' + key + '/' + email.signature(key)
+        self.assertEqual(self.request('GET', url).status_code, 200)
+        with email.audit._connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM pilot_email_consent').fetchone()[0], 0)
+        self.assertEqual(self.request('POST', url).json()['status'], 'unsubscribed')
+        self.assertEqual(self.request('POST', '/email/unsubscribe/' + key + '/forged').status_code, 404)
 
     def test_order_expense_api_requires_admin_actual_cost_confirmation_and_known_order(self):
         payload = {"order_hash": "a" * 64, "fulfillment_eur": "4.00", "payment_fees_eur": "1.00",

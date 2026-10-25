@@ -22,7 +22,7 @@ OWNERS = {'meta_experiment': 'existing_meta_brain', 'seo_geo': 'existing_seo_wri
           'bing_search': 'microsoft_ads', 'media_review': 'existing_media_review'}
 BLOCKERS = {'google_search': ['GOOGLE_ADS_RUNTIME_ADAPTER_AND_ACCOUNT', 'ADDITIONAL_CHANNEL_SPEND_NOT_AUTHORIZED'],
             'bing_search': ['MICROSOFT_ADS_RUNTIME_ADAPTER_AND_ACCOUNT', 'ADDITIONAL_CHANNEL_SPEND_NOT_AUTHORIZED'],
-            'email_sequence': ['RECIPIENT_CONSENT_SUPPRESSION_AND_DELIVERY_ADAPTER'],
+            'email_sequence': ['RECIPIENT_CONSENT_SMTP_CONFIGURATION_AND_EXPLICIT_SEND_AUTHORIZATION'],
             'landing_content': ['EXISTING_SEO_GUIDE_CONSUMER_RECEIPT'],
             'social_content': ['EXISTING_ORGANIC_CONSUMER_RECEIPT'],
             'seo_geo': ['GEO_THEME_PUBLICATION_READBACK'],
@@ -103,6 +103,9 @@ class MarketingDirector:
                 continue
             seen.add(path)
             selected.append((raw, path, pack))
+        cognitive = evidence.get('cognitive') or {}
+        preferred = (cognitive.get('decision') or {}).get('editorial_product_priority', [])
+        selected.sort(key=lambda item: (preferred.index(str(item[0]['id'])) if str(item[0]['id']) in preferred else len(preferred)))
         at = now.isoformat()
         expires = (now + timedelta(hours=6)).isoformat()
         created, refreshed = 0, 0
@@ -121,19 +124,20 @@ class MarketingDirector:
                         if str(claim.get('status', '')).startswith('STOPPED_'):
                             blockers.append('DURABLE_CAMPAIGN_STOP')
                     state = 'blocked' if blockers else 'managed_by_existing_consumer'
+                    priority = 70 if str(raw['id']) in preferred else 40 if kind == 'seo_geo' else 20
                     payload = {'brand': 'Homestro', 'source_product_id': str(raw['id']), 'source_url': raw['link'],
                         'brief_version': BRIEF['version'], 'brief_hash': BRIEF_HASH, 'owner': OWNERS[kind],
                         'blockers': blockers, 'content': content, 'publication_confirmed': False,
                         'receipt': None, 'paid_generation_performed': False,
                         'dispatch': 'existing_consumer_only_no_external_write'}
                     inserted = db.execute('INSERT OR IGNORE INTO pilot_marketing_work VALUES (?,?,?,?,?,?,?,?,?,?)',
-                        (key, 'Homestro', path, kind, revision, state, 40 if kind == 'seo_geo' else 20,
+                        (key, 'Homestro', path, kind, revision, state, priority,
                          at, expires, json.dumps(payload, ensure_ascii=False))).rowcount
                     created += inserted
                     if not inserted:
                         # No public API can mark a task published or manufacture a receipt.
-                        db.execute('UPDATE pilot_marketing_work SET state=?,expires_at=?,payload=? WHERE id=?',
-                                   (state, expires, json.dumps(payload, ensure_ascii=False), key))
+                        db.execute('UPDATE pilot_marketing_work SET state=?,expires_at=?,payload=?,priority=? WHERE id=?',
+                                   (state, expires, json.dumps(payload, ensure_ascii=False), priority, key))
                         refreshed += 1
             # Product disappearance/unavailability retires its old proposals immediately.
             rows = db.execute("SELECT DISTINCT product_path FROM pilot_marketing_work WHERE state<>'superseded'").fetchall()
@@ -159,6 +163,8 @@ class MarketingDirector:
                 'budget_increase_authorized': False, 'full_vendor_parity_verified': False,
                 'queue_is_not_publication': True, 'email_send_enabled': False,
                 'observed_organic_publisher': evidence.get('organic', {'status': 'not_observed'}),
+                'search_channel_observations': evidence.get('search_channels', {}),
+                'cognitive_strategy': cognitive,
                 'integration_dependencies': sorted({b for values in BLOCKERS.values() for b in values})}
             db.execute('INSERT INTO pilot_marketing_strategy VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
                        (json.dumps(strategy, ensure_ascii=False),))

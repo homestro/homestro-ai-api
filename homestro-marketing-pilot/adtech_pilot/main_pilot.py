@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .creative_factory import BrandKit, CreativeFactory, HistoricalWin, OpenAIProvider
 from .daemon import PilotDaemon
+from .email_delivery import EmailDelivery
 from .feed_manager import Channel, ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .media_buyer import (
@@ -94,6 +95,23 @@ def _decode_image(value: str, maximum: int) -> bytes:
     return data
 
 
+class EmailConsentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(max_length=254)
+    observed_at: str = Field(max_length=50)
+    evidence_id: str = Field(min_length=1, max_length=100)
+    confirmed: Literal[True]
+
+
+class EmailSendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recipient: str = Field(max_length=254)
+    subject: str = Field(min_length=1, max_length=180)
+    body: str = Field(min_length=1, max_length=15000)
+    campaign_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+    owner_authorized: Literal[True]
+
+
 def create_app(
     *,
     admin_key: str | None = None,
@@ -113,6 +131,7 @@ def create_app(
     audit = PlanAuditStore(
         Path(os.getenv("PILOT_AUDIT_DB_PATH", "/tmp/homestro-adtech/audit.sqlite3"))
     )
+    email_delivery = EmailDelivery(audit, secret=admin_key)
     tasks: set[asyncio.Task] = set()
     stop_daemon = asyncio.Event()
     watchdog = PurchaseWatchdog(audit)
@@ -249,6 +268,37 @@ def create_app(
 
         return {"assets": await asyncio.to_thread(MediaRegistry(audit).list),
                 "publication_confirmed": False, "generation_performed": False}
+
+    @app.post("/pilot/email/consent", dependencies=[Depends(require_admin)])
+    async def email_consent(body: EmailConsentRequest):
+        try:
+            return await asyncio.to_thread(email_delivery.consent, body.email,
+                observed_at=body.observed_at, evidence_id=body.evidence_id, confirmed=body.confirmed)
+        except ValueError as exc:
+            raise HTTPException(422, "INVALID_CONSENT_EVIDENCE") from exc
+
+    @app.post("/pilot/email/send", dependencies=[Depends(require_admin)])
+    async def email_send(body: EmailSendRequest):
+        try:
+            return await email_delivery.send(**body.model_dump(), env=os.environ)
+        except ValueError as exc:
+            raise HTTPException(422, "INVALID_EMAIL_SEND_CONFIGURATION_OR_CONTENT") from exc
+
+    @app.get("/email/unsubscribe/{recipient}/{signature}", response_class=HTMLResponse)
+    async def email_unsubscribe_form(recipient: str, signature: str):
+        if len(recipient) != 64 or any(char not in '0123456789abcdef' for char in recipient) or not hmac.compare_digest(
+                email_delivery.signature(recipient), signature):
+            raise HTTPException(404, "INVALID_UNSUBSCRIBE_LINK")
+        return HTMLResponse('<!doctype html><html lang="de"><meta charset="utf-8"><title>Abmelden</title>'
+            '<form method="post"><button type="submit">E-Mail-Marketing abmelden</button></form></html>',
+            headers={"Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'"})
+
+    @app.post("/email/unsubscribe/{recipient}/{signature}")
+    async def email_unsubscribe(recipient: str, signature: str):
+        try:
+            return await asyncio.to_thread(email_delivery.unsubscribe, recipient, signature)
+        except ValueError as exc:
+            raise HTTPException(404, "INVALID_UNSUBSCRIBE_LINK") from exc
 
     @app.get("/pilot/economics", dependencies=[Depends(require_admin)])
     async def pilot_economics():

@@ -174,7 +174,10 @@ class MediaRegistry:
                 'stored_images': sum(row['kind'] == 'image' for row in rows),
                 'stored_videos': sum(row['kind'] == 'video' for row in rows),
                 'remaining_imports': len(EXISTING_ASSETS) - len(rows), 'results': results,
-                'review_queue_count': len(rows), 'publication_confirmed': False, 'generation_performed': False}
+                'review_queue_count': len(rows), 'available_files': sum(row['file_available'] for row in rows),
+                'matched_assets': sum(bool(row['matched_product_ids']) for row in rows),
+                'requires_mapping': sum(not row['matched_product_ids'] for row in rows),
+                'publication_confirmed': False, 'generation_performed': False}
         finally:
             if own:
                 await client.aclose()

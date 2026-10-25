@@ -56,3 +56,12 @@ Do not label this contract or the current bounded Meta buyer as a completed repl
 ## Director expansion, 25 October 2026
 
 Persistent common strategy/work queue and seven-day calendar now produce grounded proposals across seven marketing domains; protected /pilot/marketing exposes actual stored tasks and blockers. This supplies orchestration and reviewable content, not missing Google/Bing/email write adapters. Existing organic main service includes guide/article/social publication logic and remains the sole consumer; the public receipt bridge reports its records explicitly as database evidence. Existing Higgsfield output intake is now executable and content-addressed, with protected review queue; all11observed exports are images, no video source proven, and ten product mappings remain unknown. Stored media remains distinct from approved/attached/published media.161tests passed before deployment. Full parity remains unverified and external consumers listed above remain incomplete.
+
+## Additional backend implementations
+
+- GoogleAds read-only REST reporting and MicrosoftAds read-only campaign inventory adapters implemented; full campaign mutation and cross-channel optimization remain missing. No connected HYPD accounts were returned and no extra paid channel enabled.
+- Consent/suppression/SMTP delivery backend implemented and tested with fake transport; default off, no recipients imported and no real sends. Existing actual consent/provider configuration and deliverability verification remain necessary.
+- Optional bounded model-based editorial reasoning implemented; source-bound hypotheses, one call/day, no budget/status/publication authority. Kept disabled pending the owner's prior requirement to approve generation costs; active deterministic brain continues.
+- All11existing Higgsfield files actually stored and exact job/product metadata recovered; format is image, not video. Publication still requires visual/source validation and real consumer handoff, not merely downloaded files.
+
+No row above establishes full four-vendor parity or verified profit.178tests pass for implemented paths; real external activation and some write adapters remain incomplete.

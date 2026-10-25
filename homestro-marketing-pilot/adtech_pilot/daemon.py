@@ -562,8 +562,19 @@ class PilotDaemon:
 
         organic = await read_organic_results()
         await self.audit.record("organic_publisher_evidence", organic)
+        from .search_channels import read_google, read_microsoft
+
+        observations = await asyncio.gather(read_google(), read_microsoft(), return_exceptions=True)
+        search_channels = {name: value if isinstance(value, dict) else {"status": "unavailable", "error_type": type(value).__name__}
+            for name, value in zip(("google", "microsoft"), observations, strict=True)}
+        await self.audit.record("search_channel_evidence", search_channels)
+        from .cognitive_strategy import CognitiveStrategy
+
+        cognitive = await CognitiveStrategy(self.audit).cycle(ranked_candidates, controller=plan)
+        await self.audit.record("cognitive_strategy", cognitive)
         strategy = await asyncio.to_thread(MarketingDirector(self.audit).reconcile,
-            ranked_candidates, {"claim": claim, "controller": plan, "organic": organic})
+            ranked_candidates, {"claim": claim, "controller": plan, "organic": organic,
+                                "search_channels": search_channels, "cognitive": cognitive})
         await self.audit.record("marketing_director", strategy)
         logger.info("marketing_director %s", json.dumps(strategy, separators=(",", ":")))
         try:

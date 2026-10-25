@@ -153,6 +153,9 @@ class OpenAIProvider:
         image_model: str = "gpt-image-1",
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 90.0,
+        max_output_tokens: int | None = None,
+        request_byte_limit: int | None = None,
+        service_tier: str | None = None,
     ):
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -163,6 +166,9 @@ class OpenAIProvider:
         )
         self._client = client
         self.timeout_s = timeout_s
+        self.max_output_tokens = max_output_tokens
+        self.request_byte_limit = request_byte_limit
+        self.service_tier = service_tier
 
     async def _http(self) -> httpx.AsyncClient:
         return self._client or httpx.AsyncClient(
@@ -183,7 +189,7 @@ class OpenAIProvider:
                     + base64.b64encode(image_bytes).decode("ascii"),
                 },
             ]
-        body = {
+        body: dict[str, Any] = {
             "model": self.text_model,
             "input": [
                 {
@@ -206,6 +212,12 @@ class OpenAIProvider:
                 }
             },
         }
+        if self.service_tier is not None:
+            body["service_tier"] = self.service_tier
+        if self.max_output_tokens is not None:
+            body["max_output_tokens"] = self.max_output_tokens
+        if self.request_byte_limit is not None and len(json.dumps(body, ensure_ascii=False).encode()) > self.request_byte_limit:
+            raise ValueError("LLM_REQUEST_BYTE_LIMIT")
         client = await self._http()
         own_client = self._client is None
         try:
