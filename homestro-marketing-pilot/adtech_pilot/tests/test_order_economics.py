@@ -113,6 +113,25 @@ class OrderEconomicsTests(unittest.TestCase):
             self.assertIn('variant=', item['link'])
             self.assertEqual(item['link'], item['call_to_action']['value']['link'])
 
+    def test_cost_sync_reuses_existing_app_flow_without_direct_token(self):
+        async def run():
+            paths = []
+            def handler(request):
+                paths.append(request.url.path)
+                if request.url.path.endswith('/oauth/access_token'):
+                    self.assertIn(b'grant_type=client_credentials', request.content)
+                    return httpx.Response(200, json={'access_token': 'short-lived-test-token'})
+                self.assertEqual(request.headers['X-Shopify-Access-Token'], 'short-lived-test-token')
+                return httpx.Response(200, json={'data': {'productVariants': {'nodes': [],
+                    'pageInfo': {'hasNextPage': False, 'endCursor': None}}}})
+            env = {**self.env, 'SHOPIFY_CLIENT_ID': 'existing-app', 'SHOPIFY_CLIENT_SECRET': 'existing-secret'}
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                result = await sync_unit_costs(self.store, env=env, client=client)
+            self.assertEqual(result['status'], 'synchronized')
+            self.assertEqual(len(paths), 2)
+            self.assertNotIn('SHOPIFY_ACCESS_TOKEN', env)
+        asyncio.run(run())
+
     def test_cost_sync_paginates_and_failed_snapshot_preserves_existing_data(self):
         async def run():
             calls = []

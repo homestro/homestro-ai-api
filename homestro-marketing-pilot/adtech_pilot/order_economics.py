@@ -193,7 +193,7 @@ async def sync_unit_costs(store, *, env=None, client=None):
     domain = env.get('SHOPIFY_STORE_DOMAIN', '').removeprefix('https://').rstrip('/')
     version = env.get('SHOPIFY_API_VERSION', '2026-07')
     if (not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com', domain)
-            or not re.fullmatch(r'20\d{2}-(01|04|07|10)', version) or not env.get('SHOPIFY_ACCESS_TOKEN')):
+            or not re.fullmatch(r'20\d{2}-(01|04|07|10)', version)):
         return {'status': 'unavailable', 'reason': 'COST_SOURCE_NOT_CONFIGURED'}
     query = '''query PilotCostCoverage($after: String) { productVariants(first: 50, after: $after) {
       nodes { id inventoryItem { unitCost { amount currencyCode } } } pageInfo { hasNextPage endCursor } } }'''
@@ -202,9 +202,20 @@ async def sync_unit_costs(store, *, env=None, client=None):
     cursor, seen, values, missing = None, set(), {}, 0
     at = datetime.now(UTC).isoformat()
     try:
+        token = env.get('SHOPIFY_ACCESS_TOKEN') or ''
+        if not token:
+            if not env.get('SHOPIFY_CLIENT_ID') or not env.get('SHOPIFY_CLIENT_SECRET'):
+                return {'status': 'unavailable', 'reason': 'COST_EXISTING_APP_CREDENTIALS_UNAVAILABLE'}
+            credentials = await client.post(f'https://{domain}/admin/oauth/access_token', data={
+                'grant_type': 'client_credentials', 'client_id': env['SHOPIFY_CLIENT_ID'],
+                'client_secret': env['SHOPIFY_CLIENT_SECRET']})
+            credentials.raise_for_status()
+            token = credentials.json().get('access_token')
+            if not token:
+                return {'status': 'unavailable', 'reason': 'COST_EXISTING_APP_TOKEN_UNAVAILABLE'}
         for _ in range(40):
             response = await client.post(f'https://{domain}/admin/api/{version}/graphql.json',
-                headers={'X-Shopify-Access-Token': env['SHOPIFY_ACCESS_TOKEN']}, json={'query': query, 'variables': {'after': cursor}})
+                headers={'X-Shopify-Access-Token': token}, json={'query': query, 'variables': {'after': cursor}})
             response.raise_for_status()
             body = response.json()
             if body.get('errors'):
