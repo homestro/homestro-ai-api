@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .control_cycle import control_plan
 from .feed_manager import ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .gmc_diagnostics import MerchantDiagnosticsClient
@@ -130,13 +131,22 @@ class PilotDaemon:
         self._failures = {name: 0 for name in self.jobs}
         self._last_results: dict[str, dict[str, Any]] = {}
         self._latest_products: list[dict[str, Any]] = []
+        self._evidence_times: dict[str, float] = {}
 
     async def run(self, stop: asyncio.Event) -> None:
         """Runs immediately, then emits hourly heartbeats until shutdown."""
         next_heartbeat = 0.0
         while not stop.is_set():
             cycle_started = datetime.now(UTC).isoformat()
-            for name, (interval, job) in self.jobs.items():
+            # Refresh shared metrics before a due creative cycle; provider backoff still wins.
+            creative_due = time.monotonic() >= self._next_run["creative_candidates"]
+            metrics_age = time.monotonic() - self._evidence_times.get("media_buying_plan", -1e12)
+            if creative_due and metrics_age > 900:
+                self._next_run["media_buying_plan"] = 0
+            order = ("feed_diagnostics", "merchant_center_diagnostics", "competitor_scan",
+                     "media_buying_plan", "meta_catalog_access", "creative_candidates")
+            for name in order:
+                interval, job = self.jobs[name]
                 now = time.monotonic()
                 if self._failures[name] > 0:
                     if now < self._retry_at[name]:
@@ -149,6 +159,14 @@ class PilotDaemon:
                     self._retry_at[name] = 0
                     self._next_run[name] = time.monotonic() + interval
                     self._last_results[name] = {"status": "completed", **result}
+                    if name == "feed_diagnostics":
+                        if result.get("status") == "diagnosed" and result.get("products_checked", 0) > 0:
+                            self._evidence_times[name] = time.monotonic()
+                    elif name == "media_buying_plan":
+                        if (result.get("performance") or {}).get("status") in {"collected", "no_managed_campaign"}:
+                            self._evidence_times[name] = time.monotonic()
+                    else:
+                        self._evidence_times[name] = time.monotonic()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - module-level recovery boundary
@@ -485,6 +503,28 @@ class PilotDaemon:
         """
         reconciliation = await MetaPublisher(self.audit).reconcile_retired_campaign()
         await self.audit.record("retired_campaign_reconciliation", reconciliation)
+        claim = (await self.audit.get_meta_micro_campaign_claim()
+                 if hasattr(self.audit, "get_meta_micro_campaign_claim") else None)
+        current = time.monotonic()
+        metrics = self._last_results.get("media_buying_plan", {}).get("performance", {})
+        plan = control_plan(
+            product_count=len(self._latest_products),
+            feed_age_seconds=(current - self._evidence_times["feed_diagnostics"]
+                              if "feed_diagnostics" in self._evidence_times else None),
+            metrics_age_seconds=(current - self._evidence_times["media_buying_plan"]
+                                 if "media_buying_plan" in self._evidence_times else None),
+            performance_status=metrics.get("status"), campaign_status=(claim or {}).get("status"),
+            live_enabled=(os.getenv("ALLOW_MICRO_BUDGET") == "true" and not live_ads_dry_run()),
+            daily_cap_eur=configured_daily_budget_limit_eur())
+        await self.audit.record("pilot_control_cycle", plan)
+        logger.info("pilot_control_cycle %s", json.dumps(plan, separators=(",", ":")))
+        if not plan["creative_cycle_allowed"]:
+            if plan["next_action"] == "REFRESH_SHOPIFY_FEED":
+                self._next_run["feed_diagnostics"] = 0
+            elif plan["next_action"] == "REFRESH_META_METRICS":
+                self._next_run["media_buying_plan"] = 0
+            return {"status": "hold", "reason": plan["reason"], "controller": plan,
+                    "retired_campaign": reconciliation, "campaign_writes_performed": False}
         candidates = [
             product
             for product in self._latest_products
