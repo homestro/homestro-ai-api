@@ -8,7 +8,7 @@ import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
@@ -194,10 +194,14 @@ class AutonomousBrain:
             if intent:
                 if not intent.get('creative_id'):
                     stage = 'reconcile_creative'
-                    matches, cursor, seen = [], None, set()
+                    matches, cursor, seen, named_candidates = [], None, set(), 0
                     def links(story):
                         data = story.get('link_data') or {}
-                        return sorted(str(item.get('link', '')) for item in [data, *data.get('child_attachments', [])])
+                        def canonical(value):
+                            parsed = urlsplit(str(value))
+                            return (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path,
+                                    tuple(sorted(parse_qsl(parsed.query, keep_blank_values=True))), parsed.fragment)
+                        return sorted(canonical(item.get('link', '')) for item in [data, *data.get('child_attachments', [])])
                     for _ in range(5):
                         params = {'fields': 'id,name,object_story_spec', 'limit': '100'}
                         if cursor:
@@ -210,6 +214,8 @@ class AutonomousBrain:
                         for candidate in body['data']:
                             observed = candidate.get('object_story_spec') or {}
                             expected = intent['story']
+                            if candidate.get('name') == 'Homestro Exploration ' + intent['key'][:16]:
+                                named_candidates += 1
                             if (candidate.get('name') == 'Homestro Exploration ' + intent['key'][:16]
                                     and str(observed.get('page_id')) == str(expected['page_id'])
                                     and links(observed) == links(expected)
@@ -227,7 +233,7 @@ class AutonomousBrain:
                         raise ValueError('creative reconciliation page limit')
                     if len(set(matches)) != 1:
                         return {'status': 'blocked', 'reason': 'CREATIVE_CREATE_UNCERTAIN_NO_RETRY',
-                                'matches': len(set(matches)), 'intent': intent['key']}
+                                'matches': len(set(matches)), 'named_candidates': named_candidates, 'intent': intent['key']}
                     intent = await asyncio.to_thread(self.memory.created, intent, matches[0])
                 if creative_id == intent['creative_id']:
                     await asyncio.to_thread(self.memory.finish, campaign, state, intent)
