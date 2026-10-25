@@ -61,6 +61,14 @@ class MediaRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(list(self.registry.root.glob('*.image'))), 1)
         self.assertEqual(len(self.registry.list()), 2)
 
+    async def test_verified_mapping_added_to_existing_export_without_redownloading(self):
+        await self.imported(record={**self.record, 'product_url': None})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: self.fail('Unexpected download'))) as client:
+            row = await self.registry.import_one(self.record, self.products, client=client)
+        self.assertTrue(row['already_imported'])
+        self.assertEqual(row['matched_product_ids'], ['123'])
+        self.assertEqual(self.registry.list()[0]['state'], 'review_required')
+
     async def test_unmapped_media_never_becomes_ready_for_publication(self):
         row = await self.imported(record={**self.record, 'product_url': None})
         self.assertEqual(row['state'], 'product_mapping_required')

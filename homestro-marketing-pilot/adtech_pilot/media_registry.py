@@ -80,6 +80,23 @@ class MediaRegistry:
             previous = json.loads(existing[0])
             path = self.root / (previous['sha256'] + ('.image' if kind == 'image' else '.mp4'))
             if path.is_file() and await asyncio.to_thread(lambda: hashlib.sha256(path.read_bytes()).hexdigest()) == previous['sha256']:
+                target = record.get('product_url')
+                if target:
+                    if previous.get('source_product_url') and canonical(previous['source_product_url']) != canonical(target):
+                        raise ValueError('EXISTING_JOB_PRODUCT_MAPPING_CHANGED')
+                    matches = []
+                    for product in products:
+                        try:
+                            if canonical(product.get('link', '')) == canonical(target):
+                                matches.append(str(product['id']))
+                        except ValueError:
+                            continue
+                    previous['source_product_url'] = target
+                    previous['matched_product_ids'] = matches
+                    previous['state'] = 'review_required' if matches else 'product_mapping_required'
+                    previous['blockers'] = ['VISUAL_REVIEW_REQUIRED'] + ([] if matches else ['VERIFIED_PRODUCT_MAPPING_REQUIRED']) + ([] if previous['aspect_ratio'] in {'1:1', '9:16'} else ['UNSUPPORTED_PUBLICATION_ASPECT_RATIO'])
+                    with closing(self.audit._connect()) as db, db:
+                        db.execute('UPDATE pilot_imported_media SET payload=? WHERE job=?', (json.dumps(previous), job))
                 return {**previous, 'already_imported': True}
         payload = bytearray()
         async with client.stream('GET', url, follow_redirects=False) as response:
@@ -144,6 +161,8 @@ class MediaRegistry:
         imported = {item['job_id'] for item in self.list() if item['file_available']}
         results = []
         try:
+            for record in [item for item in EXISTING_ASSETS if item['job_id'] in imported]:
+                await self.import_one(record, products, client=client)
             for record in [item for item in EXISTING_ASSETS if item['job_id'] not in imported][:limit]:
                 try:
                     async with asyncio.timeout(30):
