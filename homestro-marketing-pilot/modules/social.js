@@ -260,8 +260,11 @@ export class SocialCoordinator {
           const state=await this.provider.submit({...job,payload,status:'publishing'},remote=>this.checkpoint(job.id,remote));
           await this.settle(job.id,state);
         }catch(e){
+          // A definitive missing source cannot become publishable without a new draft.
+          // Timeouts retain approval; any attempted write remains held for recovery.
+          const nextStatus=claimed?'recovery_required':codeOf(e)==='PRODUCT_NOT_FOUND'?'superseded':'approved';
           await client.query(`UPDATE marketing_social_posts SET status=$3,error_code=$2,updated_at=now() WHERE id=$1`,
-            [job.id,codeOf(e),claimed?'recovery_required':'approved']);
+            [job.id,codeOf(e),nextStatus]);
           log(claimed?'SOCIAL_RECOVERY_REQUIRED':'SOCIAL_SOURCE_CHECK_PENDING',{postId:job.id,reason:codeOf(e)});
         }
       }

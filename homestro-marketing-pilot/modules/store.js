@@ -51,7 +51,7 @@ export class Store {
     await this.pool.query('UPDATE marketing_posts SET remote=$2,updated_at=now() WHERE id=$1',[id,remote]);
   }
   async setStatus(id,status,errorCode=null) {
-    await this.pool.query(`UPDATE marketing_posts SET status=$2,error_code=$3,updated_at=now(),published_at=CASE WHEN $2='published' THEN COALESCE(published_at,now()) ELSE published_at END WHERE id=$1`,[id,status,errorCode]);
+    await this.pool.query(`UPDATE marketing_posts SET status=$2,error_code=$3,updated_at=now(),attempted_at=CASE WHEN $2='publishing' THEN COALESCE(attempted_at,now()) ELSE attempted_at END,published_at=CASE WHEN $2='published' THEN COALESCE(published_at,now()) ELSE published_at END WHERE id=$1`,[id,status,errorCode]);
     await this.pool.query('INSERT INTO marketing_events(post_id,code) VALUES($1,$2)',[id,errorCode||status]);
   }
   async feedRows() {
