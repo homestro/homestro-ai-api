@@ -49,11 +49,16 @@ def accounting_observations(store, providers, *, now=None, authorized_channels=(
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         raise ValueError('TIMEZONE_REQUIRED')
+    if not isinstance(providers, dict):
+        providers = {}
     start, end = common_window(now)
     observations = {}
     for channel in CHANNELS:
-        source = providers.get(channel) or {}
+        raw_source = providers.get(channel)
+        source = raw_source if isinstance(raw_source, dict) else {}
         blockers = []
+        if raw_source is not None and not isinstance(raw_source, dict):
+            blockers.append('PROVIDER_EVIDENCE_INVALID')
         try:
             spend = reported_spend(channel, source)
         except (ValueError, TypeError, ArithmeticError, KeyError):
@@ -90,9 +95,21 @@ def accounting_observations(store, providers, *, now=None, authorized_channels=(
         if len(campaigns) > 500:
             raise ValueError('ACCOUNTING_CAMPAIGN_LIMIT')
         source_rows = source.get('metrics') if channel == 'meta' else source.get('campaigns')
-        owned = set(source.get('owned_campaign_ids') or [])
+        raw_owned = source.get('owned_campaign_ids')
+        owned_valid = (isinstance(raw_owned, list) and bool(raw_owned) and len(raw_owned) <= 500
+                       and all(isinstance(key, str) and re.fullmatch(r'[1-9]\d{0,29}', key) for key in raw_owned)
+                       and len(set(raw_owned)) == len(raw_owned))
+        owned = set(raw_owned) if owned_valid else set()
+        if not owned_valid:
+            aligned = False
+            blockers.append('OWNED_CAMPAIGN_SCOPE_INVALID')
         source_ids = {str(row.get('campaign_id') if channel == 'meta' else row.get('id'))
-                      for row in source_rows or [] if isinstance(row, dict)}
+                      for row in source_rows if isinstance(row, dict)} if isinstance(source_rows, list) else set()
+        # Every owned campaign needs an explicit spend observation, including zero.
+        # Omitted rows cannot silently become zero and inflate contribution.
+        if owned_valid and source_ids != owned:
+            aligned = False
+            blockers.append('OWNED_CAMPAIGN_SPEND_COVERAGE_INCOMPLETE')
         if not set(campaigns).issubset(owned) or not source_ids.issubset(owned):
             aligned = False
             blockers.append('SIGNED_ORDER_OR_PROVIDER_CAMPAIGN_SCOPE_UNVERIFIED')

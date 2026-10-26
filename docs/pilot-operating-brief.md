@@ -654,3 +654,10 @@ paid reasoning cache now rejects changed brand/product context as stale without
 making another paid call that day.254Python tests, Ruff and mypy84files passed.
 Shipping and production goal readback follow; no paid activity is authorized.
 
+
+
+## Channel accounting evidence isolation — 26 October 2026
+
+Accounting now isolates malformed provider payloads to the affected channel instead of aborting the whole cross-channel evaluation. Owned campaign IDs must be a bounded, unique list of numeric strings, and every owned campaign must have an explicit spend row (including zero). Missing campaign spend cannot inflate contribution. Existing signed-order costs, exact common windows, Purchase hard lock, and zero additional spend authority remain unchanged.
+
+Validation: 26 accounting, allocation, order economics and sales-goal tests passed locally. This code change does not supply missing fulfillment/payment/return costs or normalize provider reporting windows; those remain explicit evidence dependencies. No new campaign, generation or publication is claimed by this entry. Deployment readback is required separately.
