@@ -166,3 +166,16 @@ test('catalog decisions preserve the existing owner exclusion policy',async()=>{
   assert.equal(update.args[2].eligible,false);
   assert.equal(update.args[3],'blocked');
 });
+
+
+test('cycle receipt readback binds the current source revision before and after consumer preparation',async()=>{
+  const f=fixture();
+  f.brain.afterPrepare=async()=>f.afterConsumer();
+  await f.brain.tick();
+  const reads=f.queries.filter(q=>q.sql.includes('GROUP BY channel,status'));
+  assert.equal(reads.length,4);
+  for(const q of reads){
+    assert.match(q.sql,/payload->>'productRevision'=\$2/);
+    assert.equal(q.args[1],'revision-'+q.args[0].split('/').at(-1));
+  }
+});
