@@ -72,13 +72,14 @@ export class CatalogBrain{
     return {catalogRecords:products.length,eligible,sourceImages:images.size,sourceImageReferences:imageReferences,nativeVideoProducts:nativeVideos,
       scope:'all_persisted_shopify_catalog_states',higgsfieldImportLimitApplied:false,adSpendEUR:0};
   }
-  async receipts(productId){
+  async receipts(productId,revision){
     const tables=['marketing_posts'];
     if((await this.pool.query("SELECT to_regclass('marketing_social_posts') AS present")).rows[0]?.present)tables.push('marketing_social_posts');
     const result=[];
     for(const table of tables){
       const rows=(await this.pool.query(`SELECT channel,status,count(*)::int AS count FROM ${table}
-        WHERE product_id=$1 GROUP BY channel,status ORDER BY channel,status`,[productId])).rows;
+        WHERE product_id=$1 AND payload->>'productRevision'=$2
+        GROUP BY channel,status ORDER BY channel,status`,[productId,revision])).rows;
       result.push(...rows);
     }
     return result;
@@ -104,21 +105,21 @@ export class CatalogBrain{
         let result;
         try{result=await this.processProduct(row.product_id);}
         catch(e){result={processed:0,status:'failed',reasons:[codeOf(e)]};}
-        const receipts=await this.receipts(row.product_id);
+        const receipts=await this.receipts(row.product_id,row.source_revision);
         const outcome={status:result?.status||'unconfirmed',processed:result?.processed||0,
           reasons:result?.reasons||[],newQueueRows:result?.queued||0,receipts,paidGenerationPerformed:false};
         const ready=result?.status==='draft_queued';
         await client.query(`UPDATE marketing_catalog_brain SET state=$2,outcome=$3,next_attempt_at=$4,updated_at=now()
           WHERE product_id=$1`,[row.product_id,ready?'prepared':'waiting',outcome,
           new Date(now.getTime()+(ready?24*3600000:4*3600000))]);
-        outcomes.push({productId:row.product_id,...outcome});
+        outcomes.push({productId:row.product_id,sourceRevision:row.source_revision,...outcome});
       }
       let consumerPreparation={status:'not_needed'};
       if(outcomes.some(x=>x.status==='draft_queued')){
         try{await this.afterPrepare();consumerPreparation={status:'existing_consumers_checked'};}
         catch(e){consumerPreparation={status:'unavailable',reason:codeOf(e)};}
         for(const outcome of outcomes){
-          outcome.receipts=await this.receipts(outcome.productId);
+          outcome.receipts=await this.receipts(outcome.productId,outcome.sourceRevision);
           const {productId,...saved}=outcome;
           await client.query('UPDATE marketing_catalog_brain SET outcome=$2 WHERE product_id=$1',[productId,saved]);
         }
