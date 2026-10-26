@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
+from .brand_memory import BrandMemory
 from .content_engine import BRIEF, BRIEF_HASH, product_draft
 
 KINDS = {'meta_experiment', 'google_search', 'bing_search', 'social_content',
@@ -91,6 +92,7 @@ class MarketingDirector:
         if now.tzinfo is None:
             raise ValueError('TIMEZONE_REQUIRED')
         local_day = now.astimezone(ZoneInfo('Europe/Berlin')).date().isoformat()
+        brand_context = BrandMemory(self.audit).context()
         selected, seen, rejected = [], set(), 0
         for raw in products:
             try:
@@ -127,7 +129,7 @@ class MarketingDirector:
         created, refreshed = 0, 0
         with closing(self.audit._connect()) as db, db:
             for raw, path, pack in selected:
-                revision = digest({'brief': BRIEF_HASH, 'pack': pack})
+                revision = digest({'brief': BRIEF_HASH, 'pack': pack, 'brand_memory': brand_context['revision']})
                 db.execute("UPDATE pilot_marketing_work SET state='superseded' WHERE product_path=? AND revision<>? AND state<>'superseded'",
                            (path, revision))
                 for kind, content in pack.items():
@@ -167,6 +169,7 @@ class MarketingDirector:
                     priority = 70 if str(raw['id']) in preferred else 40 if kind == 'seo_geo' else 20
                     payload = {'brand': 'Homestro', 'source_product_id': str(raw['id']), 'source_url': raw['link'],
                         'brief_version': BRIEF['version'], 'brief_hash': BRIEF_HASH, 'owner': OWNERS[kind],
+                        'brand_context': brand_context,
                         'blockers': blockers, 'content': content, 'publication_confirmed': False,
                         'receipt': receipt, 'paid_generation_performed': False,
                         'dispatch': 'existing_consumer_only_no_external_write'}
@@ -207,6 +210,8 @@ class MarketingDirector:
                     'coverage_complete': catalog.get('coverage_complete') is True, 'pages_read': catalog.get('pages_read')},
                 'search_channel_observations': evidence.get('search_channels', {}),
                 'cognitive_strategy': cognitive,
+                'brand_memory': {'revision': brand_context['revision'], 'evidence_ids': brand_context['evidence_ids'],
+                                 'evidence_level': brand_context['evidence_level']},
                 'integration_dependencies': sorted({b for row in db.execute("SELECT payload FROM pilot_marketing_work WHERE state<>'superseded'").fetchall() for b in json.loads(row[0]).get('blockers', [])})}
             db.execute('INSERT INTO pilot_marketing_strategy VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
                        (json.dumps(strategy, ensure_ascii=False),))

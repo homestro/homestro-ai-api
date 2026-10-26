@@ -82,6 +82,17 @@ class MainPilotTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
 
+    def test_brand_memory_requires_admin_review_and_current_revision(self):
+        path = '/pilot/brand-memory'
+        headers = {'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}
+        self.assertEqual(self.request('GET', path).status_code, 401)
+        empty = self.request('GET', path, headers=headers).json()
+        body = {'expected_revision': empty['revision'], 'entries': [{'id': 'voice', 'kind': 'voice',
+            'text_de': 'Klar und sachlich formulieren.', 'source_url': 'https://homestro.de/', 'reviewed': True}]}
+        self.assertEqual(self.request('PUT', path, json=body).status_code, 401)
+        self.assertEqual(self.request('PUT', path, json=body, headers=headers).status_code, 200)
+        self.assertEqual(self.request('PUT', path, json=body, headers=headers).status_code, 409)
+
     def test_public_payment_route_fails_closed_before_signing_configuration(self):
         from unittest.mock import patch
 
