@@ -58,3 +58,26 @@ class ChannelAccountingTests(unittest.TestCase):
         self.assertIsNone(results['microsoft']['spend_eur'])
         self.assertTrue(all(not row['common_window_verified'] for row in results.values()))
         self.assertTrue(all(row['contribution_after_ads_eur'] is None for row in results.values()))
+
+
+    def test_malformed_channel_evidence_does_not_stop_healthy_channel_accounting(self):
+        for malformed in (['bad'], 'bad', 123, {'owned_campaign_ids': [{}], 'metrics': 1},
+                          {'owned_campaign_ids': ['12'], 'metrics': 'bad'}):
+            with self.subTest(malformed=malformed):
+                result = accounting_observations(self.store, {'meta': malformed, 'google': self.source}, now=self.now)
+                self.assertEqual(result['google']['contribution_after_ads_eur'], '20.00')
+                self.assertIsNone(result['meta']['contribution_after_ads_eur'])
+                self.assertFalse(result['meta']['common_window_verified'])
+
+    def test_every_owned_campaign_requires_explicit_spend_including_zero(self):
+        for patch in ({'owned_campaign_ids': ['42', '99']}, {'owned_campaign_ids': ['42', '42']},
+                      {'owned_campaign_ids': [{}]}, {'campaigns': 5}):
+            with self.subTest(patch=patch):
+                result = accounting_observations(self.store, {'google': {**self.source, **patch}}, now=self.now)['google']
+                self.assertFalse(result['common_window_verified'])
+                self.assertIsNone(result['contribution_after_ads_eur'])
+        explicit_zero = {**self.source, 'owned_campaign_ids': ['42', '99'],
+                         'campaigns': self.source['campaigns'] + [{'id': '99', 'cost_micros': '0'}]}
+        result = accounting_observations(self.store, {'google': explicit_zero}, now=self.now)['google']
+        self.assertTrue(result['common_window_verified'])
+        self.assertEqual(result['contribution_after_ads_eur'], '20.00')
