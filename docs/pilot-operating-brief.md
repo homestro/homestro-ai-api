@@ -637,3 +637,20 @@ customer message occurred. Full four-vendor coverage is not established by this
 increment. Current request also includes explaining subscription vs API billing
 and the commercial limits of automation; no guaranteed sales claim is justified.
 
+### Sales-goal and memory freshness follow-up — 26 October 2026
+PR118 merged at281d020; Railway deploymentd2504fdf-1bce-44a2-a079-4aff057600d0
+reachedSUCCESS. Runtime resumed feed/SEO/control cycles; existing media handoff
+readback confirms11stored images,44queue rows and0confirmed published imported
+assets. This is not new generation or a sale.
+
+Follow-up implements the owner's existing target10paid orders/day and minimum
+EUR10profit/order, with Europe/Berlin day boundaries including DST. Protected
+GET /pilot/goals and the regular director cycle read the existing signed-order
+ledger, exclude blocked/refunded/cancelled and future records, and distinguish
+tagged orders from unknown total shop orders. Missing daily advertising costs
+and complete net-profit accounting remain explicit; contribution is not labelled
+net profit. Goal achievement grants no spend or campaign authority. Existing
+paid reasoning cache now rejects changed brand/product context as stale without
+making another paid call that day.254Python tests, Ruff and mypy84files passed.
+Shipping and production goal readback follow; no paid activity is authorized.
+

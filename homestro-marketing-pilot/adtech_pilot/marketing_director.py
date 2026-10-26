@@ -210,6 +210,7 @@ class MarketingDirector:
                     'coverage_complete': catalog.get('coverage_complete') is True, 'pages_read': catalog.get('pages_read')},
                 'search_channel_observations': evidence.get('search_channels', {}),
                 'cognitive_strategy': cognitive,
+                'sales_goals': evidence.get('sales_goals', {'status': 'not_observed'}),
                 'brand_memory': {'revision': brand_context['revision'], 'evidence_ids': brand_context['evidence_ids'],
                                  'evidence_level': brand_context['evidence_level']},
                 'integration_dependencies': sorted({b for row in db.execute("SELECT payload FROM pilot_marketing_work WHERE state<>'superseded'").fetchall() for b in json.loads(row[0]).get('blockers', [])})}

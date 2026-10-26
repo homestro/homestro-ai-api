@@ -61,6 +61,21 @@ class CognitiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['cached'])
         self.assertEqual(self.calls, 0)
 
+    async def test_brand_or_product_change_invalidates_cached_priority_without_new_paid_call(self):
+        from adtech_pilot.brand_memory import BrandMemory
+
+        await self.brain.cycle([self.product], controller={}, env=self.env, provider=self.provider, now=self.now)
+        memory = BrandMemory(self.audit)
+        memory.replace([{'id': 'voice', 'kind': 'voice', 'text_de': 'Klar und sachlich formulieren.',
+                         'source_url': 'https://homestro.de/', 'reviewed': True}],
+                       expected_revision=memory.read()['revision'])
+        for product in (self.product, {**self.product, 'price': '49.90'}):
+            result = await self.brain.cycle([product], controller={}, env=self.env, provider=self.provider, now=self.now)
+            self.assertEqual(result['status'], 'stale_context_no_retry_today')
+            self.assertNotIn('decision', result)
+            self.assertFalse(result['additional_generation_performed'])
+        self.assertEqual(self.calls, 1)
+
     async def test_lost_provider_response_reserves_day_and_never_blindly_replays(self):
         class Lost:
             async def complete(self, **kwargs):

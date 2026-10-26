@@ -295,6 +295,13 @@ def create_app(
 
         return await asyncio.to_thread(BrandMemory(audit).read)
 
+    @app.get('/pilot/goals', dependencies=[Depends(require_admin)])
+    async def pilot_goals():
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+        from .sales_goals import sales_goal_progress
+
+        return await asyncio.to_thread(sales_goal_progress, PaymentWebhookStore(payment_database(os.environ)))
+
     @app.put('/pilot/brand-memory', dependencies=[Depends(require_admin)])
     async def pilot_brand_memory_update(body: BrandMemoryRequest):
         from .brand_memory import BrandMemory

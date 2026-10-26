@@ -518,6 +518,10 @@ class PilotDaemon:
         from .product_selection import read_cost_candidates
 
         payment_store = PaymentWebhookStore(payment_database(os.environ))
+        from .sales_goals import sales_goal_progress
+
+        sales_goals = await asyncio.to_thread(sales_goal_progress, payment_store)
+        await self.audit.record('sales_goal_progress', sales_goals)
         ranked_candidates, selection = await asyncio.to_thread(read_cost_candidates, payment_store, candidates)
         from .content_engine import content_batch
         from .marketing_director import MarketingDirector
@@ -571,7 +575,7 @@ class PilotDaemon:
         await self.audit.record("cognitive_strategy", cognitive)
         strategy = await asyncio.to_thread(MarketingDirector(self.audit).reconcile,
             ranked_candidates, {"claim": claim, "controller": plan, "organic": organic, "catalog_work": catalog_work,
-                                "search_channels": search_channels, "cognitive": cognitive})
+                                "search_channels": search_channels, "cognitive": cognitive, "sales_goals": sales_goals})
         await self.audit.record("marketing_director", strategy)
         logger.info("marketing_director %s", json.dumps(strategy, separators=(",", ":")))
         try:
