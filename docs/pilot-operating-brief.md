@@ -616,3 +616,24 @@ Validation:242Python tests passed, including poison-row restart progression/prov
 
 ## Whole-catalog receipt pagination completion — 25 October 2026
 Authenticated publisher evidence is now cursor-paginated in stable product_id order,100rows/page. The bridge follows up to20pages/2000records, rejects repeated/disappearing cursors, changing global state counts, duplicated IDs and incomplete reported coverage; legacy responses remain explicitly coverage_complete=false. The director no longer truncates consumer evidence to the first100products. Planning/publication policies are unchanged. Local244Python tests,243Node tests, Ruff and mypy80source files passed. Prior hardeningf685f76 deployment7fd08142-cbf3-4e5f-99d8-40b1eb9c40bc SUCCESS; live SEO checked5, skipped2ineligible sources and preserved3existing SEO records, with no stuck ValueError. Scheduled search recovery reportedno_intents without calls. Accounting observed historical provider spend while common-window/cost proof remainedfalse and runtime spending authority0EUR. Final pagination release/live coverage readback follows.
+## Brand evidence memory implementation — 26 October 2026
+
+Prepared on the existing adtech source branch lineage, not yet deployed: persistent
+Homestro-only versioned brand/story memory with authenticated GET/PUT
+`/pilot/brand-memory`, optimistic revision checks and immutable revision history.
+Entries require explicit review and a clean own-store source URL. Product claims
+require exact product and source revision; generic strategy never receives those
+claims without that binding. No brand story, customer review or product benefit
+was invented or seeded. The deterministic director attaches the reviewed context
+to existing campaign packs and supersedes old proposals when memory changes.
+The existing optional cost-gated reasoning adapter receives cited brand evidence;
+its paid enablement and once-per-day limit remain unchanged. Existing consumers
+still require their own review and receipts; memory is not publication authority.
+
+Validation: 249 Python tests passed (37 targeted); Ruff passed for changed source
+and new test, mypy passed for four changed source modules, git diff check passed.
+No live memory write, paid API call, product/video duplication, ad activation or
+customer message occurred. Full four-vendor coverage is not established by this
+increment. Current request also includes explaining subscription vs API billing
+and the commercial limits of automation; no guaranteed sales claim is justified.
+

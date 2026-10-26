@@ -46,6 +46,12 @@ class SearchCreateRequest(BaseModel):
     german_copy_reviewed: Literal[True]
 
 
+class BrandMemoryRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_revision: str = Field(pattern=r'^[a-f0-9]{64}$')
+    entries: list[dict[str, Any]] = Field(max_length=100)
+
+
 class SearchPauseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_account: str = Field(pattern=r'^\d{1,20}$')
@@ -282,6 +288,24 @@ def create_app(
         from .marketing_director import MarketingDirector
 
         return await asyncio.to_thread(MarketingDirector(audit).report, limit=limit)
+
+    @app.get('/pilot/brand-memory', dependencies=[Depends(require_admin)])
+    async def pilot_brand_memory():
+        from .brand_memory import BrandMemory
+
+        return await asyncio.to_thread(BrandMemory(audit).read)
+
+    @app.put('/pilot/brand-memory', dependencies=[Depends(require_admin)])
+    async def pilot_brand_memory_update(body: BrandMemoryRequest):
+        from .brand_memory import BrandMemory
+
+        try:
+            return await asyncio.to_thread(BrandMemory(audit).replace, body.entries,
+                                           expected_revision=body.expected_revision)
+        except ValueError as exc:
+            code = str(exc)
+            raise HTTPException(409 if code == 'BRAND_MEMORY_REVISION_CONFLICT' else 422,
+                                code if code.startswith('BRAND_MEMORY_') else 'BRAND_MEMORY_INVALID_ENTRY') from None
 
     @app.post("/pilot/search/{channel}/{campaign_id}/pause", dependencies=[Depends(require_admin)])
     async def pilot_search_pause(channel: Literal['google', 'microsoft'], campaign_id: str, body: SearchPauseRequest):
