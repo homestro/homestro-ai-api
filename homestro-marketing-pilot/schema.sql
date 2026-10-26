@@ -70,3 +70,10 @@ CREATE TABLE IF NOT EXISTS marketing_seo_attempts (
 );
 CREATE INDEX IF NOT EXISTS marketing_seo_attempts_time ON marketing_seo_attempts(attempted_at);
 
+
+-- Immutable first send time: reconciliation must not renew daily quota.
+ALTER TABLE marketing_posts ADD COLUMN IF NOT EXISTS attempted_at timestamptz;
+UPDATE marketing_posts s SET attempted_at=COALESCE(
+  (SELECT min(e.created_at) FROM marketing_events e WHERE e.post_id=s.id AND e.code='publishing'),
+  s.published_at,s.updated_at)
+WHERE s.status IN ('publishing','published','recovery_required') AND s.attempted_at IS NULL;

@@ -13,8 +13,8 @@ export class Worker {
     try {
       const acquired=await this.store.withWorkerLock(async client=>{
         const count=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE
-          (status='published' AND published_at>now()-interval '24 hours') OR status='recovery_required'`)).rows[0].count);
-        // Uncertain jobs consume quota until reconciled; never trigger a retry storm.
+          (status='published' AND published_at>now()-interval '24 hours') OR (status IN ('publishing','recovery_required') AND COALESCE(attempted_at,updated_at)>now()-interval '24 hours')`)).rows[0].count);
+        // Only recent attempts consume daily quota. Same-product uncertainty remains blocked below.
         if(count>=this.cfg.maxDailyPosts){
           log('PUBLISH_BLOCKED',{reason:'DAILY_TOTAL_LIMIT',publishedOrUncertainLast24h:count,limit:this.cfg.maxDailyPosts});
           return;
@@ -26,12 +26,12 @@ export class Worker {
               AND NOT (s.product_id=ANY($1::text[]))
               AND (SELECT count(*) FROM marketing_posts recent WHERE recent.channel=s.channel
                 AND ((recent.status='published' AND recent.published_at>now()-interval '24 hours')
-                  OR recent.status='recovery_required')) < $2::int
+                  OR (recent.status IN ('publishing','recovery_required') AND COALESCE(recent.attempted_at,recent.updated_at)>now()-interval '24 hours'))) < $2::int
               AND NOT EXISTS (SELECT 1 FROM marketing_posts old WHERE old.channel=s.channel
                 AND old.product_id=s.product_id AND old.id<>s.id AND old.status IN ('published','publishing','recovery_required'))
               AND ($3::int=0 OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
                 AND spaced.status IN ('published','publishing','recovery_required')
-                AND COALESCE(spaced.published_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
+                AND COALESCE(spaced.published_at,spaced.attempted_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
               ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job){
@@ -40,14 +40,14 @@ export class Worker {
         }
         if(this.cfg.organicPolicy==='balanced-v1'){
           const used=Number((await client.query(`SELECT count(*) AS channel_used FROM marketing_posts
-            WHERE channel=$1 AND (status IN ('publishing','recovery_required') OR
+            WHERE channel=$1 AND ((status IN ('publishing','recovery_required') AND COALESCE(attempted_at,updated_at)>now()-interval '24 hours') OR
               (status='published' AND published_at>now()-interval '24 hours'))`,[job.channel])).rows[0].channel_used);
           if(used>=this.cfg.maxDailyPerChannel){log('PUBLISH_BLOCKED',{reason:'DAILY_CHANNEL_LIMIT',channel:job.channel});return;}
         }
         if(this.cfg.publishEveryHours) {
           const recent=Number((await client.query(`SELECT count(*) AS recent FROM marketing_posts WHERE channel=$1
             AND status IN ('published','publishing','recovery_required')
-            AND COALESCE(published_at,updated_at)>now()-$2::int*interval '1 hour'`,[job.channel,this.cfg.publishEveryHours])).rows[0].recent);
+            AND COALESCE(published_at,attempted_at,updated_at)>now()-$2::int*interval '1 hour'`,[job.channel,this.cfg.publishEveryHours])).rows[0].recent);
           if(recent>0){log('PUBLISH_BLOCKED',{reason:'CHANNEL_INTERVAL',channel:job.channel,hours:this.cfg.publishEveryHours});return;}
         }
         if(job.payload.requiresVisualReview){log('PUBLISH_BLOCKED',{postId:job.id,reason:'IMPORTED_VISUAL_REVIEW_REQUIRED'});return;}

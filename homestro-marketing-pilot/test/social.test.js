@@ -276,3 +276,11 @@ test('missing provider ID is read-recovered and persisted even with publication 
   assert.ok(f.queries.some(q=>q.sql.includes('published_at=CASE')&&q.args[1]==='published'));
   assert.ok(f.queries.some(q=>q.sql.includes('SET remote=remote')&&q.args[1].includes('providerPostId')));
 });
+
+test('definitively deleted Shopify source retires only the unsent social approval',async()=>{
+  const f=fixture();f.c.freshSnapshot=async()=>fail('PRODUCT_NOT_FOUND');
+  await f.c.tick(midday);
+  assert.equal(f.submits,0);
+  assert.ok(f.queries.some(q=>q.sql.includes('SET status=$3,error_code=$2')&&q.args[2]==='superseded'));
+  assert.equal(f.queries.some(q=>q.sql.includes("SET status='publishing'")),false);
+});
