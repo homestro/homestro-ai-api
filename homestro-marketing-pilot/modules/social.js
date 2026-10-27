@@ -220,7 +220,8 @@ export class SocialCoordinator {
       // A large approved TikTok batch must not starve Pinterest after TikTok's cap.
       const jobs=(await client.query(`SELECT * FROM (
         SELECT s.*,row_number() OVER (PARTITION BY channel ORDER BY approved_at,id) AS queue_rank
-        FROM marketing_social_posts s WHERE status='approved') fair
+        FROM marketing_social_posts s WHERE status='approved'
+          AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_social_posts' AND plan.post_id=s.id AND plan.scheduled_for>now())) fair
         WHERE queue_rank<=20 ORDER BY approved_at,id`)).rows;
       for(const job of jobs){
         if(!this.providerCfg.accounts[job.channel])continue;

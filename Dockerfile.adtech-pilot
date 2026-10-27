@@ -13,24 +13,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app
 WORKDIR /app
-RUN groupadd --system --gid 10001 pilot \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 pilot \
     && useradd --system --uid 10001 --gid pilot --home-dir /nonexistent \
        --shell /usr/sbin/nologin pilot \
     && mkdir -p /data/adtech-pilot /data/adtech-creatives \
     && chown -R pilot:pilot /data
 COPY --from=builder /opt/venv /opt/venv
 RUN mkdir -p /app/adtech_pilot
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/__init__.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/feed_manager.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/creative_factory.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/media_buyer.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/main_pilot.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/daemon.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/github_reporter.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/gmc_diagnostics.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/micro_budget.py /app/adtech_pilot/
-USER 10001:10001
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/*.py /app/adtech_pilot/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/entrypoint.py /app/entrypoint.py
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"
-CMD ["uvicorn", "adtech_pilot.main_pilot:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
+ENTRYPOINT ["python", "/app/entrypoint.py"]

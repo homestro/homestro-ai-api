@@ -10,6 +10,8 @@ import json
 import re
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from html import unescape
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -45,12 +47,13 @@ class FeedProduct(BaseModel):
     condition: str = "new"
     identifier_exists: bool | None = None
     facts: list[str] = Field(default_factory=list, max_length=20)
+    tags: list[str] = Field(default_factory=list, max_length=100)
 
     @field_validator("price", mode="before")
     @classmethod
     def parse_price(cls, value: Any) -> Decimal:
         if isinstance(value, str):
-            value = re.sub(r"\s*(EUR|€)\s*$", "", value.strip(), flags=re.I)
+            value = re.sub(r"\s*(EUR|€)\s*$", "", value.strip(), flags=re.IGNORECASE)
             value = value.replace(",", ".")
         try:
             amount = Decimal(str(value))
@@ -170,9 +173,7 @@ def _xml_row(node: Any) -> dict[str, Any]:
         key = _local(child.tag)
         value = (child.text or "").strip()
         # Google XML commonly appends a currency code to <price>.
-        if key == "availability" and value:
-            row[key] = value
-        elif key in {
+        if key in {
             "id",
             "title",
             "description",
@@ -191,6 +192,83 @@ def _xml_row(node: Any) -> dict[str, Any]:
         }:
             row[key] = value
     return row
+
+
+class _TextExtractor(HTMLParser):
+    """Extract readable text from Shopify's HTML product descriptions."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        text = re.sub(r"\s+", " ", data).strip()
+        if text:
+            self.parts.append(text)
+
+
+def _plain_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    parser = _TextExtractor()
+    parser.feed(value)
+    parser.close()
+    return re.sub(r"\s+", " ", unescape(" ".join(parser.parts))).strip()
+
+
+def _shopify_product(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Map one public Shopify product.js object into the channel-neutral schema."""
+    if not {"id", "handle", "variants"}.issubset(row):
+        return None
+    variants = row.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return None
+    prices: list[Decimal] = []
+    for variant in variants:
+        if not isinstance(variant, dict) or not variant.get("available", False):
+            continue
+        raw_price = variant.get("price")
+        try:
+            # Shopify's product.js API expresses variant prices in minor units.
+            amount = Decimal(str(raw_price))
+            price = amount / 100 if amount == amount.to_integral_value() else amount
+            if price > 0:
+                prices.append(price)
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+    if not prices:
+        return None
+    images = row.get("images")
+    image_link = (
+        images[0]
+        if isinstance(images, list) and images
+        else row.get("featured_image")
+    )
+    if isinstance(image_link, dict):
+        image_link = image_link.get("src") or image_link.get("url")
+    if isinstance(image_link, str) and image_link.startswith("//"):
+        image_link = f"https:{image_link}"
+    handle = str(row.get("handle") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._~-]{0,255}", handle):
+        return None
+    tags = row.get("tags") or []
+    if isinstance(tags, str):
+        tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
+    if not isinstance(tags, list):
+        tags = []
+    return {
+        "id": str(row["id"]),
+        "title": row.get("title"),
+        "description": _plain_text(row.get("description")),
+        "link": f"https://homestro.de/products/{handle}",
+        "image_link": image_link,
+        "price": min(prices),
+        "currency": "EUR",
+        "availability": "in_stock" if row.get("available") else "out_of_stock",
+        "brand": row.get("vendor"),
+        "product_type": row.get("type") or None,
+        "tags": [str(tag) for tag in tags[:100]],
+    }
 
 
 class ProductFeedManager:
@@ -224,7 +302,7 @@ class ProductFeedManager:
             ):
                 return self._parse_json(raw)
             return self._parse_xml(raw)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - parser boundary returns a safe issue
             # Avoid returning parser internals or any untrusted feed content to clients.
             return FeedReport(
                 products=[],
@@ -241,16 +319,26 @@ class ProductFeedManager:
 
     def _parse_json(self, raw: bytes) -> FeedReport:
         decoded = json.loads(raw)
-        rows = (
+        rows: Any = None
+        if isinstance(decoded, dict) and {"id", "handle", "variants"}.issubset(
             decoded
-            if isinstance(decoded, list)
-            else decoded.get("products", decoded.get("items", []))
-            if isinstance(decoded, dict)
-            else None
-        )
+        ):
+            rows = [_shopify_product(decoded)]
+            source_format = "shopify-product-json"
+        else:
+            rows = (
+                decoded
+                if isinstance(decoded, list)
+                else decoded.get("products", decoded.get("items", []))
+                if isinstance(decoded, dict)
+                else None
+            )
+            source_format = "json"
         if not isinstance(rows, list) or len(rows) > self.MAX_PRODUCTS:
             raise ValueError("invalid product collection")
-        return self._validate_rows([self._normalize_row(row) for row in rows], "json")
+        return self._validate_rows(
+            [self._normalize_row(row) for row in rows], source_format
+        )
 
     @staticmethod
     def _normalize_row(row: Any) -> Any:
@@ -303,12 +391,12 @@ class ProductFeedManager:
                 continue
             try:
                 product = FeedProduct.model_validate(row)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - schema validation boundary
                 rejected += 1
                 # Pydantic errors contain only field/type details, never echo feed values.
                 fields = ", ".join(
                     str(e.get("loc", ["?"])[0])
-                    for e in getattr(exc, "errors", lambda: [])()
+                    for e in getattr(exc, "errors", list)()
                 )
                 issues.append(
                     FeedIssue(

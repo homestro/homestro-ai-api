@@ -29,7 +29,7 @@ function db(){
   if(q.includes('SELECT id,status FROM marketing_'))return {rows:[posts.get(args.join('|'))].filter(Boolean)};
   if(q.includes("UPDATE marketing_imported_media SET state='queued'"))Object.assign(imports.get(args[0]),{state:'queued',asset:args[1],receipt:args[2]});
   if(q.includes('SELECT receipt,state FROM marketing_imported_media'))return {rows:[imports.get(args[0])].filter(Boolean)};
-  if(q.includes('SELECT id,status,remote,payload FROM marketing_'))return {rows:[...posts.values()].filter(p=>p.id===args[0])};
+  if(q.includes('SELECT p.id,p.status,p.remote,p.payload,plan.scheduled_for FROM marketing_'))return {rows:[...posts.values()].filter(p=>p.id===args[0])};
   return {rows:[],rowCount:0};
  };
  return {imports,posts,sql,query,connect:async()=>({query,release(){}})};

@@ -89,3 +89,13 @@ test('missing, ambiguous or other-account recovery results never permit another 
     assert.equal(reads,1);
   }
 });
+
+test('publication readback separates platform permalink ID from aggregator job ID and rejects profile URLs',()=>{
+ const api=new ZernioOrganic(cfg);
+ const post={_id:remoteId,platforms:[{platform:'pinterest',accountId:id,status:'published',platformPostUrl:'https://www.pinterest.com/pin/987654321/'}]};
+ const receipt=api.publicationState(post,'pinterest');
+ assert.equal(receipt.platformPostId,'987654321');assert.notEqual(receipt.platformPostId,remoteId);
+ assert.equal(receipt.platformIdSource,'provider_reported_permalink');
+ post.platforms[0].platformPostUrl='https://www.pinterest.com/homestro/';
+ assert.equal(api.publicationState(post,'pinterest').status,'verification_pending');
+});

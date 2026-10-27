@@ -1,3 +1,5 @@
+import {MarketingOperations} from './operations.js';
+import {openAiHealth,checkOpenAiAccess} from './openai-health.js';
 import {CatalogBrain} from './catalog-brain.js';
 import {createSourceLocalizer} from './source-localizer.js';
 import {ImportedMediaCoordinator,importMetadata} from './imported-media.js';
@@ -48,6 +50,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
   try {
     if(!apiKeyMiddleware && (!cfg.adminKey || cfg.adminKey.length<32))fail('PILOT_ADMIN_KEY_REQUIRED');
     const store=new Store(pool);await store.migrate();
+    if(process.env.PILOT_OPENAI_DIAGNOSTIC_ONCE==='true')try{log('OPENAI_ACCESS_DIAGNOSTIC',await checkOpenAiAccess(cfg));}
+    catch(e){log('OPENAI_ACCESS_DIAGNOSTIC',{status:'unavailable',reason:codeOf(e),generationPerformed:false});}
     const renderer=new MediaRenderer(cfg), meta=new MetaOrganic(cfg);
     const ingestion=new Ingestion({store,renderer,localizer,feeRate:cfg.feeRate,cfg});
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
@@ -124,6 +128,9 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         autoApprovalEnabled:cfg.autonomyEnabled,excludedProductIds:cfg.excludedProductIds||[],afterPrepare:async()=>{await approveReviewed(store,cfg);if(social)await social.prepare();}});
       await catalogBrain.migrate();
     }catch(e){catalogBrain=null;log('CATALOG_BRAIN_DISABLED',{reason:codeOf(e)});}
+    let operations=null;
+    try{operations=new MarketingOperations({pool,cfg,socialEnabled:Boolean(social)});await operations.migrate();}
+    catch(e){operations=null;log('MARKETING_OPERATIONS_DISABLED',{reason:codeOf(e)});}
     let syncBusy=false,syncTimer;
     const sync=async()=>{
       if(syncBusy)return {busy:true};syncBusy=true;
@@ -268,6 +275,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.json({ok:true,channels:Object.keys(s.providerCfg.accounts),adSpendEUR:0});
     }));
     router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
+    router.post('/generated-videos/quote',route(async(req,res)=>res.json(await generated.quote(req.body))));
     router.post('/generated-videos',route(async(req,res)=>res.json(await generated.start(req.body))));
     router.get('/generated-videos/:key',route(async(req,res)=>res.json(await generated.poll(req.params.key))));
     router.post('/generated-videos/:key/handoff',route(async(req,res)=>{
@@ -336,6 +344,15 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.json({enabled:true,workerEnabled:cfg.workerEnabled,publishingEnabled:cfg.publishingEnabled,
         feedEnabled:cfg.feedEnabled,products,posts,pendingReasons,publications,adSpendEUR:0});
     }));
+    router.get('/operations',route(async(req,res)=>{
+      if(!operations)return res.status(503).json({error:'MARKETING_OPERATIONS_NOT_CONFIGURED'});
+      res.json(await operations.report(req.query.day));
+    }));
+    router.post('/operations/run',route(async(req,res)=>{
+      if(!operations)return res.status(503).json({error:'MARKETING_OPERATIONS_NOT_CONFIGURED'});
+      res.json(await operations.tick());
+    }));
+    router.get('/providers/openai',route(async(req,res)=>res.json(await openAiHealth(cfg))));
     router.get('/connection',route(async(req,res)=>{await meta.verifyConnection();res.json({ok:true,publishingEnabled:cfg.publishingEnabled,adSpendEUR:0});}));
     router.post('/posts/:id/approve',route(async(req,res)=>{
       const reviewer=String(req.body.reviewer||'').trim();if(!reviewer || reviewer.length>100)fail('REVIEWER_REQUIRED');
@@ -382,6 +399,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }
     if(social&&(process.env.PILOT_TIKTOK_RECOVERY_PROBE==='true'||process.env.PILOT_TIKTOK_ASSET_REPAIR_POST_ID)&&process.env.PILOT_TIKTOK_RECOVERY_CUTOFF&&process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID)
       await runTikTokRecoveryProbe(social,new Date(),new Date(process.env.PILOT_TIKTOK_RECOVERY_CUTOFF),process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID,process.env.PILOT_TIKTOK_ASSET_REPAIR_POST_ID||null);
+    if(operations)await operations.tick().catch(e=>log('MARKETING_OPERATIONS_PENDING',{reason:codeOf(e)}));
+    operations?.start();
     worker.start();
     social?.start();
     generated.startPolling();
@@ -401,8 +420,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       brainTimer=setInterval(()=>void runBrain(),5*60000);brainTimer.unref();void runBrain();
     }
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
-    return {enabled:true,processProduct,sync,store,worker,social,feedXML:freshFeedXML,
-      stop(){worker.stop();social?.stop();generated.stopPolling();clearInterval(syncTimer);clearInterval(brainTimer);}};
+    return {enabled:true,processProduct,sync,store,worker,social,operations,feedXML:freshFeedXML,
+      stop(){operations?.stop();worker.stop();social?.stop();generated.stopPolling();clearInterval(syncTimer);clearInterval(brainTimer);}};
   }catch(e){log('DISABLED',{reason:codeOf(e)});return {enabled:false,processProduct:async()=>({processed:0,status:'marketing_disabled'}),stop(){}};}
 }
 

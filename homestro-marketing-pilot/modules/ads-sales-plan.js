@@ -10,6 +10,7 @@ const SALES_QUERY = `query PilotProductSales($query: String!) {
 const TITLE_QUERY = `FROM sales SHOW gross_sales, net_sales, orders GROUP BY product_title ORDER BY net_sales DESC LIMIT 500 SINCE -90d UNTIL today`;
 const LANDING_QUERY = `FROM sessions SHOW sessions, sessions_with_cart_additions, sessions_that_reached_checkout WHERE human_or_bot_session = 'human' SINCE -90d UNTIL today GROUP BY landing_page_path ORDER BY sessions DESC LIMIT 1000`;
 const money = value => {
+  if(value===null||value===undefined||typeof value==='boolean'||(typeof value==='string'&&!value.trim()))return null;
   const n=Number(value);
   return Number.isFinite(n)?n:null;
 };

@@ -76,3 +76,11 @@ test('scheduled product-demand refresh caches permission state instead of retryi
   assert.deepEqual(saved.missingScopes,['read_reports']);
   assert.ok(queries.some(q=>q.includes('CREATE TABLE IF NOT EXISTS marketing_product_sales')));
 });
+
+test('unknown or boolean verified margins never become zero-cost evidence',()=>{
+ for(const marginEUR of [null,undefined,'',true,false]){
+  const plan=buildSalesPlan({products:[product({pricing:{costVerified:true,marginEUR}})],productSales:{status:'connected',byTitle:{},byPath:{}}});
+  assert.equal(plan.products[0].verifiedMarginEUR,null);
+  assert.ok(plan.products[0].blockedBy.includes('PRODUCT_MARGIN_UNVERIFIED'));
+ }
+});
