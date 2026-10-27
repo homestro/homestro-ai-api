@@ -14,6 +14,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from urllib.parse import parse_qs, urljoin, urlsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -36,7 +37,10 @@ class FirstPurchaseStore:
               authorized_at TEXT NOT NULL, activation_intent_at TEXT, activated_at TEXT,
               expires_at TEXT, stop_reason TEXT);
               CREATE TABLE IF NOT EXISTS pilot_first_purchase_reviews(
-              creative TEXT PRIMARY KEY, revision TEXT NOT NULL, reviewer TEXT NOT NULL, reviewed_at TEXT NOT NULL);''')
+              creative TEXT PRIMARY KEY, revision TEXT NOT NULL, reviewer TEXT NOT NULL, reviewed_at TEXT NOT NULL);
+              CREATE TABLE IF NOT EXISTS pilot_first_purchase_envelopes(
+              day TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500),
+              provider_acknowledged INTEGER NOT NULL DEFAULT 0);''')
 
     def authorize(self, campaign, now):
         terms = {'markets': ['DE', 'AT'], 'daily_eur': '5.00', 'total_eur': '35.00', 'days': 7,
@@ -76,6 +80,26 @@ class FirstPurchaseStore:
     def stop(self, reason):
         with closing(self.audit._connect()) as db, db:
             db.execute("UPDATE pilot_first_purchase_consent SET state='stopped',stop_reason=? WHERE singleton=1", (reason,))
+
+    def envelope(self, lifetime, today, now):
+        lifetime, today = Decimal(lifetime), Decimal(today)
+        if not lifetime.is_finite() or not today.is_finite() or today < 0 or lifetime < today:
+            raise ValueError('DAILY_SPEND_BASELINE_INVALID')
+        day = now.astimezone(ZoneInfo('Europe/Berlin')).date().isoformat()
+        cap = min(3500, int((lifetime-today)*100)+500)
+        with closing(self.audit._connect()) as db, db:
+            db.execute('INSERT INTO pilot_first_purchase_envelopes(day,cap_cents) VALUES(?,?) ON CONFLICT(day) DO NOTHING', (day, cap))
+            db.execute('UPDATE pilot_first_purchase_envelopes SET provider_acknowledged=CASE WHEN cap_cents>? THEN 0 ELSE provider_acknowledged END, cap_cents=MIN(cap_cents,?) WHERE day=?', (cap, cap, day))
+            row = db.execute('SELECT cap_cents FROM pilot_first_purchase_envelopes WHERE day=?', (day,)).fetchone()
+        return {'day': day, 'cap_cents': min(cap, row[0]), 'authorized_daily_eur': '5.00', 'authorized_total_eur': '35.00'}
+
+    def previous_envelope_confirmed(self, cap, day):
+        with closing(self.audit._connect()) as db:
+            return bool(db.execute('SELECT 1 FROM pilot_first_purchase_envelopes WHERE day<? AND cap_cents=? AND provider_acknowledged=1', (day, cap)).fetchone())
+
+    def confirm_envelope(self, day, cap):
+        with closing(self.audit._connect()) as db, db:
+            db.execute('UPDATE pilot_first_purchase_envelopes SET provider_acknowledged=1 WHERE day=? AND cap_cents=?', (day, cap))
 
     def review(self, creative, revision, reviewer, now):
         if not re.fullmatch(r'\d{4,30}', creative) or not re.fullmatch(r'[a-f0-9]{64}', revision) or not isinstance(reviewer, str) or not 1 <= len(reviewer.strip()) <= 100:
@@ -189,13 +213,16 @@ class FirstPurchaseController:
             if timezone.get('timezone_name') not in {'Europe/Berlin', 'Europe/Vienna'}:
                 return await pause('DAILY_SPEND_REPORTING_TIMEZONE_NOT_DE_AT')
             stage = 'adset'
-            adsets = (await get(campaign + '/adsets', 'id,status,daily_budget,lifetime_budget,start_time,end_time,targeting,promoted_object,optimization_goal')).get('data', [])
+            adsets = (await get(campaign + '/adsets', 'id,status,effective_status,daily_budget,lifetime_budget,start_time,end_time,targeting,promoted_object,optimization_goal')).get('data', [])
             if len(adsets) != 1:
                 return await pause('SINGLE_OWNED_ADSET_REQUIRED')
             adset = adsets[0]
             if not re.fullmatch(r'\d{4,30}', str(adset.get('id'))):
                 return await pause('ADSET_ID_NOT_VERIFIED')
             snapshot['adset_id'] = str(adset.get('id'))
+            snapshot['adset_status'] = adset.get('status')
+            snapshot['adset_effective_status'] = adset.get('effective_status')
+            snapshot['observed_limits'] = {'daily_budget_cents': adset.get('daily_budget'), 'campaign_spend_cap_cents': remote.get('spend_cap'), 'start_time': adset.get('start_time'), 'end_time': adset.get('end_time'), 'countries': adset.get('targeting', {}).get('geo_locations', {}).get('countries', [])}
             end, start = instant(adset['end_time']), instant(adset['start_time'])
             if str(adset.get('daily_budget')) != '500' or adset.get('lifetime_budget') not in (None, 0, '0') or not start <= now < end or end - start > timedelta(days=7) or set(adset.get('targeting', {}).get('geo_locations', {}).get('countries', [])) != {'DE', 'AT'}:
                 return await pause('ADSET_BUDGET_SCHEDULE_OR_DE_AT_TARGETING_INVALID')
@@ -219,7 +246,7 @@ class FirstPurchaseController:
             cards = data.get('child_attachments') or [data]
             if not isinstance(cards, list) or not 1 <= len(cards) <= 10:
                 return await pause('CREATIVE_CARD_SCOPE_INVALID')
-            snapshot.update(ad_id=str(ad['id']), creative_id=creative_id, creative_revision=revision,
+            snapshot.update(ad_id=str(ad['id']), ad_status=ad.get('status'), ad_effective_status=ad.get('effective_status'), creative_id=creative_id, creative_revision=revision,
                             creative_preview={'message': data.get('message'), 'cards': [{'title': r.get('name'), 'image': r.get('picture'), 'destination': r.get('link', '').split('?')[0]} for r in cards]})
             try:
                 from lxml import html
@@ -227,8 +254,10 @@ class FirstPurchaseController:
                 previews = await get(str(ad['id']) + '/previews', params={'ad_format': 'DESKTOP_FEED_STANDARD'})
                 frame = html.fromstring(previews['data'][0]['body']).xpath('//iframe/@src')[0]
                 target = urlsplit(frame)
-                if target.scheme == 'https' and target.hostname in {'www.facebook.com', 'facebook.com'} and not target.username and 'access_token' not in parse_qs(target.query):
+                if target.scheme == 'https' and target.hostname in {'www.facebook.com', 'facebook.com', 'business.facebook.com'} and not target.username and 'access_token' not in parse_qs(target.query):
                     snapshot['creative_preview']['meta_preview_url'] = frame
+                else:
+                    snapshot['preview_read_error'] = {'endpoint': '/'+str(ad['id'])+'/previews', 'reason': 'UNTRUSTED_OR_CREDENTIAL_BEARING_PREVIEW_URL', 'host': target.hostname}
             except Exception as exc:
                 snapshot['preview_read_error'] = {'endpoint': '/'+str(ad['id'])+'/previews', 'error_type': type(exc).__name__}
                 if isinstance(exc, httpx.HTTPStatusError):
@@ -244,22 +273,39 @@ class FirstPurchaseController:
             source_cards = cards + ([data] if data.get('link') and data.get('link') not in {r.get('link') for r in cards} else [])
             source_blockers = await self.sources(client, source_cards, campaign, str(ad['id']), pixel, now)
             blockers.extend(source_blockers)
+            snapshot['site_diagnostics'] = getattr(self, 'site_diagnostics', [])
+            snapshot['technical_gates_passed'] = not any(b != 'EXACT_CREATIVE_PREVIEW_REVIEW_REQUIRED' for b in blockers)
+            snapshot['creative_review_passed'] = bool(review)
+            snapshot['tracking_configuration_verified'] = not source_blockers and not any(b == 'EXISTING_SIGNED_TRACKING_CONFIGURATION_REQUIRED' for b in blockers)
             if blockers:
                 return {**await pause('READINESS_GATES_NOT_PASSED'), 'blockers': blockers}
             if env.get('PILOT_LAUNCH_POLICY') != POLICY or env.get('PILOT_FIRST_PURCHASE_TEST_AUTHORIZED') != 'true' or env.get('PILOT_FIRST_PURCHASE_ACTIVATION_ENABLED') != 'true' or live_ads_dry_run(env) or env.get('ALLOW_MICRO_BUDGET') != 'true' or configured_daily_budget_limit_eur(env) != 5:
                 return await pause('EXPLICIT_BOUNDED_ACTIVATION_SWITCHES_REQUIRED')
-            stage = 'provider_total_cap'
-            # Campaign-only spend limit; do not alter the ad account or any other campaign.
+            stage = 'provider_native_daily_and_total_cap'
+            # Daily budget alone can overdeliver. A native cumulative campaign cap
+            # limits this Berlin day's additional spend, never above EUR35 total.
+            # Tomorrow's pre-authorized EUR5 allowance is not a daily-budget increase.
+            envelope = self.store.envelope(spends['maximum'], spends['today'], now)
+            snapshot['native_spend_envelope'] = envelope
+            target_cap = envelope['cap_cents']
             cap = Decimal(str(remote.get('spend_cap') or '0'))
-            if cap == 0 or cap > 3500:
-                response = await client.post(base + campaign, headers=headers, data={'spend_cap': '3500'})
+            if not cap.is_finite() or cap < 0 or cap != int(cap):
+                return await pause('PROVIDER_SPEND_CAP_INVALID')
+            may_release_next_day = cap < target_cap and self.store.previous_envelope_confirmed(int(cap), envelope['day'])
+            if cap == 0 or cap > target_cap or may_release_next_day:
+                response = await client.post(base + campaign, headers=headers, data={'spend_cap': str(target_cap)})
                 response.raise_for_status()
                 confirmed = await get(campaign, 'id,spend_cap,status')
-                if str(confirmed.get('spend_cap')) != '3500':
-                    return await pause('PROVIDER_TOTAL_CAP_NOT_CONFIRMED')
-            elif cap < 3500:
-                snapshot['provider_total_cap_eur'] = str(cap / 100)  # Never raise an existing lower cap.
-                if Decimal(spends['maximum']) * 100 >= cap:
+                if str(confirmed.get('spend_cap')) != str(target_cap):
+                    return await pause('PROVIDER_DAILY_AND_TOTAL_CAP_NOT_CONFIRMED')
+                self.store.confirm_envelope(envelope['day'], target_cap)
+                snapshot['native_spend_cap_readback_cents'] = target_cap
+            elif cap == target_cap:
+                self.store.confirm_envelope(envelope['day'], target_cap)
+                snapshot['native_spend_cap_readback_cents'] = int(cap)
+            else:
+                snapshot['native_spend_cap_readback_cents'] = int(cap)
+                if Decimal(spends['maximum'])*100 >= cap:
                     return await pause('EXISTING_LOWER_TOTAL_CAP_REACHED', latch=True)
             if remote.get('status') == 'ACTIVE':
                 if consent['state'] == 'activation_intent':
@@ -327,6 +373,8 @@ class FirstPurchaseController:
             return ['CURRENT_FEED_SIZE_LIMIT']
         feed = ProductFeedManager().parse(response.content, response.headers.get('content-type'))
         blockers = []
+        runtime_pixel_checked, runtime_pixel_verified = False, False
+        self.site_diagnostics = []
         if not isinstance(cards, list) or not 1 <= len(cards) <= 11:
             return ['CREATIVE_CARD_SCOPE_INVALID']
         for card in cards:
@@ -348,19 +396,54 @@ class FirstPurchaseController:
             if landing.status_code != 200 or len(landing.content) > 2 * 1024 * 1024 or '<form' not in landing.text or '/cart/add' not in landing.text:
                 blockers.append('LANDING_OR_ADD_TO_CART_NOT_AVAILABLE')
                 continue
-            if pixel not in landing.text:
-                blockers.append('STOREFRONT_PIXEL_CONFIGURATION_NOT_OBSERVED')
+            diagnostic = {'product_path': url.path, 'landing_http_status': landing.status_code, 'pixel_in_initial_html': pixel in landing.text, 'checkout_hops': []}
+            self.site_diagnostics.append(diagnostic)
+            if pixel not in landing.text and not runtime_pixel_verified:
+                # Shopify app pixels may be deferred and absent from initial HTML.
+                # Use the existing own-store publisher browser; do not invent an event.
+                key = env.get('PILOT_ORGANIC_API_KEY')
+                configured = False
+                if key and not runtime_pixel_checked:
+                    runtime_pixel_checked = True
+                    probe = await client.post('https://homestro-ai-api-fixed-current-production.up.railway.app/api/marketing/v2/tracking/site-check',
+                        headers={'Authorization': 'Bearer '+key}, json={'url': card['link'], 'expectedPixelId': pixel}, timeout=httpx.Timeout(40, connect=5))
+                    diagnostic['runtime_probe_http_status'] = probe.status_code
+                    if probe.status_code == 200 and len(probe.content) <= 32768:
+                        proof = probe.json()
+                        configured = (proof.get('configured') is True and proof.get('expectedPixelId') == pixel
+                            and proof.get('pixelBeaconsSuppressed') is True and proof.get('purchaseEventDelivered') is False)
+                        diagnostic['observed_pixel_ids'] = proof.get('observedPixelIds', [])
+                        runtime_pixel_verified = configured
+                if not configured:
+                    blockers.append('STOREFRONT_PIXEL_CONFIGURATION_NOT_OBSERVED')
             variant = next((parse_qs(urlsplit(p.link).query).get('variant', [None])[0] for p in matches if parse_qs(urlsplit(p.link).query).get('variant')), None)
             if not variant or not re.fullmatch(r'\d+', variant):
                 blockers.append('CHECKOUT_VARIANT_NOT_IDENTIFIED')
                 continue
             # Anonymous cart permalink performs no order/payment; retain no checkout token or customer data.
-            checkout = await client.get('https://homestro.de/cart/' + variant + ':1', follow_redirects=False)
-            target = urlsplit(urljoin('https://homestro.de', checkout.headers.get('location', '')))
-            if checkout.status_code not in {301, 302, 303} or target.scheme != 'https' or target.hostname not in {'homestro.de', 'www.homestro.de'} or not target.path.startswith('/checkouts/'):
-                blockers.append('REAL_CHECKOUT_REDIRECT_NOT_VERIFIED')
-                continue
-            checkout_page = await client.get(target.geturl(), follow_redirects=False)
-            if checkout_page.status_code != 200 or len(checkout_page.content) > 2 * 1024 * 1024 or 'checkout' not in checkout_page.text.lower():
-                blockers.append('REAL_CHECKOUT_PAGE_NOT_AVAILABLE')
+            current = 'https://homestro.de/cart/' + variant + ':1?checkout&source=pilot_readiness_probe'
+            shop = env.get('SHOPIFY_STORE_DOMAIN', '').removeprefix('https://').rstrip('/')
+            allowed_hosts = {'homestro.de', 'www.homestro.de', 'checkout.shopify.com'}
+            if re.fullmatch(r'[a-zA-Z0-9-]+\.myshopify\.com', shop):
+                allowed_hosts.add(shop)
+            checkout_ok = False
+            checkout_failure = 'REAL_CHECKOUT_REDIRECT_NOT_VERIFIED'
+            for _ in range(8):
+                checkout = await client.get(current, follow_redirects=False, headers={'User-Agent': 'HomestroReadinessProbe/1.0'})
+                target = urlsplit(current)
+                diagnostic['checkout_hops'].append({'host': target.hostname, 'status': checkout.status_code, 'kind': 'checkout' if '/checkout' in target.path else 'cart' if '/cart' in target.path else 'other'})
+                if '/checkout' in target.path:
+                    checkout_failure = 'REAL_CHECKOUT_PAGE_NOT_AVAILABLE'
+                if checkout.status_code == 200:
+                    checkout_ok = (len(checkout.content) <= 2*1024*1024 and '/checkout' in target.path
+                        and 'checkout' in checkout.text.lower())
+                    break
+                if checkout.status_code not in {301, 302, 303, 307, 308}:
+                    break
+                target = urlsplit(urljoin(current, checkout.headers.get('location', '')))
+                if target.scheme != 'https' or target.hostname not in allowed_hosts or target.username or target.password or target.port not in (None, 443):
+                    break
+                current = target.geturl()
+            if not checkout_ok:
+                blockers.append(checkout_failure)
         return sorted(set(blockers))
