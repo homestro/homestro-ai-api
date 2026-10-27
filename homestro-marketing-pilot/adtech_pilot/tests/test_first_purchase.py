@@ -20,7 +20,7 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 
 
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
-    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False):
+    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
         await audit.claim_meta_micro_campaign('act_12345', 'all')
         await audit.update_meta_micro_campaign(status='ACTIVE_PENDING_REVIEW', campaign_id=CAMPAIGN)
@@ -60,7 +60,7 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={'data': [{'body': '<iframe src="https://www.facebook.com/ads/api/preview_iframe.php?d=example"></iframe>'}]})
             if path.endswith('/' + CREATIVE):
                 return httpx.Response(200, json={'id': CREATIVE, 'object_story_spec': {'page_id': '67890',
-                    'link_data': {'message': 'Produktdetails bei Homestro', 'link': 'https://homestro.de/products/box', 'picture': 'https://cdn.shopify.com/box.jpg', 'name': 'Box'}}})
+                    'link_data': {'message': 'Produktdetails bei Homestro', 'link': 'https://homestro.de/products/box', 'picture': 'https://cdn.shopify.com/box.jpg', 'name': 'Box', **({'child_attachments': cards} if cards else {})}}})
             if path.endswith('/' + AD):
                 return httpx.Response(200, json={'id': AD, 'status': 'ACTIVE', 'effective_status': 'ACTIVE', 'creative': {'id': CREATIVE}})
             return httpx.Response(200, json={'id': CAMPAIGN, 'account_id': '12345', 'objective': 'OUTCOME_SALES',
@@ -89,7 +89,8 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result['prior_purchase_required'])
             self.assertEqual(result['consent']['activated_at'], NOW.isoformat())
             self.assertEqual(result['consent']['expires_at'], (NOW+timedelta(days=6)).isoformat())
-            self.assertEqual(state['writes'], [('/v26.0/'+CAMPAIGN, {'status': ['ACTIVE']})])
+            self.assertEqual(state['writes'], [('/v26.0/'+CAMPAIGN, {'spend_cap': ['500']}), ('/v26.0/'+CAMPAIGN, {'status': ['ACTIVE']})])
+            self.assertEqual(result['native_spend_cap_readback_cents'], 500)
             self.assertIn('meta_preview_url', result['creative_preview'])
             self.assertEqual(FirstPurchaseStore(PlanAuditStore(Path(directory)/'audit.sqlite')).read()['activated_at'], NOW.isoformat())
 
@@ -104,6 +105,24 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['creative_preview']['message'], 'Produktdetails bei Homestro')
             self.assertEqual(result['creative_preview']['cards'][0]['destination'], 'https://homestro.de/products/box')
             self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
+
+    async def test_prior_approval_never_overrides_owner_exclusions_or_duplicate_variant_cards(self):
+        from adtech_pilot.website_ads import OWNER_EXCLUDED_HANDLES
+
+        for cards, blocker in [
+            ([{'link': 'https://homestro.de/products/'+next(iter(OWNER_EXCLUDED_HANDLES)), 'name': 'Bürste'}], 'OWNER_EXCLUDED_CREATIVE_PRODUCT'),
+            ([{'link': 'https://homestro.de/products/box?variant=1'}, {'link': 'https://homestro.de/products/box?variant=2'}], 'DUPLICATE_PRODUCT_CARDS'),
+            ([{'link': 'https://homestro.de/products/silicone-spatula', 'name': 'Silikonspachtel'}], 'OWNER_EXCLUDED_CREATIVE_PRODUCT'),
+        ]:
+            with tempfile.TemporaryDirectory() as directory:
+                _, state, client, control = await self.fixture(directory, cards=cards)
+                control.env = {**ENV, 'SHOPIFY_WEBHOOK_SECRET': 'test', 'PILOT_ADMIN_KEY': 'test-signature-secret'}
+                with self.patches()[0], self.patches()[1]:
+                    result = await control.cycle(now=NOW)
+                await client.aclose()
+                self.assertTrue(result['creative_review_passed'])
+                self.assertIn(blocker, result['blockers'])
+                self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
 
     async def test_total_cap_and_expiry_are_durable_and_cannot_be_reset_by_restart_or_new_campaign(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -157,8 +176,12 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             state['requests'].append(request.method)
             if request.url.path == '/feed':
                 return httpx.Response(200, json=[{**feed[0], 'availability': 'in_stock' if state['stock'] else 'out_of_stock'}])
-            if request.url.path.startswith('/cart/'):
+            if request.url.path == '/api/marketing/v2/tracking/site-check':
+                return httpx.Response(200, json={'configured': True, 'expectedPixelId': '56789', 'pixelBeaconsSuppressed': True, 'purchaseEventDelivered': False, 'observedPixelIds': ['56789']})
+            if request.url.path.startswith('/cart/c/'):
                 return httpx.Response(302, headers={'location': '/checkouts/cn/test-anonymous'})
+            if request.url.path.startswith('/cart/'):
+                return httpx.Response(302, headers={'location': '/cart/c/test-anonymous'})
             if request.url.path.startswith('/checkouts/'):
                 return httpx.Response(200 if state['checkout'] else 503, text='<html>Shopify checkout</html>')
             return httpx.Response(200, text='<form action="/cart/add">Buy</form>'+('56789' if state['pixel'] else ''))
@@ -176,6 +199,10 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED', await controller.sources(
                     client, [{**card, 'link': 'https://homestro.de/products/box'}], CAMPAIGN, AD, '56789', NOW))
             self.assertEqual(set(state['requests']), {'GET'})
+            state['pixel'] = False
+            controller.env = {**controller.env, 'PILOT_ORGANIC_API_KEY': 'test-internal'}
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+                self.assertEqual(await controller.sources(client, [card], CAMPAIGN, AD, '56789', NOW), [])
 
     async def test_lost_activation_response_is_compensated_and_never_extends_consent_deadline(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -192,3 +219,21 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             control.store.intent(NOW+timedelta(hours=2), NOW+timedelta(days=7))
             self.assertEqual(control.store.read()['expires_at'], deadline)
             await client.aclose()
+
+    async def test_native_day_envelope_is_persistent_cannot_increase_intraday_and_never_exceeds_total(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = FirstPurchaseStore(PlanAuditStore(Path(directory)/'audit.sqlite'))
+            first = store.envelope('2.98', '0', NOW)
+            self.assertEqual(first['cap_cents'], 798)
+            store.confirm_envelope(first['day'], 798)
+            # A changed late report cannot replenish spend in the same day.
+            same = store.envelope('4.98', '0', NOW)
+            self.assertEqual(same['cap_cents'], 798)
+            restarted = FirstPurchaseStore(PlanAuditStore(Path(directory)/'audit.sqlite'))
+            tomorrow = restarted.envelope('7.98', '0', NOW+timedelta(days=1))
+            self.assertEqual(tomorrow['cap_cents'], 1298)
+            self.assertTrue(restarted.previous_envelope_confirmed(798, tomorrow['day']))
+            self.assertFalse(restarted.previous_envelope_confirmed(700, tomorrow['day']))
+            self.assertEqual(restarted.envelope('33', '0', NOW+timedelta(days=2))['cap_cents'], 3500)
+            with self.assertRaises(ValueError):
+                restarted.envelope('0', '2', NOW)
