@@ -456,7 +456,7 @@ class FirstPurchaseController:
                 try:
                     error = exc.response.json().get('error', {})
                     detail.update({k: error[k] for k in ('code', 'error_subcode') if type(error.get(k)) is int})
-                    if error.get('code') in {4, 17, 32, 613}:
+                    if error.get('code') in {4, 17, 32, 613, 80004}:
                         self.store.defer_provider(campaign, 'META_API_RATE_LIMIT_BACKOFF', now, 900)
                     elif error.get('code') == 100 and error.get('error_subcode') == 2446307:
                         self.store.defer_provider(campaign, 'META_NATIVE_CAP_MINIMUM_EXCEEDS_AUTHORIZATION', now, 21600)
