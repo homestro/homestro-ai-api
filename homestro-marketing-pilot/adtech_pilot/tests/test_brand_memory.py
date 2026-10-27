@@ -63,4 +63,3 @@ class BrandMemoryTests(unittest.TestCase):
         for task in tasks:
             self.assertEqual(task['brand_context']['evidence_ids'], ['brand:voice'])
             self.assertFalse(task['publication_confirmed'])
-

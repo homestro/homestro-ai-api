@@ -89,4 +89,3 @@ EXISTING_ASSETS = [
     "product_url": "https://homestro.de/products/silicone-cream-spatula-non-stick-butter-spatula-heat-resistant-kitchen-baking-tools-diy-cake-baking-tools"
   }
 ]
-
