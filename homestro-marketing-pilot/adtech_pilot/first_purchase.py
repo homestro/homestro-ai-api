@@ -388,7 +388,7 @@ class FirstPurchaseController:
                     if error.get('code') == 100 and stage == 'paused_native_cap_preparation':
                         # Parameter errors may explain a provider minimum. Keep
                         # bounded human labels only, never payloads/URLs/credentials.
-                        for key in ('error_user_title', 'error_user_msg'):
+                        for key in ('error_user_title', 'error_user_msg', 'message'):
                             value = error.get(key)
                             if isinstance(value, str):
                                 value = re.sub(r'https?://\S+|\b[A-Za-z0-9_-]{40,}\b|\bEA[A-Za-z0-9]{15,}\b|sk-[A-Za-z0-9_-]+', '[redacted]', value)
