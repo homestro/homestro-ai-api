@@ -28,3 +28,15 @@ class WebsiteAdsTests(unittest.TestCase):
     def test_no_eligible_products_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "NO_ELIGIBLE_WEBSITE_PRODUCTS"):
             website_story([self.product(1, link="https://example.com")], "12345")
+
+    def test_explicitly_rejected_brush_and_silicone_spatulas_never_qualify_and_variant_cards_deduplicate(self):
+        from adtech_pilot.website_ads import owner_excluded
+
+        brush = self.product(1, link='https://homestro.de/products/pet-combs-knot-opening-combs-massage-combs-electric-steam-spray-brushes-de-floating-pet-products-cat-combs')
+        spatula = self.product(2, title='Silikon Spachtel Set')
+        self.assertTrue(owner_excluded(brush))
+        self.assertTrue(owner_excluded(spatula))
+        allowed = self.product(3)
+        variant = {**allowed, 'id': '4', 'link': allowed['link']+'?variant=4'}
+        _, ids = website_story([brush, spatula, allowed, variant], '12345')
+        self.assertEqual(ids, ['3'])

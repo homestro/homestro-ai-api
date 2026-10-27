@@ -20,7 +20,7 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 
 
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
-    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False):
+    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
         await audit.claim_meta_micro_campaign('act_12345', 'all')
         await audit.update_meta_micro_campaign(status='ACTIVE_PENDING_REVIEW', campaign_id=CAMPAIGN)
@@ -60,7 +60,7 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={'data': [{'body': '<iframe src="https://www.facebook.com/ads/api/preview_iframe.php?d=example"></iframe>'}]})
             if path.endswith('/' + CREATIVE):
                 return httpx.Response(200, json={'id': CREATIVE, 'object_story_spec': {'page_id': '67890',
-                    'link_data': {'message': 'Produktdetails bei Homestro', 'link': 'https://homestro.de/products/box', 'picture': 'https://cdn.shopify.com/box.jpg', 'name': 'Box'}}})
+                    'link_data': {'message': 'Produktdetails bei Homestro', 'link': 'https://homestro.de/products/box', 'picture': 'https://cdn.shopify.com/box.jpg', 'name': 'Box', **({'child_attachments': cards} if cards else {})}}})
             if path.endswith('/' + AD):
                 return httpx.Response(200, json={'id': AD, 'status': 'ACTIVE', 'effective_status': 'ACTIVE', 'creative': {'id': CREATIVE}})
             return httpx.Response(200, json={'id': CAMPAIGN, 'account_id': '12345', 'objective': 'OUTCOME_SALES',
@@ -105,6 +105,24 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['creative_preview']['message'], 'Produktdetails bei Homestro')
             self.assertEqual(result['creative_preview']['cards'][0]['destination'], 'https://homestro.de/products/box')
             self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
+
+    async def test_prior_approval_never_overrides_owner_exclusions_or_duplicate_variant_cards(self):
+        from adtech_pilot.website_ads import OWNER_EXCLUDED_HANDLES
+
+        for cards, blocker in [
+            ([{'link': 'https://homestro.de/products/'+next(iter(OWNER_EXCLUDED_HANDLES)), 'name': 'Bürste'}], 'OWNER_EXCLUDED_CREATIVE_PRODUCT'),
+            ([{'link': 'https://homestro.de/products/box?variant=1'}, {'link': 'https://homestro.de/products/box?variant=2'}], 'DUPLICATE_PRODUCT_CARDS'),
+            ([{'link': 'https://homestro.de/products/silicone-spatula', 'name': 'Silikonspachtel'}], 'OWNER_EXCLUDED_CREATIVE_PRODUCT'),
+        ]:
+            with tempfile.TemporaryDirectory() as directory:
+                _, state, client, control = await self.fixture(directory, cards=cards)
+                control.env = {**ENV, 'SHOPIFY_WEBHOOK_SECRET': 'test', 'PILOT_ADMIN_KEY': 'test-signature-secret'}
+                with self.patches()[0], self.patches()[1]:
+                    result = await control.cycle(now=NOW)
+                await client.aclose()
+                self.assertTrue(result['creative_review_passed'])
+                self.assertIn(blocker, result['blockers'])
+                self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
 
     async def test_total_cap_and_expiry_are_durable_and_cannot_be_reset_by_restart_or_new_campaign(self):
         with tempfile.TemporaryDirectory() as directory:
