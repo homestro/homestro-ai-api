@@ -20,6 +20,25 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 
 
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_backoff_survives_restart_and_keeps_exact_campaign_paused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audit, state, client, control = await self.fixture(directory)
+            control.store.defer_provider(CAMPAIGN, 'META_API_RATE_LIMIT_BACKOFF', NOW, 900)
+            restarted = FirstPurchaseController(audit, env=ENV, client=client)
+            result = await restarted.cycle(now=NOW + timedelta(seconds=1))
+            self.assertEqual(result['reason'], 'META_API_RATE_LIMIT_BACKOFF')
+            self.assertEqual(result['status'], 'paused_confirmed')
+            self.assertEqual(state['writes'], [])
+            self.assertFalse(result['activation_performed'])
+            self.assertIsNone(restarted.store.provider_backoff(CAMPAIGN, NOW + timedelta(seconds=900)))
+            self.assertIsNone(restarted.store.provider_backoff('11111', NOW))
+            state['status'] = 'ACTIVE'
+            result = await restarted.cycle(now=NOW + timedelta(seconds=2))
+            self.assertEqual(result['status'], 'paused_confirmed')
+            self.assertEqual(state['status'], 'PAUSED')
+            self.assertEqual(state['writes'], [('/v26.0/' + CAMPAIGN, {'status': ['PAUSED']})])
+            await client.aclose()
+
     async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False, pause_rejected=False, lifetime_supported=False, lifetime_rejected=False):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
         await audit.claim_meta_micro_campaign('act_12345', 'all')

@@ -42,7 +42,22 @@ class FirstPurchaseStore:
               day TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500),
               provider_acknowledged INTEGER NOT NULL DEFAULT 0);
               CREATE TABLE IF NOT EXISTS pilot_first_purchase_lifetime_cap(
-              adset TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500));''')
+              adset TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500));
+              CREATE TABLE IF NOT EXISTS pilot_first_purchase_backoff(
+              campaign TEXT PRIMARY KEY,until_at TEXT NOT NULL,reason TEXT NOT NULL);''')
+
+    def defer_provider(self, campaign, reason, now, seconds):
+        with closing(self.audit._connect()) as db, db:
+            db.execute('INSERT INTO pilot_first_purchase_backoff VALUES(?,?,?) '
+                       'ON CONFLICT(campaign) DO UPDATE SET until_at=excluded.until_at,reason=excluded.reason',
+                       (campaign, (now + timedelta(seconds=seconds)).isoformat(), reason))
+
+    def provider_backoff(self, campaign, now):
+        with closing(self.audit._connect()) as db:
+            row = db.execute('SELECT until_at,reason FROM pilot_first_purchase_backoff WHERE campaign=?', (campaign,)).fetchone()
+        if row and now < instant(row[0]):
+            return {'retry_after': row[0], 'reason': row[1]}
+        return None
 
     def lifetime_cap(self, adset, proposed=None):
         with closing(self.audit._connect()) as db, db:
@@ -189,6 +204,14 @@ class FirstPurchaseController:
                 return await pause(consent.get('stop_reason') or 'EXISTING_STOP_LATCH', latch=True)
             if consent.get('expires_at') and now >= instant(consent['expires_at']):
                 return await pause('TEST_EXPIRED', latch=True)
+            backoff = self.store.provider_backoff(campaign, now)
+            if backoff:
+                # Independently read campaign status above on every cycle. A
+                # cooldown must never leave an externally resumed ad spending.
+                if remote.get('status') != 'PAUSED':
+                    return {**await pause(backoff['reason']), **backoff}
+                return {**snapshot, 'status': 'paused_confirmed', **backoff,
+                        'activation_performed': False, 'provider_mutations_deferred': True}
             stage = 'spend'
             spends = {}
             for period in ('maximum', 'today'):
@@ -433,6 +456,10 @@ class FirstPurchaseController:
                 try:
                     error = exc.response.json().get('error', {})
                     detail.update({k: error[k] for k in ('code', 'error_subcode') if type(error.get(k)) is int})
+                    if error.get('code') in {4, 17, 32, 613, 80004}:
+                        self.store.defer_provider(campaign, 'META_API_RATE_LIMIT_BACKOFF', now, 900)
+                    elif error.get('code') == 100 and error.get('error_subcode') == 2446307:
+                        self.store.defer_provider(campaign, 'META_NATIVE_CAP_MINIMUM_EXCEEDS_AUTHORIZATION', now, 21600)
                     if error.get('code') == 100 and stage in {'paused_native_cap_preparation', 'paused_native_lifetime_budget_preparation'}:
                         # Parameter errors may explain a provider minimum. Keep
                         # bounded human labels only, never payloads/URLs/credentials.
