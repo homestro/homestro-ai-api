@@ -20,7 +20,7 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 
 
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
-    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None):
+    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
         await audit.claim_meta_micro_campaign('act_12345', 'all')
         await audit.update_meta_micro_campaign(status='ACTIVE_PENDING_REVIEW', campaign_id=CAMPAIGN)
@@ -33,6 +33,8 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             if request.method == 'POST':
                 body = parse_qs(request.content.decode())
                 state['writes'].append((path, body))
+                if 'spend_cap' in body and cap_rejected:
+                    return httpx.Response(400, json={'error': {'code': 100, 'error_subcode': 1234, 'message': 'test provider cap minimum'}})
                 if path.endswith('/' + CAMPAIGN):
                     if 'status' in body:
                         state['status'] = body['status'][0]
@@ -123,6 +125,31 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result['creative_review_passed'])
                 self.assertIn(blocker, result['blockers'])
                 self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
+
+    async def test_native_cap_prepared_while_paused_without_starting_window_or_approving_unseen_creative(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, state, client, control = await self.fixture(directory, approved=False, spend='2.98')
+            with self.patches()[0], self.patches()[1]:
+                result = await control.cycle(now=NOW)
+            await client.aclose()
+            self.assertEqual(state['cap'], '798')
+            self.assertEqual(result['native_spend_cap_readback_cents'], 798)
+            self.assertIsNone(result['consent']['activation_intent_at'])
+            self.assertIsNone(result['consent']['activated_at'])
+            self.assertIn('EXACT_CREATIVE_PREVIEW_REVIEW_REQUIRED', result['blockers'])
+            self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
+
+    async def test_provider_native_cap_rejection_stays_paused_before_activation_and_exposes_safe_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, state, client, control = await self.fixture(directory, cap_rejected=True)
+            with self.patches()[0], self.patches()[1]:
+                result = await control.cycle(now=NOW)
+            await client.aclose()
+            self.assertEqual(result['status'], 'paused_confirmed')
+            self.assertEqual(result['stage'], 'paused_native_cap_preparation')
+            self.assertEqual(result['code'], 100)
+            self.assertEqual(state['status'], 'PAUSED')
+            self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
 
     async def test_total_cap_and_expiry_are_durable_and_cannot_be_reset_by_restart_or_new_campaign(self):
         with tempfile.TemporaryDirectory() as directory:

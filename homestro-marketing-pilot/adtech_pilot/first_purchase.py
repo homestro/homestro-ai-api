@@ -231,6 +231,28 @@ class FirstPurchaseController:
             promoted = adset.get('promoted_object') or {}
             if str(promoted.get('pixel_id')) != pixel or promoted.get('custom_event_type') != 'PURCHASE' or adset.get('optimization_goal') != 'OFFSITE_CONVERSIONS':
                 return await pause('PURCHASE_TRACKING_CONFIGURATION_NOT_VERIFIED')
+            # Prepare a restrictive native cap while already paused, even when
+            # creative/site review is outstanding. Discover provider rejection
+            # before asking the owner to review. Never release a prior lower cap here.
+            if remote.get('status') == 'PAUSED':
+                envelope = self.store.envelope(spends['maximum'], spends['today'], now)
+                target_cap = envelope['cap_cents']
+                cap = Decimal(str(remote.get('spend_cap') or '0'))
+                if not cap.is_finite() or cap < 0 or cap != int(cap):
+                    return await pause('PROVIDER_SPEND_CAP_INVALID')
+                if cap == 0 or cap > target_cap:
+                    stage = 'paused_native_cap_preparation'
+                    response = await client.post(base + campaign, headers=headers, data={'spend_cap': str(target_cap)})
+                    response.raise_for_status()
+                    confirmed = await get(campaign, 'id,spend_cap,status')
+                    if str(confirmed.get('spend_cap')) != str(target_cap) or confirmed.get('status') != 'PAUSED':
+                        return await pause('PROVIDER_PAUSED_CAP_PREPARATION_NOT_CONFIRMED')
+                    remote['spend_cap'] = str(target_cap)
+                    cap = Decimal(target_cap)
+                if cap == target_cap:
+                    self.store.confirm_envelope(envelope['day'], target_cap)
+                snapshot['native_spend_cap_readback_cents'] = int(cap)
+                snapshot['native_spend_envelope'] = envelope
             stage = 'creative'
             ads = (await get(str(adset['id']) + '/ads', 'id,status,effective_status,creative{id},ad_review_feedback')).get('data', [])
             if len(ads) != 1 or ads[0].get('ad_review_feedback') or ads[0].get('effective_status') not in {'ACTIVE', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'PAUSED'}:
