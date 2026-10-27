@@ -787,6 +787,23 @@ class PilotDaemon:
             PaymentWebhookStore(payment_database(os.environ)), str(claim.get("campaign_id") or ""), ad_spend)
             if claim else {"status": "no_managed_campaign"})
         daily_budget_limit = configured_daily_budget_limit_eur()
+        micro_preflight = micro_budget.model_dump(mode="json")
+        if os.getenv('PILOT_LAUNCH_POLICY') == 'first_purchase_acquisition_test':
+            from .first_purchase import FirstPurchaseStore
+
+            consent = FirstPurchaseStore(self.audit).read()
+            latest = await self.audit.latest_brain_evidence()
+            observed = (latest.get('first_purchase_test') or {}).get('payload') or {}
+            existing_scope = bool(consent and consent.get('campaign') == (claim or {}).get('campaign_id') == observed.get('campaign_id'))
+            resume_ready = existing_scope and consent.get('state') != 'stopped' and observed.get('technical_gates_passed') is True and observed.get('creative_review_passed') is True
+            micro_preflight = {'eligible': resume_ready, 'mode': 'exact_existing_first_purchase_test', 'prior_purchase_required': False,
+                'consent_recorded': bool(consent), 'campaign_id': (claim or {}).get('campaign_id'),
+                'tracking_configuration_verified': observed.get('tracking_configuration_verified', False),
+                'creative_review_passed': observed.get('creative_review_passed', False),
+                'status': observed.get('status', 'not_checked'),
+                'blockers': [] if resume_ready else observed.get('blockers') or ([observed.get('reason')] if observed.get('reason') else ['FIRST_PURCHASE_READINESS_NOT_YET_CHECKED']),
+                'daily_budget_eur': 5, 'maximum_total_eur': 35, 'automatic_increase': False,
+                'new_campaign_creation_authorized': False}
         return {
             "status": "blocked", "order_economics": economics,
             "reason": ("ORDER_ATTRIBUTION_AND_LANDED_COST_REQUIRED"
@@ -814,7 +831,7 @@ class PilotDaemon:
                 ),
             },
             "meta_ads_preflight": meta_preflight,
-            "optimizer_micro_budget_preflight": micro_budget.model_dump(mode="json"),
+            "optimizer_micro_budget_preflight": micro_preflight,
             "micro_budget_execution": (
                 "READ_ONLY_PREFLIGHT_ONLY"
                 if meta_preflight.get("status") == "checked"
