@@ -20,7 +20,7 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 
 
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
-    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False):
+    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False, pause_rejected=False):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
         await audit.claim_meta_micro_campaign('act_12345', 'all')
         await audit.update_meta_micro_campaign(status='ACTIVE_PENDING_REVIEW', campaign_id=CAMPAIGN)
@@ -34,7 +34,9 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                 body = parse_qs(request.content.decode())
                 state['writes'].append((path, body))
                 if 'spend_cap' in body and cap_rejected:
-                    return httpx.Response(400, json={'error': {'code': 100, 'error_subcode': 1234, 'message': 'test provider cap minimum'}})
+                    return httpx.Response(400, json={'error': {'code': 100, 'error_subcode': 1234, 'message': 'test provider cap minimum', 'error_user_title': 'Minimum cap', 'error_user_msg': 'Minimum 100 EUR https://secret.example/hidden '+('A'*50)}})
+                if body.get('status') == ['PAUSED'] and pause_rejected:
+                    return httpx.Response(400, json={'error': {'code': 100}})
                 if path.endswith('/' + CAMPAIGN):
                     if 'status' in body:
                         state['status'] = body['status'][0]
@@ -141,13 +143,15 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_provider_native_cap_rejection_stays_paused_before_activation_and_exposes_safe_code(self):
         with tempfile.TemporaryDirectory() as directory:
-            _, state, client, control = await self.fixture(directory, cap_rejected=True)
+            _, state, client, control = await self.fixture(directory, cap_rejected=True, pause_rejected=True)
             with self.patches()[0], self.patches()[1]:
                 result = await control.cycle(now=NOW)
             await client.aclose()
             self.assertEqual(result['status'], 'paused_confirmed')
             self.assertEqual(result['stage'], 'paused_native_cap_preparation')
             self.assertEqual(result['code'], 100)
+            self.assertTrue(result['pause_write_failed'])
+            self.assertEqual(result['error_user_msg'], 'Minimum 100 EUR [redacted] [redacted]')
             self.assertEqual(state['status'], 'PAUSED')
             self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
 
