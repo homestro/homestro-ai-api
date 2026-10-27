@@ -19,8 +19,14 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
-from .creative_factory import CreativeFactory, GeneratedCreative
-from .micro_budget import MetaAccountReadiness, MicroBudgetGate
+from .creative_factory import GeneratedCreative
+from .micro_budget import (
+    MetaAccountReadiness,
+    MicroBudgetGate,
+    configured_daily_budget_limit_eur,
+    live_ads_dry_run,
+    measurement_risk_accepted,
+)
 
 
 class Platform(StrEnum):
@@ -299,6 +305,7 @@ class PlanAuditStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS adtech_audit_created ON adtech_audit(created_at)"
             )
+            connection.execute("CREATE INDEX IF NOT EXISTS adtech_audit_kind_created ON adtech_audit(kind,created_at)")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS meta_micro_campaign_claim ("
                 "slot TEXT PRIMARY KEY, account_id TEXT NOT NULL, product_id TEXT NOT NULL, "
@@ -336,16 +343,62 @@ class PlanAuditStore:
 
         await asyncio.to_thread(update)
 
-    async def has_meta_micro_campaign_claim(self) -> bool:
-        def read() -> bool:
+    async def get_meta_micro_campaign_claim(self) -> dict[str, str | None] | None:
+        def read() -> dict[str, str | None] | None:
             with closing(self._connect()) as connection:
                 row = connection.execute(
-                    "SELECT 1 FROM meta_micro_campaign_claim WHERE slot=?",
+                    "SELECT status,campaign_id FROM meta_micro_campaign_claim WHERE slot=?",
                     ("single_live_meta_campaign",),
                 ).fetchone()
-            return row is not None
+            if row is None:
+                return None
+            return {"status": str(row[0]), "campaign_id": row[1]}
 
         return await asyncio.to_thread(read)
+
+    async def release_failed_claim_without_campaign(self) -> bool:
+        """Release only a known failed HTTP attempt that produced no campaign ID."""
+        def delete() -> bool:
+            with closing(self._connect()) as connection, connection:
+                cursor = connection.execute(
+                    "DELETE FROM meta_micro_campaign_claim "
+                    "WHERE slot=? AND status='FAILED_HTTPStatusError' AND campaign_id IS NULL",
+                    ("single_live_meta_campaign",),
+                )
+            return cursor.rowcount == 1
+
+        return await asyncio.to_thread(delete)
+
+    async def release_inactive_claim(
+        self, *, campaign_id: str, expected_status: str
+    ) -> bool:
+        """Release the local slot only for the exact reconciled inactive campaign."""
+        if expected_status not in {
+            "ACTIVE_PENDING_REVIEW",
+            "RECONCILED_EXISTING_CAMPAIGN",
+        }:
+            return False
+
+        def delete() -> bool:
+            with closing(self._connect()) as connection, connection:
+                cursor = connection.execute(
+                    "DELETE FROM meta_micro_campaign_claim "
+                    "WHERE slot=? AND status=? AND campaign_id=?",
+                    ("single_live_meta_campaign", expected_status, campaign_id),
+                )
+                if cursor.rowcount == 1:
+                    connection.execute(
+                        "INSERT INTO adtech_audit (id,kind,created_at,payload_json) VALUES(?,?,?,?)",
+                        (str(uuid4()), "meta_campaign_archived", datetime.now(timezone.utc).isoformat(),
+                         json.dumps({"campaign_id": campaign_id, "status": "INACTIVE",
+                                     "prior_status": expected_status})),
+                    )
+            return cursor.rowcount == 1
+
+        return await asyncio.to_thread(delete)
+
+    async def has_meta_micro_campaign_claim(self) -> bool:
+        return await self.get_meta_micro_campaign_claim() is not None
 
     async def record(self, kind: str, payload: BaseModel | dict[str, Any]) -> str:
         serialized = (
@@ -368,6 +421,30 @@ class PlanAuditStore:
 
         await asyncio.to_thread(write)
         return record_id
+
+    async def latest_brain_evidence(self) -> dict[str, Any]:
+        from .brain_status import KINDS
+
+        def read():
+            result = {}
+            with closing(self._connect()) as connection:
+                for kind in KINDS:
+                    row = connection.execute(
+                        "SELECT created_at,payload_json FROM adtech_audit WHERE kind=? ORDER BY created_at DESC LIMIT 1",
+                        (kind,)).fetchone()
+                    if row:
+                        result[kind] = {"created_at": row[0], "payload": json.loads(row[1])}
+                table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pilot_brain_memory'").fetchone()
+                claim = connection.execute("SELECT campaign_id FROM meta_micro_campaign_claim WHERE slot=?",
+                                           ("single_live_meta_campaign",)).fetchone()
+                if table and claim and claim[0]:
+                    row = connection.execute("SELECT payload FROM pilot_brain_memory WHERE campaign=?", (claim[0],)).fetchone()
+                    if row:
+                        state = json.loads(row[0])
+                        allowed = ("ad_id", "creative_id", "tracking_installed", "current_product_ids", "last_rotation_at", "inflight")
+                        result["brain_memory"] = {"payload": {key: state.get(key) for key in allowed}}
+            return result
+        return await asyncio.to_thread(read)
 
     async def list(self, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(limit, 200))
@@ -592,18 +669,16 @@ class MetaAdLibraryClient:
 
 
 class MetaPublisher:
-    """Single-use Meta website-sales publisher with a €5 lifetime ceiling.
+    """Single-use Meta website-sales pilot with a €5/day, seven-day allowance.
 
     Nothing is submitted unless DRY_RUN=false, ALLOW_MICRO_BUDGET=true, the live
     account/assets pass preflight, the selected product is in the validated feed,
-    the creative passes its 85/100 quality checks, and the persistent one-shot
-    claim is acquired. New objects stay PAUSED until the final activation step.
-    The cap is lifetime (not a daily-budget target), so this first test cannot
-    spend more than €5 total even if Meta over-delivers on a particular day.
+    the creative passes its quality checks, and the persistent one-shot claim is
+    acquired. The ad set uses a €5 daily budget and a seven-day schedule.
     """
 
     ENDPOINT = "https://graph.facebook.com"
-    LIFETIME_BUDGET_CENTS = 500
+    DAILY_BUDGET_CENTS = 500
     API_VERSION_PATTERN = re.compile(r"^v\d+\.\d+$")
     ID_PATTERN = re.compile(r"^\d{4,30}$")
     ACCOUNT_PATTERN = re.compile(r"^act_\d{4,30}$")
@@ -619,37 +694,291 @@ class MetaPublisher:
         self.client = client
         self.env = env if env is not None else os.environ
 
+    async def reconcile_retired_campaign(self) -> dict[str, Any]:
+        """Retire the owner's old campaign independently of all paid-action gates.
+
+        Only Meta reads, idempotent child pauses and a local archive are permitted.
+        An active or uncertain remote campaign always retains its local claim.
+        """
+        campaign_id = "120254321479480274"
+        claim = await self.audit.get_meta_micro_campaign_claim()
+        if claim is None or claim.get("campaign_id") != campaign_id:
+            return {"status": "not_applicable", "campaign_id": campaign_id}
+        status = str(claim.get("status", ""))
+        if status not in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}:
+            return {"status": "blocked", "reason": "RETIRED_CAMPAIGN_UNEXPECTED_CLAIM_STATE"}
+        token = self.env.get("META_ACCESS_TOKEN", "").strip()
+        if not token:
+            return {"status": "blocked", "reason": "META_ACCESS_TOKEN_MISSING"}
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=35, follow_redirects=False)
+        try:
+            result = await self._reconcile_paused_campaign(
+                client, {"Authorization": f"Bearer {token}"}, campaign_id
+            )
+            if result == "adsets_not_all_paused":
+                # The parent is already PAUSED. Finish retiring only its children;
+                # never activate or change a budget, creative, or another campaign.
+                adsets = await self._get(
+                    client, f"{campaign_id}/adsets", {"Authorization": f"Bearer {token}"},
+                    {"fields": "id,status", "limit": "100"},
+                )
+                rows = adsets.get("data")
+                paging = adsets.get("paging")
+                if (not isinstance(rows, list)
+                    or (isinstance(paging, dict) and paging.get("next"))
+                    or any(not isinstance(row, dict)
+                           or not self.ID_PATTERN.fullmatch(str(row.get("id", "")))
+                           for row in rows)):
+                    return {"status": "blocked", "reason": "adsets_incomplete"}
+                for row in rows:
+                    if str(row.get("status", "")).upper() == "ACTIVE":
+                        response = await client.post(
+                            f"{self.ENDPOINT}/{self._version()}/{row['id']}",
+                            headers={"Authorization": f"Bearer {token}"},
+                            data={"status": "PAUSED"},
+                        )
+                        self._json_response(response, require_object_id=False)
+                result = await self._reconcile_paused_campaign(
+                    client, {"Authorization": f"Bearer {token}"}, campaign_id
+                )
+            if result != "ready":
+                return {"status": "blocked", "reason": result, "campaign_id": campaign_id}
+            released = await self.audit.release_inactive_claim(
+                campaign_id=campaign_id, expected_status=status
+            )
+            return {"status": "INACTIVE" if released else "claim_changed",
+                    "campaign_id": campaign_id}
+        finally:
+            if own_client:
+                await client.aclose()
+
+    async def check_readiness(self) -> dict[str, Any]:
+        """Read Meta account, Page and Pixel access without creating ad objects.
+
+        This deliberately does not require the spend switches, DSA labels, billing
+        confirmation or Purchase-event confirmation. Those are evaluated by the
+        separate micro-budget gate before any campaign write.
+        """
+        required = {
+            "META_ACCESS_TOKEN": self.env.get("META_ACCESS_TOKEN", "").strip(),
+            "META_AD_ACCOUNT_ID": self.env.get("META_AD_ACCOUNT_ID", "").strip(),
+            "META_PIXEL_ID": self.env.get("META_PIXEL_ID", "").strip(),
+            "META_PAGE_ID": self.env.get("META_PAGE_ID", "").strip(),
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            return {"status": "blocked", "missing": missing}
+        account_id = required["META_AD_ACCOUNT_ID"]
+        page_id = required["META_PAGE_ID"]
+        pixel_id = required["META_PIXEL_ID"]
+        if not self.ACCOUNT_PATTERN.fullmatch(account_id):
+            return {"status": "blocked", "reason": "META_AD_ACCOUNT_ID_INVALID"}
+        if not self.ID_PATTERN.fullmatch(pixel_id) or not self.ID_PATTERN.fullmatch(page_id):
+            return {"status": "blocked", "reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
+
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(
+            timeout=httpx.Timeout(30, connect=8), follow_redirects=False
+        )
+        try:
+            readiness = await self._preflight(
+                client,
+                headers={"Authorization": f"Bearer {required['META_ACCESS_TOKEN']}"},
+                account_id=account_id,
+                page_id=page_id,
+                pixel_id=pixel_id,
+            )
+            return {"status": "checked", "account": readiness.model_dump(mode="json")}
+        except asyncio.CancelledError:
+            raise
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            error = body.get("error", {}) if isinstance(body, dict) else {}
+            if not isinstance(error, dict):
+                error = {}
+            tail = urlsplit(str(exc.request.url)).path.rstrip("/").rsplit("/", 1)[-1]
+            stage = (
+                "pixel"
+                if tail == "adspixels"
+                else "account"
+                if tail == account_id
+                else "page"
+            )
+            details: dict[str, Any] = {
+                "status": "failed",
+                "error_type": "MetaHTTPError",
+                "http_status": response.status_code,
+                "stage": stage,
+            }
+            for source, target in (
+                ("code", "meta_error_code"),
+                ("error_subcode", "meta_error_subcode"),
+            ):
+                value = error.get(source)
+                if isinstance(value, int):
+                    details[target] = value
+            error_type = error.get("type")
+            if isinstance(error_type, str):
+                details["meta_error_type"] = error_type[:80]
+            return details
+        except Exception as exc:
+            # Provider bodies and request headers may contain sensitive data.
+            return {"status": "failed", "error_type": type(exc).__name__}
+        finally:
+            if own_client:
+                await client.aclose()
+
+    async def check_catalog_access(self) -> dict[str, Any]:
+        """Read catalog and whole-catalog product-set access; never writes Meta objects."""
+        token = self.env.get("META_ACCESS_TOKEN", "").strip()
+        catalog_id = self.env.get("META_PRODUCT_CATALOG_ID", "").strip()
+        version = self._version()
+        if not token:
+            return {"status": "blocked", "reason": "META_ACCESS_TOKEN_MISSING"}
+        if not self.ID_PATTERN.fullmatch(catalog_id):
+            return {"status": "blocked", "reason": "META_PRODUCT_CATALOG_ID_MISSING_OR_INVALID"}
+        if not self.API_VERSION_PATTERN.fullmatch(version):
+            return {"status": "blocked", "reason": "META_API_VERSION_INVALID"}
+
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(
+            timeout=httpx.Timeout(30, connect=8), follow_redirects=False
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            catalog = await self._get(
+                client, catalog_id, headers, {"fields": "id,name"}
+            )
+            if str(catalog.get("id", "")) != catalog_id:
+                return {"status": "blocked", "reason": "META_CATALOG_ID_MISMATCH"}
+
+            result = await self._get(
+                client,
+                f"{catalog_id}/product_sets",
+                headers,
+                {"fields": "id,name", "limit": "100"},
+            )
+            rows = result.get("data")
+            if not isinstance(rows, list):
+                return {"status": "blocked", "reason": "META_PRODUCT_SET_LIST_INVALID"}
+            if isinstance(result.get("paging"), dict) and result["paging"].get("next"):
+                return {"status": "blocked", "reason": "META_PRODUCT_SET_LIST_INCOMPLETE"}
+
+            full_catalog_names = {"all products", "alle produkte"}
+            full_sets = [
+                row for row in rows
+                if isinstance(row, dict)
+                and str(row.get("name", "")).strip().casefold() in full_catalog_names
+                and self.ID_PATTERN.fullmatch(str(row.get("id", "")))
+            ]
+            configured_set_id = self.env.get("META_PRODUCT_SET_ID", "").strip()
+            if configured_set_id:
+                if not self.ID_PATTERN.fullmatch(configured_set_id):
+                    return {"status": "blocked", "reason": "META_PRODUCT_SET_ID_INVALID"}
+                selected = [
+                    row for row in full_sets
+                    if str(row.get("id")) == configured_set_id
+                ]
+                if len(selected) != 1:
+                    return {
+                        "status": "blocked",
+                        "reason": "META_CONFIGURED_SET_IS_NOT_ALL_PRODUCTS",
+                        "catalog_id": catalog_id,
+                    }
+                full_set = selected[0]
+            elif len(full_sets) == 1:
+                full_set = full_sets[0]
+            else:
+                return {
+                    "status": "blocked",
+                    "reason": "META_ALL_PRODUCTS_SET_NOT_FOUND_OR_AMBIGUOUS",
+                    "catalog_id": catalog_id,
+                    "matching_set_count": len(full_sets),
+                }
+
+            return {
+                "status": "checked",
+                "catalog_id": catalog_id,
+                "catalog_name": str(catalog.get("name", ""))[:160],
+                "product_set_id": str(full_set["id"]),
+                "product_set_name": str(full_set.get("name", ""))[:80],
+                "visible_product_set_count": len(rows),
+                "campaign_writes_performed": False,
+            }
+        except asyncio.CancelledError:
+            raise
+        except httpx.HTTPStatusError as exc:
+            try:
+                body = exc.response.json()
+            except ValueError:
+                body = {}
+            error = body.get("error", {}) if isinstance(body, dict) else {}
+            if not isinstance(error, dict):
+                error = {}
+            details: dict[str, Any] = {
+                "status": "failed",
+                "reason": "META_CATALOG_READ_FAILED",
+                "http_status": exc.response.status_code,
+                "campaign_writes_performed": False,
+            }
+            for source, target in (
+                ("code", "meta_error_code"),
+                ("error_subcode", "meta_error_subcode"),
+            ):
+                value = error.get(source)
+                if isinstance(value, int):
+                    details[target] = value
+            if isinstance(error.get("type"), str):
+                details["meta_error_type"] = error["type"][:80]
+            return details
+        except Exception as exc:
+            # Never include provider response bodies, headers, or credentials in logs.
+            return {
+                "status": "failed",
+                "reason": "META_CATALOG_READ_FAILED",
+                "error_type": type(exc).__name__,
+                "campaign_writes_performed": False,
+            }
+        finally:
+            if own_client:
+                await client.aclose()
+
     async def publish_one(
         self,
         *,
-        creative: GeneratedCreative,
+        creative: GeneratedCreative | None,
         product: dict[str, Any],
         product_ids_in_feed: set[str],
+        products: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         config = self._configuration()
         if isinstance(config, dict):
             return {"status": "blocked", **config}
-        account_id, page_id, pixel_id, token, version, beneficiary, payor = config
+        from .purchase_guard import PurchaseEvidence, requires_recent_purchase
+
+        evidence = await PurchaseEvidence(env=self.env, client=self.client).check()
+        if requires_recent_purchase(self.env) and not evidence["verified"]:
+            return {"status": "blocked", "reason": "FRESH_PURCHASE_REQUIRED", "purchase": evidence}
+        account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id = config
+        website_mode = self.env.get("PILOT_AD_MODE", "catalog") == "website_sales"
+        story = None
+        advertised_ids: list[str] = []
+        if website_mode:
+            from .website_ads import website_story
+
+            try:
+                story, advertised_ids = website_story(products or [product], page_id)
+            except ValueError as exc:
+                return {"status": "blocked", "reason": str(exc)}
+            if not set(advertised_ids).issubset(product_ids_in_feed):
+                return {"status": "blocked", "reason": "PRODUCT_NOT_IN_VALIDATED_FEED"}
         product_id = str(product.get("id", ""))
-        if not self._creative_approved(creative, product_id):
-            return {"status": "blocked", "reason": "CREATIVE_NOT_APPROVED_OR_PRODUCT_MISMATCH"}
-        try:
-            image_bytes = Path(creative.asset_path).read_bytes()
-        except OSError:
-            return {"status": "blocked", "reason": "CREATIVE_ASSET_NOT_FOUND"}
-        allowed_root = Path(self.env.get("PILOT_CREATIVE_DIR", "/data/adtech-creatives"))
-        try:
-            Path(creative.asset_path).resolve().relative_to(allowed_root.resolve())
-        except ValueError:
-            return {"status": "blocked", "reason": "CREATIVE_ASSET_OUTSIDE_APPROVED_DIRECTORY"}
-        if len(image_bytes) > 8_000_000:
-            return {"status": "blocked", "reason": "CREATIVE_ASSET_TOO_LARGE"}
-        try:
-            plain_white = CreativeFactory._is_plain_white_image(image_bytes)
-        except Exception:
-            return {"status": "blocked", "reason": "CREATIVE_IMAGE_INVALID"}
-        if plain_white:
-            return {"status": "blocked", "reason": "CREATIVE_WHITE_BACKGROUND_REJECTED"}
+        # Catalog items supply their own images and destination URLs.
         link = str(product.get("link", ""))
         parsed_link = urlsplit(link)
         if (
@@ -661,18 +990,83 @@ class MetaPublisher:
             return {"status": "blocked", "reason": "PRODUCT_URL_NOT_ALLOWED"}
         if product_id not in product_ids_in_feed:
             return {"status": "blocked", "reason": "PRODUCT_NOT_IN_VALIDATED_FEED"}
-        if str(self.env.get("MICRO_BUDGET_PRODUCT_ID", "")).strip() != product_id:
-            return {"status": "blocked", "reason": "PRODUCT_IS_NOT_EXPLICITLY_SELECTED"}
-        if await self.audit.has_meta_micro_campaign_claim():
-            return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
-
         own_client = self.client is None
         client = self.client or httpx.AsyncClient(
             timeout=httpx.Timeout(35, connect=8), follow_redirects=False
         )
         headers = {"Authorization": f"Bearer {token}"}
         created_ids: dict[str, str] = {}
+        claim_acquired = False
+        resumed_campaign: str | None = None
         try:
+            if not website_mode and not product_set_id:
+                resolved_set_id = await self._resolve_all_products_set(
+                    client, catalog_id, headers
+                )
+                if not resolved_set_id:
+                    return {
+                        "status": "blocked",
+                        "reason": "META_ALL_PRODUCTS_SET_NOT_FOUND_OR_AMBIGUOUS",
+                        "product_catalog_id": catalog_id,
+                    }
+                product_set_id = resolved_set_id
+            prior_claim = await self.audit.get_meta_micro_campaign_claim()
+            if prior_claim is not None:
+                if (
+                    prior_claim["status"] == "FAILED_HTTPStatusError"
+                    and prior_claim["campaign_id"] is None
+                ):
+                    reconciliation = await self._reconcile_failed_claim(
+                        client, account_id, headers, product_id
+                    )
+                    if reconciliation == "not_found":
+                        released = await self.audit.release_failed_claim_without_campaign()
+                        if not released:
+                            return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
+                        await self.audit.record(
+                            "meta_micro_campaign_claim_released",
+                            {"reason": "Meta confirmed no campaign exists", "product_id": product_id},
+                        )
+                    else:
+                        return {
+                            "status": "blocked",
+                            "reason": (
+                                "PRIOR_META_CAMPAIGN_FOUND"
+                                if reconciliation == "found"
+                                else "PRIOR_CAMPAIGN_RECONCILIATION_INCOMPLETE"
+                            ),
+                        }
+                elif (
+                    prior_claim["status"] == "FAILED_HTTPStatusError"
+                    and prior_claim["campaign_id"] is not None
+                ):
+                    resumed_campaign = str(prior_claim["campaign_id"])
+                    reconciliation = await self._reconcile_paused_campaign(
+                        client, headers, resumed_campaign
+                    )
+                    if reconciliation != "ready":
+                        return {
+                            "status": "blocked",
+                            "reason": "PRIOR_CAMPAIGN_NOT_SAFE_TO_RESUME",
+                            "campaign_id": resumed_campaign,
+                            "reconciliation": reconciliation,
+                        }
+                elif (
+                    prior_claim["campaign_id"]
+                    and prior_claim["status"]
+                    in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}
+                ):
+                    # Keep identity through watchdog pauses; never recreate it.
+                    return {"status": "existing_campaign", "campaign_id": prior_claim["campaign_id"],
+                            "reason": "EXISTING_CAMPAIGN_RETAINED_NO_DUPLICATE"}
+                else:
+                    return {
+                        "status": "blocked",
+                        "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED",
+                        "campaign_id": prior_claim["campaign_id"],
+                        "claim_status": prior_claim["status"],
+                    }
+
             readiness = await self._preflight(
                 client,
                 headers=headers,
@@ -682,105 +1076,147 @@ class MetaPublisher:
             )
             gate = MicroBudgetGate(enabled=True).evaluate(
                 account=readiness,
-                product_id=product_id,
+                purchase_event_verified=self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() == "true",
+                unverified_measurement_test_authorized=measurement_risk_accepted(self.env),
                 product_ids_in_feed=product_ids_in_feed,
                 previously_submitted_campaigns=0,
                 dry_run=False,
             )
             if not gate.eligible:
                 return {"status": "blocked", "reason": "MICRO_BUDGET_PREFLIGHT_FAILED", "blockers": gate.blockers}
-            if not await self.audit.claim_meta_micro_campaign(account_id, product_id):
-                return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
-
-            await self.audit.record(
-                "meta_micro_budget_claim",
-                {"account_id": account_id, "product_id": product_id, "budget_cap_eur": 5.0},
-            )
-            campaign = await self._post(
-                client,
-                f"{account_id}/campaigns",
-                headers,
-                {
-                    "name": f"Homestro Micro Test {product_id[:40]}",
-                    "objective": "OUTCOME_SALES",
-                    "status": "PAUSED",
-                    "special_ad_categories": "[]",
-                },
-            )
+            claim_acquired = True
+            if resumed_campaign is None:
+                if not await self.audit.claim_meta_micro_campaign(account_id, product_id):
+                    return {"status": "blocked", "reason": "ONE_CAMPAIGN_ALLOWANCE_ALREADY_CLAIMED"}
+                await self.audit.record(
+                    "meta_micro_budget_claim",
+                    {
+                        "account_id": account_id,
+                        "product_id": product_id,
+                        "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                        "lifetime_budget_eur": 0.0,
+                        "planned_days": MicroBudgetGate.PLANNED_DAYS,
+                        "planned_total_eur": MicroBudgetGate.TOTAL_BUDGET_EUR,
+                    },
+                )
+                campaign = await self._post(
+                    client,
+                    f"{account_id}/campaigns",
+                    headers,
+                    {
+                        "name": self._campaign_name(),
+                        "objective": "OUTCOME_SALES",
+                        "status": "PAUSED",
+                        "special_ad_categories": "[]",
+                        "is_adset_budget_sharing_enabled": "false",
+                    },
+                )
+            else:
+                campaign = resumed_campaign
+                await self.audit.record(
+                    "meta_micro_campaign_resume",
+                    {"campaign_id": campaign, "product_id": product_id, "status": "paused"},
+                )
             created_ids["campaign_id"] = campaign
             await self.audit.update_meta_micro_campaign(status="CAMPAIGN_CREATED_PAUSED", campaign_id=campaign)
 
             from datetime import timedelta
 
             starts = datetime.now(timezone.utc) + timedelta(minutes=15)
-            ends = starts + timedelta(days=7)
-            adset = await self._post(
+            ends = starts + timedelta(days=MicroBudgetGate.PLANNED_DAYS)
+            existing_adsets = await self._get(
                 client,
-                f"{account_id}/adsets",
+                f"{campaign}/adsets",
                 headers,
-                {
-                    "name": f"Homestro DE Purchase {product_id[:32]}",
-                    "campaign_id": campaign,
-                    "lifetime_budget": str(self.LIFETIME_BUDGET_CENTS),
+                {"fields": "id,name,status,daily_budget,lifetime_budget", "limit": "100"},
+            )
+            existing_rows = existing_adsets.get("data")
+            if not isinstance(existing_rows, list):
+                return {"status": "blocked", "reason": "ADSET_RECONCILIATION_INCOMPLETE", "campaign_id": campaign}
+            if isinstance(existing_adsets.get("paging"), dict) and existing_adsets["paging"].get("next"):
+                return {"status": "blocked", "reason": "ADSET_RECONCILIATION_INCOMPLETE", "campaign_id": campaign}
+            daily_adsets = [
+                row for row in existing_rows
+                if isinstance(row, dict) and str(row.get("daily_budget", "")) == str(self.DAILY_BUDGET_CENTS)
+            ]
+            if len(daily_adsets) > 1:
+                return {"status": "blocked", "reason": "MULTIPLE_DAILY_ADSETS_FOUND", "campaign_id": campaign}
+            if daily_adsets:
+                existing = daily_adsets[0]
+                if str(existing.get("status", "")).upper() != "PAUSED" or not existing.get("id"):
+                    return {"status": "blocked", "reason": "DAILY_ADSET_NOT_SAFE_TO_RESUME", "campaign_id": campaign}
+                existing_ads = await self._get(
+                    client, f"{existing['id']}/ads", headers,
+                    {"fields": "id,status", "limit": "100"},
+                )
+                ads = existing_ads.get("data")
+                if not isinstance(ads, list) or ads or (isinstance(existing_ads.get("paging"), dict) and existing_ads["paging"].get("next")):
+                    return {"status": "blocked", "reason": "DAILY_ADSET_ALREADY_HAS_ADS_OR_INCOMPLETE", "campaign_id": campaign, "adset_id": str(existing["id"])}
+                adset = str(existing["id"])
+                await self.audit.record("meta_micro_adset_resume", {"campaign_id": campaign, "adset_id": adset})
+            else:
+                adset = await self._post(
+                    client,
+                    f"{account_id}/adsets",
+                    headers,
+                    {
+                        "name": "Homestro DE AT Website Sales" if website_mode else "Homestro DE Catalog All Products",
+                        "campaign_id": campaign,
+                        "daily_budget": str(self.DAILY_BUDGET_CENTS),
                     "billing_event": "IMPRESSIONS",
                     "optimization_goal": "OFFSITE_CONVERSIONS",
                     "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
                     "destination_type": "WEBSITE",
                     "promoted_object": json.dumps(
-                        {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
+                        {"pixel_id": pixel_id, "custom_event_type": "PURCHASE",
+                         **({} if website_mode else {"product_catalog_id": catalog_id})}
                     ),
                     "dsa_beneficiary": beneficiary,
                     "dsa_payor": payor,
                     "targeting": json.dumps(
                         {
-                            "geo_locations": {"countries": ["DE"]},
+                            "geo_locations": {"countries": ["DE", "AT"]},
                             "age_min": 18,
                             "publisher_platforms": ["facebook", "instagram"],
-                            "facebook_positions": ["feed", "marketplace", "story", "reels"],
+                            "facebook_positions": ["feed", "marketplace", "story", "facebook_reels"],
                             "instagram_positions": ["stream", "story", "reels"],
                         }
                     ),
                     "start_time": starts.isoformat(),
                     "end_time": ends.isoformat(),
                     "status": "PAUSED",
-                },
-            )
+                    },
+                )
             created_ids["adset_id"] = adset
             await self.audit.record("meta_micro_campaign_partial", {"campaign_id": campaign, "adset_id": adset})
-            image_hash = await self._upload_image(
-                client, account_id, headers, image_bytes
-            )
-            brief = creative.brief
             adcreative = await self._post(
                 client,
                 f"{account_id}/adcreatives",
                 headers,
-                {
-                    "name": f"Homestro Approved {product_id[:32]}",
+                ({"name": "Homestro Website Creative", "object_story_spec": json.dumps(story, ensure_ascii=False)}
+                 if website_mode else {
+                    "name": "Homestro Catalog Creative",
+                    "product_set_id": product_set_id,
                     "object_story_spec": json.dumps(
                         {
                             "page_id": page_id,
-                            "link_data": {
-                                "image_hash": image_hash,
-                                "link": link,
-                                "message": brief.primary_text,
-                                "name": brief.headline,
-                                "description": brief.description,
-                                "call_to_action": {
-                                    "type": "SHOP_NOW",
-                                    "value": {"link": link},
-                                },
+                            "template_data": {
+                                "message": "Entdecke Produkte von Homestro für deinen Alltag.",
+                                "name": "{{product.name}}",
+                                "description": "{{product.description}}",
+                                "link": "https://homestro.de",
+                                "call_to_action": {"type": "SHOP_NOW"},
                             },
                         }
                     ),
-                },
+                }),
             )
             ad = await self._post(
                 client,
                 f"{account_id}/ads",
                 headers,
                 {
-                    "name": f"Homestro Test Ad {product_id[:32]}",
+                    "name": "Homestro Website Products" if website_mode else "Homestro Catalog Ad All Products",
                     "adset_id": adset,
                     "creative": json.dumps({"creative_id": adcreative}),
                     "status": "PAUSED",
@@ -801,10 +1237,15 @@ class MetaPublisher:
                 "campaign_id": campaign,
                 "adset_id": adset,
                 "ad_id": ad,
-                "product_id": product_id,
-                "budget_type": "lifetime",
-                "budget_cap_eur": 5.0,
-                "scheduled_window_days": 7,
+                "product_scope": "shopify_website_carousel" if website_mode else "entire_meta_catalog",
+                "advertised_product_ids": advertised_ids,
+                "product_catalog_id": catalog_id,
+                "product_set_id": product_set_id,
+                "budget_type": "daily",
+                "daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                "lifetime_budget_eur": 0.0,
+                "planned_total_eur": MicroBudgetGate.TOTAL_BUDGET_EUR,
+                "scheduled_window_days": MicroBudgetGate.PLANNED_DAYS,
                 "dry_run": False,
                 "note": "Meta review must approve the ad; a campaign does not guarantee impressions or sales.",
             }
@@ -817,28 +1258,139 @@ class MetaPublisher:
         except Exception as exc:
             await self._pause_created(client, created_ids, headers)
             await self.audit.update_meta_micro_campaign(status=f"FAILED_{type(exc).__name__}", campaign_id=created_ids.get("campaign_id"))
-            # Never expose provider response bodies, request details, or tokens in logs/reports.
-            return {
+            # Keep provider details bounded and non-secret so a failure can be diagnosed.
+            details: dict[str, Any] = {
                 "status": "failed_closed",
                 "error_type": type(exc).__name__,
                 "created_objects_paused": bool(created_ids),
-                "one_campaign_allowance_consumed": bool(created_ids),
+                "one_campaign_allowance_consumed": claim_acquired,
             }
+            if isinstance(exc, httpx.HTTPStatusError):
+                response = exc.response
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = {}
+                error = body.get("error", {}) if isinstance(body, dict) else {}
+                if not isinstance(error, dict):
+                    error = {}
+                tail = urlsplit(str(exc.request.url)).path.rstrip("/").rsplit("/", 1)[-1]
+                details["error_type"] = "MetaHTTPError"
+                details["http_status"] = response.status_code
+                details["stage"] = {
+                    "campaigns": "campaign_create",
+                    "adsets": "adset_create",
+                    "adimages": "image_upload",
+                    "adcreatives": "creative_create",
+                    "ads": "ad_create",
+                }.get(tail, "preflight_or_activation")
+                for source, target in (
+                    ("code", "meta_error_code"),
+                    ("error_subcode", "meta_error_subcode"),
+                ):
+                    value = error.get(source)
+                    if isinstance(value, int):
+                        details[target] = value
+                error_type = error.get("type")
+                if isinstance(error_type, str):
+                    details["meta_error_type"] = error_type[:80]
+                for source, target in (
+                    ("error_user_title", "meta_error_title"),
+                    ("error_user_msg", "meta_error_message"),
+                    ("message", "meta_error_summary"),
+                ):
+                    value = error.get(source)
+                    if isinstance(value, str):
+                        details[target] = " ".join(value.split())[:240]
+            return details
         finally:
             if own_client:
                 await client.aclose()
 
+    async def _reconcile_paused_campaign(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        campaign_id: str,
+    ) -> str:
+        """Resume only a confirmed paused campaign with no active ad sets."""
+        campaign = await self._get(
+            client, campaign_id, headers, {"fields": "id,status"}
+        )
+        if str(campaign.get("id", "")) != campaign_id:
+            return "campaign_mismatch"
+        if str(campaign.get("status", "")).upper() != "PAUSED":
+            return "campaign_not_paused"
+        adsets = await self._get(
+            client,
+            f"{campaign_id}/adsets",
+            headers,
+            {"fields": "id,name,status,daily_budget,lifetime_budget", "limit": "100"},
+        )
+        rows = adsets.get("data")
+        if not isinstance(rows, list):
+            return "adsets_incomplete"
+        if any(str(row.get("status", "")).upper() != "PAUSED" for row in rows if isinstance(row, dict)):
+            return "adsets_not_all_paused"
+        if any(not isinstance(row, dict) for row in rows):
+            return "adsets_incomplete"
+        paging = adsets.get("paging")
+        if isinstance(paging, dict) and paging.get("next"):
+            return "adsets_incomplete"
+        return "ready"
+
+    async def _reconcile_failed_claim(
+        self,
+        client: httpx.AsyncClient,
+        account_id: str,
+        headers: dict[str, str],
+        product_id: str,
+    ) -> str:
+        """Read Meta's campaign list before releasing an ambiguous local claim."""
+        result = await self._get(
+            client,
+            f"{account_id}/campaigns",
+            headers,
+            {"fields": "id,name,status", "limit": "100"},
+        )
+        rows = result.get("data")
+        if not isinstance(rows, list):
+            return "incomplete"
+        expected_name = self._campaign_name()
+        for row in rows:
+            if not isinstance(row, dict) or row.get("name") != expected_name:
+                continue
+            campaign_id = str(row.get("id", ""))
+            if not campaign_id:
+                return "incomplete"
+            await self.audit.update_meta_micro_campaign(
+                status="RECONCILED_EXISTING_CAMPAIGN", campaign_id=campaign_id
+            )
+            return "found"
+        paging = result.get("paging")
+        if isinstance(paging, dict) and paging.get("next"):
+            return "incomplete"
+        return "not_found"
+
     def _configuration(
         self,
-    ) -> tuple[str, str, str, str, str, str, str] | dict[str, str]:
+    ) -> tuple[str, str, str, str, str, str, str, str, str] | dict[str, Any]:
         if self.env.get("ALLOW_MICRO_BUDGET", "false").lower() != "true":
             return {"reason": "MICRO_BUDGET_NOT_ENABLED"}
-        if self.env.get("DRY_RUN", "true").lower() != "false":
+        if live_ads_dry_run(self.env):
             return {"reason": "DRY_RUN_ENABLED"}
+        daily_budget_limit = configured_daily_budget_limit_eur(self.env)
+        if daily_budget_limit < MicroBudgetGate.DAILY_BUDGET_EUR:
+            return {
+                "reason": "MICRO_BUDGET_DAILY_LIMIT_TOO_LOW",
+                "required_daily_budget_eur": MicroBudgetGate.DAILY_BUDGET_EUR,
+                "configured_daily_budget_limit_eur": daily_budget_limit,
+            }
         if self.env.get("META_BILLING_VERIFIED", "false").lower() != "true":
             return {"reason": "META_BILLING_NOT_MANUALLY_VERIFIED"}
-        if self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() != "true":
-            return {"reason": "META_PURCHASE_EVENT_NOT_MANUALLY_VERIFIED"}
+        if (self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() != "true"
+                and not measurement_risk_accepted(self.env)):
+            return {"reason": "META_PURCHASE_EVENT_NOT_VERIFIED"}
         token = self.env.get("META_ACCESS_TOKEN", "").strip()
         account_id = self.env.get("META_AD_ACCOUNT_ID", "").strip()
         pixel_id = self.env.get("META_PIXEL_ID", "").strip()
@@ -846,27 +1398,42 @@ class MetaPublisher:
         beneficiary = self.env.get("META_DSA_BENEFICIARY", "").strip()
         payor = self.env.get("META_DSA_PAYOR", "").strip()
         version = self.env.get("META_API_VERSION", "v26.0").strip()
+        catalog_id = self.env.get("META_PRODUCT_CATALOG_ID", "").strip()
+        product_set_id = self.env.get("META_PRODUCT_SET_ID", "").strip()
         if not token:
             return {"reason": "META_ACCESS_TOKEN_MISSING"}
         if not self.ACCOUNT_PATTERN.fullmatch(account_id):
             return {"reason": "META_AD_ACCOUNT_ID_INVALID"}
         if not self.ID_PATTERN.fullmatch(pixel_id) or not self.ID_PATTERN.fullmatch(page_id):
             return {"reason": "META_PIXEL_OR_PAGE_ID_INVALID"}
+        mode = self.env.get("PILOT_AD_MODE", "catalog")
+        if mode not in {"catalog", "website_sales"}:
+            return {"reason": "PILOT_AD_MODE_INVALID"}
+        if mode == "catalog" and (not catalog_id or not self.ID_PATTERN.fullmatch(catalog_id)):
+            return {"reason": "META_PRODUCT_CATALOG_ID_MISSING_OR_INVALID"}
+        if mode == "catalog" and product_set_id and not self.ID_PATTERN.fullmatch(product_set_id):
+            return {"reason": "META_PRODUCT_SET_ID_INVALID"}
+        if mode == "website_sales":
+            catalog_id = product_set_id = ""
         if not beneficiary or not payor:
             return {"reason": "META_EU_BENEFICIARY_OR_PAYER_MISSING"}
         if len(beneficiary) > 200 or len(payor) > 200:
             return {"reason": "META_EU_BENEFICIARY_OR_PAYER_TOO_LONG"}
         if not self.API_VERSION_PATTERN.fullmatch(version):
             return {"reason": "META_API_VERSION_INVALID"}
-        return account_id, page_id, pixel_id, token, version, beneficiary, payor
+        return account_id, page_id, pixel_id, token, version, beneficiary, payor, catalog_id, product_set_id
 
-    @staticmethod
-    def _creative_approved(creative: GeneratedCreative, product_id: str) -> bool:
+    def _campaign_name(self) -> str:
+        return ("Homestro Website Sales" if self.env.get("PILOT_AD_MODE", "catalog") == "website_sales"
+                else "Homestro Catalog Sales All Products")
+
+    def _creative_approved(self, creative: GeneratedCreative, product_id: str) -> bool:
         score = creative.score
+        minimum_score = int(self.env.get("PILOT_CREATIVE_MIN_SCORE", "85"))
         return bool(
             creative.publishable_candidate
             and creative.brief.product_id == product_id
-            and score.quality_score >= 85
+            and score.quality_score >= minimum_score
             and score.product_faithful
             and score.logo_visible
             and score.lifestyle_background
@@ -909,11 +1476,42 @@ class MetaPublisher:
             billing_ready=self.env.get("META_BILLING_VERIFIED", "false").lower() == "true",
             page_id=page_id,
             pixel_id=pixel_id,
-            conversion_event_verified=(
-                accessible_pixel
-                and self.env.get("META_PURCHASE_EVENT_VERIFIED", "false").lower() == "true"
-            ),
+            # A prior event is not required to start a cold-start campaign.
+            # Confirm pixel access; optimize for standard AddToCart events.
+            # as visitors add products to cart.
+            pixel_access_verified=accessible_pixel,
         )
+
+    async def _resolve_all_products_set(
+        self,
+        client: httpx.AsyncClient,
+        catalog_id: str,
+        headers: dict[str, str],
+    ) -> str | None:
+        """Read and select an existing whole-catalog product set; never create one."""
+        result = await self._get(
+            client,
+            f"{catalog_id}/product_sets",
+            headers,
+            {"fields": "id,name", "limit": "100"},
+        )
+        rows = result.get("data")
+        if not isinstance(rows, list):
+            return None
+        paging = result.get("paging")
+        if isinstance(paging, dict) and paging.get("next"):
+            return None
+        exact = [
+            row for row in rows
+            if isinstance(row, dict)
+            and str(row.get("name", "")).strip().casefold() in {"all products", "alle produkte"}
+            and self.ID_PATTERN.fullmatch(str(row.get("id", "")))
+        ]
+        # A duplicate label is not sufficient evidence that a set contains the
+        # intended catalog scope. Fail closed instead of selecting one by ID.
+        if len(exact) != 1:
+            return None
+        return str(exact[0]["id"])
 
     async def _get(
         self,
@@ -967,6 +1565,11 @@ class MetaPublisher:
     async def _activate(
         self, client: httpx.AsyncClient, object_id: str, headers: dict[str, str]
     ) -> None:
+        from .purchase_guard import PurchaseEvidence, requires_recent_purchase
+
+        evidence = await PurchaseEvidence(env=self.env, client=client).check()
+        if requires_recent_purchase(self.env) and not evidence["verified"]:
+            raise RuntimeError("FRESH_PURCHASE_REQUIRED_BEFORE_ACTIVATION")
         response = await client.post(
             f"{self.ENDPOINT}/{self._version()}/{object_id}",
             headers=headers,

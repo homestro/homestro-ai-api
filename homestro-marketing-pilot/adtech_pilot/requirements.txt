@@ -9,3 +9,4 @@ Pillow>=10,<13
 google-auth>=2.35,<3
 requests>=2.32,<3
 uvicorn[standard]>=0.30,<1
+cryptography>=43,<51

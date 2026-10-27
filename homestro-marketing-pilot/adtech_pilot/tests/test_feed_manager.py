@@ -70,6 +70,40 @@ class FeedManagerTests(unittest.TestCase):
         self.assertEqual(str(report.products[0].price), "9.99")
         self.assertEqual(len(self.manager.prepare_channels(report)["google"]), 1)
 
+    def test_single_shopify_product_json_is_normalized_without_publishing(self):
+        product = {
+            "id": 16104466776446,
+            "title": "Lenovo Erazer XP6",
+            "handle": "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5",
+            "description": "<p>Bluetooth <strong>5.4</strong> und IPX5.</p>",
+            "vendor": "Homestro",
+            "type": "Bluetooth-Kopfhörer",
+            "tags": ["Bluetooth 5.4"],
+            "available": True,
+            "images": ["//cdn.shopify.com/files/earbuds.webp"],
+            "variants": [{"price": 4799, "available": True}],
+        }
+        report = self.manager.parse(json.dumps(product), "application/json")
+        self.assertEqual(report.source_format, "shopify-product-json")
+        self.assertTrue(report.valid)
+        self.assertEqual(report.products[0].id, "16104466776446")
+        self.assertEqual(str(report.products[0].price), "47.99")
+        self.assertEqual(report.products[0].availability, "in_stock")
+        self.assertTrue(report.products[0].image_link.startswith("https://"))
+        self.assertIn("Bluetooth 5.4", report.products[0].description)
+        self.assertEqual(len(self.manager.prepare_channels(report)["meta"]), 1)
+
+    def test_single_shopify_product_without_available_variant_is_rejected(self):
+        product = {
+            "id": 16104466776446,
+            "title": "Lenovo Erazer XP6",
+            "handle": "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5",
+            "variants": [{"price": 4799, "available": False}],
+        }
+        report = self.manager.parse(json.dumps(product), "application/json")
+        self.assertFalse(report.valid)
+        self.assertEqual(report.rejected_rows, 1)
+
     def test_dtd_and_entity_expansion_are_rejected(self):
         xml = b'<!DOCTYPE x [<!ENTITY e "boom">]><rss><channel><item><title>&e;</title></item></channel></rss>'
         report = self.manager.parse(xml, "application/xml")

@@ -7,7 +7,7 @@ import io
 import json
 import re
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 import httpx
@@ -32,7 +32,7 @@ class CreativeBrief(BaseModel):
     headline: str = Field(min_length=4, max_length=40)
     primary_text: str = Field(min_length=10, max_length=500)
     description: str = Field(min_length=4, max_length=120)
-    call_to_action: str = Field(pattern="^(Shop Now|Learn More|Get Offer|Buy Now)$")
+    call_to_action: Literal["Shop Now", "Learn More", "Get Offer", "Buy Now"]
     visual_prompt: str = Field(min_length=20, max_length=1200)
     factual_claims: list[str] = Field(max_length=12)
 
@@ -86,6 +86,62 @@ class ImageEditProvider(Protocol):
     ) -> bytes: ...
 
 
+_OPENAI_UNSUPPORTED_SCHEMA_KEYS = {
+    "title",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minItems",
+    "maxItems",
+}
+
+
+def _openai_strict_schema(value: Any) -> Any:
+    """Normalize Pydantic JSON Schema to OpenAI Structured Outputs' strict subset.
+
+    Pydantic still validates generated objects locally, so length, pattern, and
+    collection bounds remain enforced after the API response is parsed.
+    """
+    if isinstance(value, list):
+        return [_openai_strict_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {
+        key: _openai_strict_schema(item)
+        for key, item in value.items()
+        if key not in _OPENAI_UNSUPPORTED_SCHEMA_KEYS
+    }
+    if result.get("type") == "object":
+        properties = result.get("properties", {})
+        result["properties"] = properties
+        result["required"] = list(properties)
+        result["additionalProperties"] = False
+    return result
+
+
+def _fit_output_to_schema(value: Any, schema: dict[str, Any]) -> Any:
+    """Apply local JSON Schema length/count ceilings before Pydantic validation."""
+    schema_type = schema.get("type")
+    if schema_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        return {
+            key: _fit_output_to_schema(item, properties.get(key, {}))
+            for key, item in value.items()
+        }
+    if schema_type == "array" and isinstance(value, list):
+        maximum = schema.get("maxItems")
+        items = value[:maximum] if isinstance(maximum, int) else value
+        return [_fit_output_to_schema(item, schema.get("items", {})) for item in items]
+    if schema_type == "string" and isinstance(value, str):
+        maximum = schema.get("maxLength")
+        if isinstance(maximum, int) and len(value) > maximum:
+            clipped = value[:maximum]
+            if " " in clipped:
+                clipped = clipped.rsplit(" ", 1)[0]
+            return clipped.rstrip(" ,.;:-")
+    return value
+
+
 class OpenAIProvider:
     """Minimal HTTPX adapter using Responses Structured Outputs and Images edits."""
 
@@ -97,6 +153,9 @@ class OpenAIProvider:
         image_model: str = "gpt-image-1",
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 90.0,
+        max_output_tokens: int | None = None,
+        request_byte_limit: int | None = None,
+        service_tier: str | None = None,
     ):
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -107,6 +166,9 @@ class OpenAIProvider:
         )
         self._client = client
         self.timeout_s = timeout_s
+        self.max_output_tokens = max_output_tokens
+        self.request_byte_limit = request_byte_limit
+        self.service_tier = service_tier
 
     async def _http(self) -> httpx.AsyncClient:
         return self._client or httpx.AsyncClient(
@@ -127,7 +189,7 @@ class OpenAIProvider:
                     + base64.b64encode(image_bytes).decode("ascii"),
                 },
             ]
-        body = {
+        body: dict[str, Any] = {
             "model": self.text_model,
             "input": [
                 {
@@ -146,10 +208,16 @@ class OpenAIProvider:
                     "type": "json_schema",
                     "name": schema_name,
                     "strict": True,
-                    "schema": schema.model_json_schema(),
+                    "schema": _openai_strict_schema(schema.model_json_schema()),
                 }
             },
         }
+        if self.service_tier is not None:
+            body["service_tier"] = self.service_tier
+        if self.max_output_tokens is not None:
+            body["max_output_tokens"] = self.max_output_tokens
+        if self.request_byte_limit is not None and len(json.dumps(body, ensure_ascii=False).encode()) > self.request_byte_limit:
+            raise ValueError("LLM_REQUEST_BYTE_LIMIT")
         client = await self._http()
         own_client = self._client is None
         try:
@@ -171,7 +239,9 @@ class OpenAIProvider:
         ]
         if not texts:
             raise RuntimeError("LLM returned no structured output")
-        return schema.model_validate_json("".join(texts))
+        raw_output = json.loads("".join(texts))
+        raw_output = _fit_output_to_schema(raw_output, schema.model_json_schema())
+        return schema.model_validate(raw_output)
 
     async def edit(
         self, *, source_image: bytes, prompt: str, size: str = "1024x1024"
@@ -284,6 +354,8 @@ class CreativeFactory:
                 "rules": [
                     "Use only supplied verified facts; no invented guarantees, discounts, ratings or shipping promises.",
                     "Write natural German copy: an attention hook, a relatable problem, a product-supported solution, then a clear action.",
+                    "Set call_to_action to exactly one platform API value: Shop Now, Learn More, Get Offer, or Buy Now.",
+                    "Respect field lengths exactly: hook <=120, problem <=240, solution <=240, headline <=40, primary_text <=500, description <=120, visual_prompt <=1200 characters; factual_claims <=12 items.",
                     "Stage an emotionally warm, realistic everyday lifestyle scene and replace any plain white product background.",
                     "Preserve the product's actual shape, color, quantity and features from the reference image.",
                     "Do not ask the image model to draw text or a logo; logo is composited from the supplied official asset.",

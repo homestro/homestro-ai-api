@@ -1,0 +1,79 @@
+# Homestro Demon — capability contract
+
+Updated 2026-10-25. This defines comparable outcomes, not access to vendors' private code or a claim of complete parity. Implemented code, enabled runtime, actual delivery and profitable sales are different evidence levels.
+
+## Reference scope
+
+Public vendor descriptions inspected on 25 October 2026:
+
+- Tanganica: https://help.tanganica.com/de/articles/12384226-was-ist-tanganica-com and https://www.tanganica.com/en — Meta, Google and Bing advertising; creative generation; analytics; store diagnostics; social content; newsletters and support.
+- Christiani: https://jetzt-testen.christiani.ai/ and https://jetzt-testen.christiani.ai/live-demo — business knowledge, positioning, storytelling and personalized posts, ads, funnels and emails.
+- Expoya: https://www.expoya.com/ — topic research, landing pages, social content and search visibility.
+- Crush: https://trycrush.ai/ — Meta creative, testing, audience selection, performance optimization, competitor library and social posting.
+
+Marketing descriptions do not establish these products' internal algorithms, API availability or guaranteed results.
+
+## Current contract and acceptance evidence
+
+| Capability | Pilot implementation | Evidence needed to mark complete |
+|---|---|---|
+| Shopify catalog | Existing feed diagnosis, availability, EUR, image/link checks; variant cost sync | Successful recent feed and complete cost snapshot; last observation: 384 products, 1461 variant costs |
+| Cost-aware product selection | Fresh known costs; configured price/headroom policy; category diversity and least-explored memory | Product-selection audit with actual eligible/rejected counts; no claim that headroom is net profit |
+| Meta acquisition | Existing single campaign/adset/ad, DE/AT, website carousel, bounded test | Meta identity/status and reporting; ACTIVE alone is not delivery |
+| Autonomous experiment control | Persistent intent, create/attach reconciliation, one rotation per 24h after additional exposure spend | Confirmed same-ad attachment; no duplicate ad, no budget/end-date change |
+| Performance and stopping | Actual Insights, canonical purchases/ROAS, durable stops, independent watchdog | Provider reads and pause confirmation; missing data never implies purchases |
+| Attribution/economics | Signed link reference, signed paid/refund/cancel webhooks, immutable known COGS, confirmed expenses | Genuine attributed paid order, complete actual costs and reported spend; currently no verified profitability |
+| German copy | Versioned brand brief and grounded deterministic ad/social/SEO/GEO drafts; source facts and unverified product-name language flagged | Real feed facts; a complete brand-knowledge/storytelling generator remains missing |
+| Store diagnostics | Read-only sample of homepage and up to three product pages; HTTP, metadata, H1, canonical, alt and JSON-LD checks | Recorded sampled URLs/issues; no claim of full SEO audit, rankings or Core Web Vitals |
+| Organic social | Separate existing main-service publisher | Platform receipts/URLs per brand/channel; historical service records do not prove current publication |
+| Competitor trends | Existing Meta archive adapter and matching, failure reported explicitly | Authorized source response; current source rejection is not trend data; 14-day longevity does not prove profit |
+| Higgsfield imports | Eleven existing images downloaded, hashed and mapped; authenticated handoff verified44native drafts (11perFB/IG/TikTok/Pinterest) | Visual approval still required; no imported image published; no new generation or proven video output |
+| Generative ads in 9:16 and 1:1 | Existing creative-factory scaffolding, paid generation disabled | Approved cost plus actual outputs, aspect validation and publishing receipts |
+| Google/Bing advertising | Persistent source-bound drafts and provider-specific paused request compilers; default-off Google validateOnly transport; Bing offline dependency templates | Live account connections, real provider validation, reviewed German copy/demand, verified targeting; full write/recovery/optimization adapters and authorized activation remain missing |
+| Cross-channel budget allocation | Not implemented | Reliable common attribution/cost basis, channel-specific safeguards, explicit total budget; never scale current EUR5 test by inference |
+| Brand knowledge and campaign strategy | Not complete | Versioned real business facts, factual-claim validation, generated strategy/copy tests and provider integration |
+| Email/newsletter/customer support | Not implemented as a live channel | Store consent/suppression inputs, delivery connector, reviewed recipient scope, unsubscribe handling and actual delivery evidence |
+| SEO content and landing-page creation | Sample diagnostics plus grounded SEO metadata and Product/Offer JSON-LD drafts; missing-only SEO title/description writer deployed with backups; GEO schema installed in unpublished theme198462833022, owner publication and rendered readback pending | Brand-safe factual drafts, own-store publishing integration, preview/rollback and duplicate protection |
+| Full reporting/learning | Protected /pilot/brain and /pilot/economics; source freshness and explicit gaps | Actual experiments/orders over time; no invented learning from unobserved outcomes |
+
+## Fixed operating boundary
+
+Current authorization is the existing EUR5/day, seven-day Meta test, EUR35 reported-spend stop, plus stop after over EUR15 without reported purchases unless valid signed payment evidence supports holding. A provider's daily budget is not an exact hard real-time spending ceiling; polling and reporting delay remain. No other paid campaigns/channels, new subscription or paid AI generation is enabled by this contract.
+
+Current owner instruction restores the hard lock: PILOT_LAUNCH_POLICY=prove_it_first, PILOT_ACCEPT_UNVERIFIED_MEASUREMENT=false, META_PURCHASE_EVENT_VERIFIED remains false. Existing campaign120254444566440274 is confirmed PAUSED. The earlier bounded-acquisition waiver is superseded; previous fiveEUR/day/seven-day/35EUR limits are ceilings, not current permission to spend without verified measurement. Refunds, cancelled/test/sample orders and stale costs cannot become profit evidence.
+
+## Remaining implementation order
+
+1. Confirm live selection/diagnostic evidence and current ad delivery, then collect genuine experiment/order evidence.
+2. Add versioned business facts and grounded German creative/strategy drafts with a provider adapter; keep paid calls off until costs are authorized.
+3. Complete real media import from accessible existing exports; validate formats and deduplicate before publishing.
+4. Add store content/landing-page draft and revision workflow, then organic-channel receipts and scheduling by brand.
+5. Implement email drafts and consent-aware delivery integration; connect Google/Bing with read-only diagnosis before any authorized paid launch.
+6. Build common reporting and conservative allocation only after channel attribution and actual cost completeness are established.
+
+Do not label this contract or the current bounded Meta buyer as a completed replacement for all four services. Every missing row must gain executable integration, meaningful tests and the stated live evidence before its status changes.
+
+## Director expansion, 25 October 2026
+
+Persistent common strategy/work queue and seven-day calendar now produce grounded proposals across seven marketing domains; protected /pilot/marketing exposes actual stored tasks and blockers. This supplies orchestration and reviewable content, not missing Google/Bing/email write adapters. Existing organic main service includes guide/article/social publication logic and remains the sole consumer; the public receipt bridge reports its records explicitly as database evidence. Existing Higgsfield output intake is now executable and content-addressed, with protected review queue; all11observed exports are images, no video source proven, and ten product mappings remain unknown. Stored media remains distinct from approved/attached/published media.161tests passed before deployment. Full parity remains unverified and external consumers listed above remain incomplete.
+
+## Additional backend implementations
+
+- GoogleAds read-only REST reporting and MicrosoftAds read-only campaign inventory adapters implemented; full campaign mutation and cross-channel optimization remain missing. No connected HYPD accounts were returned and no extra paid channel enabled.
+- Consent/suppression/SMTP delivery backend implemented and tested with fake transport; default off, no recipients imported and no real sends. Existing actual consent/provider configuration and deliverability verification remain necessary.
+- Optional bounded model-based editorial reasoning implemented; source-bound hypotheses, one call/day, no budget/status/publication authority. Kept disabled pending the owner's prior requirement to approve generation costs; active deterministic brain continues.
+- All11existing Higgsfield files actually stored and exact job/product metadata recovered; format is image, not video. Publication still requires visual/source validation and real consumer handoff, not merely downloaded files.
+
+No row above establishes full four-vendor parity or verified profit.178tests pass for implemented paths; real external activation and some write adapters remain incomplete.
+
+
+## Verified continuation — 25 October 2026
+
+- Receiver main9aa5895/productionc12ae2fdSUCCESS and sender90d9c35/productionfe264a14SUCCESS:11existing images,44draft_queued receipts,0approved/scheduled/published among these imports,0blocked. TikTok still requires independent express consent and privacy settings. Same-job uploads and lost responses reconcile idempotently.
+- Search preparation1d36e6a/production4b2fad7eSUCCESS: stable expiring per-product/channel draft ledger, grounded German text and exact/phrase keyword hypotheses; executable Google validateOnly request path tested with fake transport, no actual Google account call; Bing paused API templates remain offline pending actual IDs/targeting and write/recovery adapter. Additional channel spend0EUR.
+- Follow-up separates free marketing preparation and media handoff from paid Meta stop/metrics gates. Fresh product evidence remains mandatory; paid campaign calls remain gated and stopped campaigns cannot unlock them. Feed recovery schedules the preparation consumer immediately.193Python/219Node tests, Ruff and mypy pass; follow-up runtime readback pending at edit time.
+- Historical sections describing missing downloads/mappings/handoff are superseded by the receipts above. Paid reasoning/generation remain disabled pending explicit price approval, SMTP delivery remains disabled, no new products/videos created, no customer messages sent. GEO theme publication, live search connections/writers, full unified attribution and cross-channel budget allocation remain incomplete. No full four-vendor parity or profit claim.
+
+
+## Search continuation: paused writes and persisted reports
+Google and Microsoft now have default-off official paused-draft creation transports with exact revision review, durable creation intents, duplicate guards and campaign PAUSED readback. Google validates the dependent bundle against provider-resolved DE/AT/language first. Microsoft creates dependent paused campaign/adgroup/ad/keyword objects but still has no attached/verified location/presence targeting. No activation/budget-change path is implemented or authorized. Microsoft reporting has a persisted async submit/poll/ZIP-download/parser and encrypted OAuth refresh rotation. No real account connection, real report, creation or profitable outcome was observed; all new provider transport tests use synthetic responses. This supersedes the statement that no paused-write transport/Microsoft reporting code exists, and does not mark live search advertising or four-vendor parity complete.
