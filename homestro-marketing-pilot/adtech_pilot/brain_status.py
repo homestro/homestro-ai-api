@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-KINDS = ('organic_operations', 'autonomous_brain', 'meta_performance_snapshot', 'meta_performance_decision',
+KINDS = ('first_purchase_test', 'organic_operations', 'autonomous_brain', 'meta_performance_snapshot', 'meta_performance_decision',
          'daemon_heartbeat', 'purchase_watchdog', 'pilot_control_cycle', 'product_selection', 'storefront_diagnostics', 'content_drafts', 'seo_publication', 'marketing_director', 'existing_media_import', 'organic_publisher_evidence', 'organic_catalog_brain', 'search_channel_evidence', 'cognitive_strategy', 'publisher_media_handoff', 'search_campaign_drafts', 'microsoft_performance_report', 'google_paused_creation', 'microsoft_paused_creation', 'cross_channel_budget_proposal', 'cross_channel_accounting', 'search_write_recovery', 'sales_goal_progress')
 
 

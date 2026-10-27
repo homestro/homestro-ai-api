@@ -38,3 +38,18 @@ export async function recordOpenAiFailure(response,cfg,operation){
   }
   return reason;
 }
+
+// Non-generating provider diagnosis. Model-read access does not prove TTS-write entitlement.
+export async function checkOpenAiAccess(cfg,fetchImpl=fetch){
+  if(!cfg.openaiApiKey)return {status:'not_configured',generationPerformed:false};
+  const results=[];
+  for(const [operation,model] of [['script',cfg.videoScriptModel||'gpt-4o-mini'],['speech',cfg.videoTtsModel||'gpt-4o-mini-tts']]){
+    if(!/^[a-zA-Z0-9._-]{1,100}$/.test(model))fail('OPENAI_MODEL_ID_INVALID');
+    const reply=await fetchImpl('https://api.openai.com/v1/models/'+model,{method:'GET',redirect:'error',
+      headers:{Authorization:'Bearer '+cfg.openaiApiKey},signal:AbortSignal.timeout(15000)});
+    if(!reply.ok){const reason=await recordOpenAiFailure(reply,cfg,operation);results.push({operation,httpStatus:reply.status,reason});break;}
+    results.push({operation,httpStatus:reply.status,modelReadAccessible:true});
+  }
+  return {status:results.every(r=>r.modelReadAccessible)?'model_read_access_verified':'blocked',results,
+    health:await openAiHealth(cfg),ttsWritePermissionVerified:false,generationPerformed:false};
+}

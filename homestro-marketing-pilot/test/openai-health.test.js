@@ -29,3 +29,14 @@ test('permission failures and quota are distinct from invalid API keys; no body 
   assert.equal(cfg._openaiBlockedReason,reason);
  }
 });
+
+test('non-generating diagnosis uses only GET model reads and records the exact auth code safely',async()=>{
+ const {checkOpenAiAccess}=await import('../modules/openai-health.js');let calls=0;
+ const cfg={openaiApiKey:'private-test-value'};
+ const result=await checkOpenAiAccess(cfg,async(url,options)=>{
+  calls++;assert.equal(options.method,'GET');assert.equal(options.body,undefined);assert.match(url,/\/v1\/models\//);
+  return new Response(JSON.stringify({error:{code:'invalid_api_key',message:'private-test-value'}}),{status:401});
+ });
+ assert.equal(calls,1);assert.equal(result.status,'blocked');assert.equal(result.generationPerformed,false);
+ assert.equal(JSON.stringify(result).includes(cfg.openaiApiKey),false);
+});

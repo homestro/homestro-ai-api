@@ -1,5 +1,5 @@
 import {MarketingOperations} from './operations.js';
-import {openAiHealth} from './openai-health.js';
+import {openAiHealth,checkOpenAiAccess} from './openai-health.js';
 import {CatalogBrain} from './catalog-brain.js';
 import {createSourceLocalizer} from './source-localizer.js';
 import {ImportedMediaCoordinator,importMetadata} from './imported-media.js';
@@ -50,6 +50,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
   try {
     if(!apiKeyMiddleware && (!cfg.adminKey || cfg.adminKey.length<32))fail('PILOT_ADMIN_KEY_REQUIRED');
     const store=new Store(pool);await store.migrate();
+    if(process.env.PILOT_OPENAI_DIAGNOSTIC_ONCE==='true')try{log('OPENAI_ACCESS_DIAGNOSTIC',await checkOpenAiAccess(cfg));}
+    catch(e){log('OPENAI_ACCESS_DIAGNOSTIC',{status:'unavailable',reason:codeOf(e),generationPerformed:false});}
     const renderer=new MediaRenderer(cfg), meta=new MetaOrganic(cfg);
     const ingestion=new Ingestion({store,renderer,localizer,feeRate:cfg.feeRate,cfg});
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
