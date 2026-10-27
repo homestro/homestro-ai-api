@@ -129,7 +129,9 @@ export class ZernioOrganic {
     let url;try{url=new URL(entry.platformPostUrl);}catch{return {status:'verification_pending',permalink:null};}
     const host=channel==='tiktok'?'tiktok.com':'pinterest.com';
     const valid=url.protocol==='https:' && (url.hostname===host||url.hostname===`www.${host}`) && !url.username && !url.password;
-    return entry.status==='published'&&valid?{status:'published',permalink:url.href}:{status:'verification_pending',permalink:null};
+    const match=channel==='tiktok'?url.pathname.match(/^\/@[^/]+\/(?:video|photo)\/(\d+)\/?$/):url.pathname.match(/^\/pin\/(\d+)\/?$/);
+    return entry.status==='published'&&valid&&match?{status:'published',permalink:url.href,
+      platformPostId:match[1],platformIdSource:'provider_reported_permalink'}:{status:'verification_pending',permalink:null};
   }
   async recoverMissing(jobs,checkpoint) {
     if(!Array.isArray(jobs)||jobs.length>20)fail('RECOVERY_BATCH_INVALID');

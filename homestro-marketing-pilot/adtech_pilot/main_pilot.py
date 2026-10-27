@@ -283,6 +283,15 @@ def create_app(
         claim = await audit.get_meta_micro_campaign_claim()
         return operating_report(latest, claim, daily_cap_eur=configured_daily_budget_limit_eur())
 
+    @app.get('/pilot/daily-report', dependencies=[Depends(require_admin)])
+    async def pilot_daily_report(day: str | None = None):
+        from .daily_reports import DailyMarketingReports
+
+        try:
+            return await asyncio.to_thread(DailyMarketingReports(audit).get, day)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail='INVALID_REPORT_DAY') from exc
+
     @app.get("/pilot/marketing", dependencies=[Depends(require_admin)])
     async def pilot_marketing(limit: int = 50):
         from .marketing_director import MarketingDirector

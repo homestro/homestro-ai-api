@@ -77,3 +77,9 @@ UPDATE marketing_posts s SET attempted_at=COALESCE(
   (SELECT min(e.created_at) FROM marketing_events e WHERE e.post_id=s.id AND e.code='publishing'),
   s.published_at,s.updated_at)
 WHERE s.status IN ('publishing','published','recovery_required') AND s.attempted_at IS NULL;
+
+-- Earliest eligible times; existing workers still enforce fresh sources, consent and quotas.
+CREATE TABLE IF NOT EXISTS marketing_publication_schedule(
+  queue text NOT NULL CHECK(queue IN ('marketing_posts','marketing_social_posts')),post_id uuid NOT NULL,
+  product_revision text NOT NULL,channel text NOT NULL,scheduled_for timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(queue,post_id));

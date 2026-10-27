@@ -20,9 +20,10 @@ export class Worker {
           return;
         }
         const job=(postId
-          ? await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND id=$1",[postId])
+          ? await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND id=$1 AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now())",[postId])
           : this.cfg.autonomyEnabled
             ? await client.query(`SELECT s.* FROM marketing_posts s WHERE s.status='approved'
+              AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=s.id AND plan.scheduled_for>now())
               AND NOT (s.product_id=ANY($1::text[]))
               AND (SELECT count(*) FROM marketing_posts recent WHERE recent.channel=s.channel
                 AND ((recent.status='published' AND recent.published_at>now()-interval '24 hours')
@@ -33,7 +34,7 @@ export class Worker {
                 AND spaced.status IN ('published','publishing','recovery_required')
                 AND COALESCE(spaced.published_at,spaced.attempted_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
               ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])
-            : await client.query("SELECT * FROM marketing_posts WHERE status='approved' ORDER BY approved_at LIMIT 1")).rows[0];
+            : await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now()) ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job){
           log('PUBLISH_BLOCKED',{reason:'NO_ELIGIBLE_APPROVED_POST',publishedOrUncertainLast24h:count,limit:this.cfg.maxDailyPosts});
           return;

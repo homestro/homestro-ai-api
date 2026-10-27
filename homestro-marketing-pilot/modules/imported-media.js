@@ -143,8 +143,8 @@ export class ImportedMediaCoordinator{
     const posts=[];
     for(const original of row.receipt.posts||[]){
       const table=['facebook','instagram'].includes(original.channel)?'marketing_posts':'marketing_social_posts';
-      const current=(await this.pool.query(`SELECT id,status,remote,payload FROM ${table} WHERE id=$1`,[original.id])).rows[0];
-      if(current)posts.push({id:current.id,channel:original.channel,status:current.status,requires_visual_review:current.payload?.requiresVisualReview===true,
+      const current=(await this.pool.query(`SELECT p.id,p.status,p.remote,p.payload,plan.scheduled_for FROM ${table} p LEFT JOIN marketing_publication_schedule plan ON plan.post_id=p.id AND plan.queue=$2 WHERE p.id=$1`,[original.id,table])).rows[0];
+      if(current)posts.push({id:current.id,channel:original.channel,status:current.status,scheduled_for:current.status==='approved'?current.scheduled_for||null:null,platform_id:current.remote?.postId||current.remote?.platformPostId||null,provider_post_id:current.remote?.providerPostId||null,requires_visual_review:current.payload?.requiresVisualReview===true,
         permalink:publicPostURL(current.remote?.permalink||'',original.channel)});
     }
     return {...row.receipt,state:row.state,posts,requires_visual_review:posts.some(p=>p.requires_visual_review),publication_confirmed:posts.some(p=>p.status==='published'&&p.permalink)};

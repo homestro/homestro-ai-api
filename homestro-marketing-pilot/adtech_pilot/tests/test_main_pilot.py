@@ -32,7 +32,7 @@ class MainPilotTests(unittest.TestCase):
     def test_attribution_link_and_readiness_require_admin_and_never_enable_spend(self):
         from unittest.mock import patch
         headers = {'X-Pilot-Admin-Key': 'test-admin-key-with-at-least-32-characters'}
-        for path in ('/pilot/attribution', '/pilot/search/readiness'):
+        for path in ('/pilot/attribution', '/pilot/search/readiness', '/pilot/daily-report'):
             self.assertEqual(self.request('GET', path).status_code, 401)
         with patch.dict(os.environ, {'GOOGLE_ADS_CUSTOMER_ID': '', 'MICROSOFT_ADS_ACCOUNT_ID': ''}):
             result = self.request('GET', '/pilot/search/readiness', headers=headers).json()
