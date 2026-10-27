@@ -355,12 +355,44 @@ class FirstPurchaseController:
                 blockers.append('CHECKOUT_VARIANT_NOT_IDENTIFIED')
                 continue
             # Anonymous cart permalink performs no order/payment; retain no checkout token or customer data.
-            checkout = await client.get('https://homestro.de/cart/' + variant + ':1', follow_redirects=False)
-            target = urlsplit(urljoin('https://homestro.de', checkout.headers.get('location', '')))
-            if checkout.status_code not in {301, 302, 303} or target.scheme != 'https' or target.hostname not in {'homestro.de', 'www.homestro.de'} or not target.path.startswith('/checkouts/'):
-                blockers.append('REAL_CHECKOUT_REDIRECT_NOT_VERIFIED')
-                continue
-            checkout_page = await client.get(target.geturl(), follow_redirects=False)
-            if checkout_page.status_code != 200 or len(checkout_page.content) > 2 * 1024 * 1024 or 'checkout' not in checkout_page.text.lower():
-                blockers.append('REAL_CHECKOUT_PAGE_NOT_AVAILABLE')
+            checkout_blocker = await verify_checkout_redirects(client, variant)
+            if checkout_blocker:
+                blockers.append(checkout_blocker)
         return sorted(set(blockers))
+
+
+async def verify_checkout_redirects(client, variant):
+    """Follow at most five own-store redirects; never submit an order or payment.
+
+    Intermediate canonical-host/cart redirects are not a checkout failure.
+    A final own-store checkout page is still mandatory. Never expose checkout
+    session URLs in audit logs or forward the request to an external host.
+    """
+    if not re.fullmatch(r'\d+', str(variant)):
+        return 'CHECKOUT_VARIANT_NOT_IDENTIFIED'
+    current = 'https://homestro.de/cart/' + str(variant) + ':1'
+    seen = set()
+    redirects = 0
+    while True:
+        parsed = urlsplit(current)
+        if (parsed.scheme != 'https'
+                or parsed.hostname not in {'homestro.de', 'www.homestro.de'}
+                or parsed.username or parsed.password or parsed.port not in (None, 443)):
+            return 'REAL_CHECKOUT_REDIRECT_NOT_VERIFIED'
+        if current in seen:
+            return 'REAL_CHECKOUT_REDIRECT_NOT_VERIFIED'
+        seen.add(current)
+        response = await client.get(current, follow_redirects=False)
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get('location')
+            if not location or redirects >= 5:
+                return 'REAL_CHECKOUT_REDIRECT_NOT_VERIFIED'
+            current = urljoin(current, location)
+            redirects += 1
+            continue
+        if redirects == 0 or not parsed.path.startswith('/checkouts/'):
+            return 'REAL_CHECKOUT_REDIRECT_NOT_VERIFIED'
+        if (response.status_code != 200 or len(response.content) > 2 * 1024 * 1024
+                or 'checkout' not in response.text.lower()):
+            return 'REAL_CHECKOUT_PAGE_NOT_AVAILABLE'
+        return None
