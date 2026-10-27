@@ -48,6 +48,50 @@ el('load').onclick=async()=>{
     : 'Pilot odesílá nejdříve každých '+status.publishEveryHours+' hodin na každé síti, nejvýše '+status.maximumDailyPerChannel+' za 24 hodin'+(status.publishAroundClock?' (i v noci).':' mezi 9:00 a 22:00 berlínského času.');
   el('posts').replaceChildren();el('bulk').replaceChildren();el('bulk').hidden=!creator;let approved=0,busy=false;
   const records=[];
+  const organicPanel=node('section','',el('posts'));organicPanel.id='organic-batch';organicPanel.style.cssText='background:#fff;border:2px solid #275b38;border-radius:12px;padding:18px;margin:20px 0';
+  node('h2','Hromadné schválení: Facebook, Instagram, Pinterest',organicPanel);
+  node('p','Níže vyberte konkrétní návrhy. Zkontrolujte text a všechny obrázky před potvrzením. TikTok se schvaluje zvlášť.',organicPanel);
+  const organicCount=node('p','',organicPanel);
+  const organicSelect=node('button','Vybrat všechny zbývající',organicPanel);organicSelect.type='button';
+  const organicPreview=check(organicPanel,'Prohlédl/a jsem text a všechny obrázky každého vybraného příspěvku.');
+  const organicButton=node('button','Schválit vybrané příspěvky',organicPanel);organicButton.type='button';
+  const organicSelection=()=>records.filter(r=>r.job.channel!=='tiktok'&&!r.done&&!r.working&&r.choose?.checked);
+  const organicAvailable=()=>records.filter(r=>r.job.channel!=='tiktok'&&!r.done&&!r.working);
+  const refreshOrganic=()=>{
+    const available=organicAvailable(),selected=organicSelection();
+    organicCount.textContent='Vybráno '+selected.length+' z '+available.length+' zbývajících příspěvků.';
+    organicSelect.textContent=available.length&&available.every(r=>r.choose.checked)?'Zrušit výběr':'Vybrat všechny zbývající';
+    organicButton.disabled=busy||!selected.length||!organicPreview.checked||!el('reviewer').value.trim();
+    organicSelect.disabled=busy||!available.length;
+  };
+  organicSelect.onclick=()=>{
+    const available=organicAvailable(),all=available.every(r=>r.choose.checked);
+    for(const r of available)r.choose.checked=!all;
+    organicPreview.checked=false;refreshOrganic();
+  };
+  organicPreview.onchange=refreshOrganic;
+  el('reviewer').addEventListener('input',refreshOrganic);
+  organicButton.onclick=async()=>{
+    refreshOrganic();if(organicButton.disabled)return;
+    const selected=organicSelection(),reviewer=el('reviewer').value.trim();
+    busy=true;refreshOrganic();el('load').disabled=true;
+    for(const r of records){r.button.disabled=true;if(r.choose)r.choose.disabled=true;}
+    let succeeded=0;const failures=[];
+    try{
+      for(const r of selected){
+        el('message').textContent='Schvaluji '+(succeeded+failures.length+1)+' / '+selected.length+'…';
+        try{
+          await api('posts/'+r.job.id+'/approve',{reviewer,expectedRevision:r.job.revision});
+          markDone(r);succeeded++;
+        }catch(e){failures.push(r.job.payload.title+': '+e.message);}
+      }
+    }finally{
+      busy=false;el('load').disabled=false;
+      for(const r of records)if(!r.done){r.button.disabled=false;if(r.choose)r.choose.disabled=false;}
+      organicPreview.checked=false;refreshOrganic();refreshBatch(false);
+      el('message').textContent='Schváleno '+succeeded+' / '+selected.length+'.'+(failures.length?' Chyby: '+failures.join('; '):' Pilot je zařadí k postupnému odeslání.');
+    }
+  };
   const progress=()=>{el('message').textContent=(jobs.length-approved)+' příspěvků ke kontrole; '+approved+' schváleno v tomto přehledu.';};
   progress();
   let batchPrivacy,batchComment,batchDuet,batchStitch,batchPreview,batchConsent,batchButton,batchCount,chooseAll;
@@ -110,7 +154,7 @@ el('load').onclick=async()=>{
    const a=node('article','',el('posts')),p=j.payload;
    const record={job:j,card:a,done:false};
    node('h2',j.channel+' – '+p.title,a);
-   if(j.channel==='tiktok'){record.choose=check(a,'Vybrat tento návrh do hromadného schválení');record.choose.onchange=()=>refreshBatch();records.push(record);}
+   record.choose=check(a,j.channel==='tiktok'?'Vybrat tento návrh do hromadného schválení TikToku':'Vybrat tento návrh do společného schválení');record.choose.onchange=()=>{if(j.channel==='tiktok')refreshBatch();else{organicPreview.checked=false;refreshOrganic();}};records.push(record);
    node('pre',p.caption,a);
    const link=node('a','Produkt v obchodě',a);link.href=p.productURL;link.target='_blank';link.rel='noopener';
    const urls=p.format==='reels'?[p.videoURL]:p.imageURLs;
@@ -153,14 +197,14 @@ el('load').onclick=async()=>{
       allow_comment:comment.checked,allow_duet:duet?.checked??false,allow_stitch:stitch?.checked??false};
      await api('posts/'+j.id+'/approve',body);
      const next=a.nextElementSibling;
-     markDone(record);refreshBatch();
+     markDone(record);refreshBatch();refreshOrganic();
      if(next)next.scrollIntoView({behavior:'smooth',block:'start'});
      else el('message').scrollIntoView({behavior:'smooth',block:'center'});
     }catch(e){el('message').textContent=e.message;b.disabled=false;}
-    finally{record.working=false;if(record.choose)record.choose.disabled=false;refreshBatch(false);}
+    finally{record.working=false;if(record.choose)record.choose.disabled=false;refreshBatch(false);refreshOrganic();}
    };
   }
-  refreshBatch();
+  refreshBatch();refreshOrganic();
  }catch(e){el('message').textContent=e.message;}
 };
 </script></html>`;
