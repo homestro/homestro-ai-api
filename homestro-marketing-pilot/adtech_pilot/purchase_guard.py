@@ -213,6 +213,14 @@ class PurchaseWatchdog:
 
     async def cycle(self) -> dict[str, Any]:
         async with self.lock:
+            if self.env.get('PILOT_LAUNCH_POLICY') == 'first_purchase_acquisition_test':
+                from .first_purchase import FirstPurchaseController
+
+                acquisition_result = await FirstPurchaseController(self.audit, env=self.env, client=self.client).cycle()
+                self.last_result = acquisition_result
+                await self.audit.record('first_purchase_test', acquisition_result)
+                logger.info('first_purchase_test %s', json.dumps(acquisition_result, separators=(',', ':')))
+                return acquisition_result
             evidence = await self.evidence.check()
             claim = await self.audit.get_meta_micro_campaign_claim()
             result: dict[str, Any] = {"purchase": evidence, "status": "no_managed_campaign"}

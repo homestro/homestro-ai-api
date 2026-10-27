@@ -7,6 +7,7 @@ import base64
 import hmac
 import os
 from contextlib import asynccontextmanager, closing
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -84,6 +85,14 @@ class CreativeProduct(BaseModel):
                 "each verified product fact must contain 1 to 300 characters"
             )
         return facts
+
+
+class FirstPurchaseCreativeReview(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    creative_id: str = Field(pattern=r'^\d{4,30}$')
+    expected_revision: str = Field(pattern=r'^[a-f0-9]{64}$')
+    reviewer: str = Field(min_length=1, max_length=100)
+    content_preview_confirmed: Literal[True]
 
 
 class CreativeRequest(BaseModel):
@@ -275,6 +284,29 @@ def create_app(
                 "fresh_purchase_window_minutes": 15, "watchdog_interval_seconds": 60,
                 "paid_generation_enabled": os.getenv("PILOT_CREATIVE_ENABLED", "false").lower() == "true"}
 
+    @app.post('/pilot/first-purchase-test/review', dependencies=[Depends(require_admin)])
+    async def first_purchase_review(body: FirstPurchaseCreativeReview):
+        from .first_purchase import FirstPurchaseController
+
+        controller = FirstPurchaseController(audit)
+        packet = await controller.cycle()
+        if packet.get('creative_id') != body.creative_id or packet.get('creative_revision') != body.expected_revision:
+            raise HTTPException(status_code=409, detail='CREATIVE_PREVIEW_CHANGED_OR_UNAVAILABLE')
+        controller.store.review(body.creative_id, body.expected_revision, body.reviewer, datetime.now(UTC))
+        return {'review_recorded': True, 'creative_id': body.creative_id, 'budget_increase_authorized': False,
+                'new_paid_generation_authorized': False, 'activation_performed': False}
+
+    @app.get('/pilot/first-purchase-test', dependencies=[Depends(require_admin)])
+    async def first_purchase_status():
+        from .first_purchase import FirstPurchaseStore
+
+        latest = await audit.latest_brain_evidence()
+        return {'consent': FirstPurchaseStore(audit).read(), 'latest': latest.get('first_purchase_test')}
+
+    @app.post('/pilot/first-purchase-test/run', dependencies=[Depends(require_admin)])
+    async def first_purchase_run():
+        return await watchdog.cycle()
+
     @app.get("/pilot/brain", dependencies=[Depends(require_admin)])
     async def pilot_brain():
         from .brain_status import operating_report
@@ -282,6 +314,15 @@ def create_app(
         latest = await audit.latest_brain_evidence()
         claim = await audit.get_meta_micro_campaign_claim()
         return operating_report(latest, claim, daily_cap_eur=configured_daily_budget_limit_eur())
+
+    @app.get('/pilot/daily-report', dependencies=[Depends(require_admin)])
+    async def pilot_daily_report(day: str | None = None):
+        from .daily_reports import DailyMarketingReports
+
+        try:
+            return await asyncio.to_thread(DailyMarketingReports(audit).get, day)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail='INVALID_REPORT_DAY') from exc
 
     @app.get("/pilot/marketing", dependencies=[Depends(require_admin)])
     async def pilot_marketing(limit: int = 50):
