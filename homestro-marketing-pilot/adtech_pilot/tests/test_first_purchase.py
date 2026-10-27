@@ -20,21 +20,30 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 
 
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
-    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False, pause_rejected=False):
+    async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False, pause_rejected=False, lifetime_supported=False, lifetime_rejected=False):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
         await audit.claim_meta_micro_campaign('act_12345', 'all')
         await audit.update_meta_micro_campaign(status='ACTIVE_PENDING_REVIEW', campaign_id=CAMPAIGN)
         if approved:
             await audit.record('meta_micro_campaign_partial', {'campaign_id': CAMPAIGN, 'adset_id': ADSET,
                 'ad_id': AD, 'adcreative_id': CREATIVE})
-        state = {'status': 'PAUSED', 'cap': '3500', 'spend': spend, 'today': today, 'writes': [], 'lost': lost}
+        state = {'status': 'PAUSED', 'cap': '3500', 'spend': spend, 'today': today, 'writes': [], 'lost': lost, 'daily': '500', 'lifetime': None}
+        def adset():
+            return {'id': ADSET, 'status': 'ACTIVE', 'daily_budget': state['daily'], 'lifetime_budget': state['lifetime'],
+                    'start_time': (NOW-timedelta(days=1)).isoformat(), 'end_time': (NOW+timedelta(days=6)).isoformat(),
+                    'targeting': {'geo_locations': {'countries': ['DE', 'AT']}},
+                    'promoted_object': {'pixel_id': '56789', 'custom_event_type': 'PURCHASE'}, 'optimization_goal': 'OFFSITE_CONVERSIONS'}
         def handle(request):
             path = request.url.path
             if request.method == 'POST':
                 body = parse_qs(request.content.decode())
                 state['writes'].append((path, body))
                 if 'spend_cap' in body and cap_rejected:
-                    return httpx.Response(400, json={'error': {'code': 100, 'error_subcode': 1234, 'message': 'test provider cap minimum', 'error_user_title': 'Minimum cap', 'error_user_msg': 'Minimum 100 EUR https://secret.example/hidden '+('A'*50)}})
+                    return httpx.Response(400, json={'error': {'code': 100, 'error_subcode': 2446307 if lifetime_supported else 1234, 'message': 'test provider cap minimum', 'error_user_title': 'Minimum cap', 'error_user_msg': 'Minimum 100 EUR https://secret.example/hidden '+('A'*50)}})
+                if 'lifetime_budget' in body:
+                    if lifetime_rejected:
+                        return httpx.Response(400, json={'error': {'code': 100, 'error_user_title': 'Budget type immutable'}})
+                    state['daily'], state['lifetime'] = '0', body['lifetime_budget'][0]
                 if body.get('status') == ['PAUSED'] and pause_rejected:
                     return httpx.Response(400, json={'error': {'code': 100}})
                 if path.endswith('/' + CAMPAIGN):
@@ -49,14 +58,14 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             if path.endswith('/insights'):
                 period = request.url.params.get('date_preset')
                 return httpx.Response(200, json={'data': [{'campaign_id': CAMPAIGN, 'account_currency': 'EUR',
+                    'adset_id': ADSET,
                     'spend': state['today'] if period == 'today' else state['spend']}]})
             if path.endswith('/act_12345'):
                 return httpx.Response(200, json={'id': 'act_12345', 'timezone_name': 'Europe/Berlin'})
             if path.endswith('/adsets'):
-                return httpx.Response(200, json={'data': [{'id': ADSET, 'status': 'ACTIVE', 'daily_budget': '500',
-                    'start_time': (NOW-timedelta(days=1)).isoformat(), 'end_time': (NOW+timedelta(days=6)).isoformat(),
-                    'targeting': {'geo_locations': {'countries': ['DE', 'AT']}},
-                    'promoted_object': {'pixel_id': '56789', 'custom_event_type': 'PURCHASE'}, 'optimization_goal': 'OFFSITE_CONVERSIONS'}]})
+                return httpx.Response(200, json={'data': [adset()]})
+            if path.endswith('/'+ADSET):
+                return httpx.Response(200, json=adset())
             if path.endswith('/ads'):
                 return httpx.Response(200, json={'data': [{'id': AD, 'status': 'ACTIVE',
                     'effective_status': 'CAMPAIGN_PAUSED', 'creative': {'id': CREATIVE}}]})
@@ -154,6 +163,58 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['error_user_msg'], 'Minimum 100 EUR [redacted] [redacted]')
             self.assertEqual(state['status'], 'PAUSED')
             self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
+
+    async def test_provider_minimum_falls_back_to_frozen_whole_test_allowance_and_never_refills_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audit, state, client, control = await self.fixture(directory, spend='2.98', approved=False, cap_rejected=True, lifetime_supported=True)
+            with self.patches()[0], self.patches()[1]:
+                result = await control.cycle(now=NOW)
+            self.assertEqual(result['native_adset_lifetime_budget_readback_cents'], 798)
+            self.assertEqual(state['daily'], '0')
+            self.assertEqual(state['lifetime'], '798')
+            self.assertIsNone(result['consent']['activated_at'])
+            writes = list(state['writes'])
+            restarted = FirstPurchaseController(PlanAuditStore(Path(directory)/'audit.sqlite'), env=ENV, client=client)
+            restarted.sources = AsyncMock(return_value=[])
+            with self.patches()[0], self.patches()[1]:
+                after = await restarted.cycle(now=NOW+timedelta(days=1))
+            self.assertEqual(after['native_adset_lifetime_budget_readback_cents'], 798)
+            self.assertFalse(any('lifetime_budget' in body or 'spend_cap' in body for _, body in state['writes'][len(writes):]))
+            self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
+            state['spend'] = '7.98'
+            with self.patches()[0], self.patches()[1]:
+                stopped = await restarted.cycle(now=NOW+timedelta(days=1))
+            self.assertEqual(stopped['reason'], 'FROZEN_LIFETIME_TEST_CAP_REACHED')
+            self.assertEqual(restarted.store.read()['state'], 'stopped')
+            await client.aclose()
+
+    async def test_frozen_lifetime_fallback_can_acquire_first_purchase_only_with_all_other_gates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, state, client, control = await self.fixture(directory, cap_rejected=True, lifetime_supported=True)
+            control.env = {**ENV, 'SHOPIFY_WEBHOOK_SECRET': 'test', 'PILOT_ADMIN_KEY': 'test-signature-secret'}
+            with self.patches()[0], self.patches()[1]:
+                result = await control.cycle(now=NOW)
+            self.assertEqual(result['status'], 'active_confirmed')
+            self.assertEqual(result['native_adset_lifetime_budget_readback_cents'], 500)
+            self.assertEqual(state['lifetime'], '500')
+            self.assertFalse(result['prior_purchase_required'])
+            self.assertFalse(any(body.get('spend_cap') == ['10000'] for _, body in state['writes']))
+            await client.aclose()
+
+    async def test_rejected_budget_type_conversion_never_activates_or_replenishes_frozen_allowance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, state, client, control = await self.fixture(directory, spend='2.98', cap_rejected=True, lifetime_supported=True, lifetime_rejected=True)
+            with self.patches()[0], self.patches()[1]:
+                result = await control.cycle(now=NOW)
+            self.assertEqual(result['status'], 'paused_confirmed')
+            self.assertEqual(result['stage'], 'paused_native_lifetime_budget_preparation')
+            self.assertEqual(result['error_user_title'], 'Budget type immutable')
+            self.assertEqual(control.store.lifetime_cap(ADSET, 3500), 798)
+            self.assertEqual(state['daily'], '500')
+            self.assertIsNone(state['lifetime'])
+            self.assertIsNone(result['consent']['activated_at'])
+            self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
+            await client.aclose()
 
     async def test_total_cap_and_expiry_are_durable_and_cannot_be_reset_by_restart_or_new_campaign(self):
         with tempfile.TemporaryDirectory() as directory:
