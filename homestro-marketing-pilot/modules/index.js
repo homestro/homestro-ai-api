@@ -1,3 +1,4 @@
+import {checkStorefrontTracking} from './site-tracking-check.js';
 import {MarketingOperations} from './operations.js';
 import {openAiHealth,checkOpenAiAccess} from './openai-health.js';
 import {CatalogBrain} from './catalog-brain.js';
@@ -351,6 +352,12 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     router.post('/operations/run',route(async(req,res)=>{
       if(!operations)return res.status(503).json({error:'MARKETING_OPERATIONS_NOT_CONFIGURED'});
       res.json(await operations.tick());
+    }));
+    router.post('/tracking/site-check',route(async(req,res)=>{
+      let target;try{target=new URL(req.body.url);}catch{fail('TRACKING_CHECK_SOURCE_INVALID');}
+      const rows=(await pool.query("SELECT document FROM marketing_products WHERE document->>'status'='ACTIVE' AND COALESCE(document->>'rejected','false')<>'true'")).rows;
+      if(!rows.some(r=>{try{return new URL(r.document.url).pathname===target.pathname;}catch{return false;}}))fail('TRACKING_CHECK_CURRENT_PRODUCT_REQUIRED');
+      res.json(await checkStorefrontTracking({url:target.href,expectedPixelId:req.body.expectedPixelId}));
     }));
     router.get('/providers/openai',route(async(req,res)=>res.json(await openAiHealth(cfg))));
     router.get('/connection',route(async(req,res)=>{await meta.verifyConnection();res.json({ok:true,publishingEnabled:cfg.publishingEnabled,adSpendEUR:0});}));
