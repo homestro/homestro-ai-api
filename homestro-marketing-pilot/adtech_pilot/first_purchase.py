@@ -385,11 +385,29 @@ class FirstPurchaseController:
                 try:
                     error = exc.response.json().get('error', {})
                     detail.update({k: error[k] for k in ('code', 'error_subcode') if type(error.get(k)) is int})
+                    if error.get('code') == 100 and stage == 'paused_native_cap_preparation':
+                        # Parameter errors may explain a provider minimum. Keep
+                        # bounded human labels only, never payloads/URLs/credentials.
+                        for key in ('error_user_title', 'error_user_msg', 'message'):
+                            value = error.get(key)
+                            if isinstance(value, str):
+                                value = re.sub(r'https?://\S+|\b[A-Za-z0-9_-]{40,}\b|\bEA[A-Za-z0-9]{15,}\b|sk-[A-Za-z0-9_-]+', '[redacted]', value)
+                                detail[key] = value[:800]
                 except (ValueError, TypeError, AttributeError):
                     pass
             try:
                 return {**await pause('ACQUISITION_READINESS_OR_CONTROL_FAILED'), **detail}
             except Exception:
+                # A failed redundant pause write is not evidence the campaign
+                # became active. Obtain independent provider status readback.
+                try:
+                    observed = await get(campaign, 'id,status,effective_status')
+                    if observed.get('status') == 'PAUSED':
+                        return {**snapshot, 'status': 'paused_confirmed', 'effective_status': observed.get('effective_status'),
+                                'reason': 'ACQUISITION_READINESS_OR_CONTROL_FAILED', 'pause_write_failed': True,
+                                'consent': self.store.read(), **detail}
+                except Exception:
+                    pass
                 return {**snapshot, 'status': 'pause_unconfirmed', 'reason': 'ACQUISITION_FAIL_CLOSED_PAUSE_UNCONFIRMED', **detail}
         finally:
             if self.client is None:
