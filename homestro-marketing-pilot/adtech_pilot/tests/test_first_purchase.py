@@ -179,18 +179,20 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path == '/api/marketing/v2/tracking/site-check':
                 return httpx.Response(200, json={'configured': True, 'expectedPixelId': '56789', 'pixelBeaconsSuppressed': True, 'purchaseEventDelivered': False, 'observedPixelIds': ['56789']})
             if request.url.path.startswith('/cart/c/'):
-                return httpx.Response(302, headers={'location': '/checkouts/cn/test-anonymous'})
+                return httpx.Response(302, headers={'location': state.get('redirect', 'https://shop.app/checkout/test-anonymous')})
+            if request.url.host == 'shop.app':
+                return httpx.Response(302, headers={'location': 'https://homestro.de/checkouts/cn/test-anonymous'})
             if request.url.path.startswith('/cart/'):
                 return httpx.Response(302, headers={'location': '/cart/c/test-anonymous'})
             if request.url.path.startswith('/checkouts/'):
                 return httpx.Response(200 if state['checkout'] else 503, text='<html>Shopify checkout</html>')
-            return httpx.Response(200, text='<form action="/cart/add">Buy</form>'+('56789' if state['pixel'] else ''))
+            return httpx.Response(200, text='<form action="/cart/add">Buy</form>'+('56789' if state['pixel'] else '\\"pixel_id\\":\\"99887\\"'))
         with tempfile.TemporaryDirectory() as directory:
             controller = FirstPurchaseController(PlanAuditStore(Path(directory)/'audit.sqlite'), env={
                 **ENV, 'HOMESTRO_PRODUCT_FEED_URL': 'https://homestro.de/feed', 'PILOT_ADMIN_KEY': secret})
             async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
                 self.assertEqual(await controller.sources(client, [card], CAMPAIGN, AD, '56789', NOW), [])
-                for flag, reason in [('pixel', 'STOREFRONT_PIXEL_CONFIGURATION_NOT_OBSERVED'),
+                for flag, reason in [('pixel', 'STOREFRONT_PIXEL_ID_MISMATCH'),
                                      ('stock', 'CREATIVE_SOURCE_NOT_CURRENT_IN_STOCK'),
                                      ('checkout', 'REAL_CHECKOUT_PAGE_NOT_AVAILABLE')]:
                     state[flag] = False
@@ -198,6 +200,11 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                     state[flag] = True
                 self.assertIn('SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED', await controller.sources(
                     client, [{**card, 'link': 'https://homestro.de/products/box'}], CAMPAIGN, AD, '56789', NOW))
+                for destination in ['https://shop.app/products/not-checkout', 'https://evil.example/checkout/test', 'https://homestro.de:444/checkouts/test']:
+                    state['redirect'] = destination
+                    self.assertIn('REAL_CHECKOUT_REDIRECT_NOT_VERIFIED', await controller.sources(client, [card], CAMPAIGN, AD, '56789', NOW))
+                    self.assertEqual(controller.site_diagnostics[0]['checkout_rejected_redirect']['reason'], 'UNTRUSTED_CHECKOUT_REDIRECT')
+                state.pop('redirect')
             self.assertEqual(set(state['requests']), {'GET'})
             state['pixel'] = False
             controller.env = {**controller.env, 'PILOT_ORGANIC_API_KEY': 'test-internal'}

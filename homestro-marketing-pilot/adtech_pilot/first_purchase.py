@@ -210,6 +210,8 @@ class FirstPurchaseController:
                 snapshot['provider_readiness'] = readiness
                 return await pause('META_ACCOUNT_PIXEL_OR_BILLING_NOT_READY')
             timezone = await get(account, 'id,timezone_name')
+            accessible_pixels = await get(account+'/adspixels', 'id,name,is_unavailable')
+            snapshot['accessible_account_pixel_ids'] = [str(p['id']) for p in accessible_pixels.get('data', []) if p.get('id') and not p.get('is_unavailable')]
             if timezone.get('timezone_name') not in {'Europe/Berlin', 'Europe/Vienna'}:
                 return await pause('DAILY_SPEND_REPORTING_TIMEZONE_NOT_DE_AT')
             stage = 'adset'
@@ -430,7 +432,8 @@ class FirstPurchaseController:
             if landing.status_code != 200 or len(landing.content) > 2 * 1024 * 1024 or '<form' not in landing.text or '/cart/add' not in landing.text:
                 blockers.append('LANDING_OR_ADD_TO_CART_NOT_AVAILABLE')
                 continue
-            diagnostic = {'product_path': url.path, 'landing_http_status': landing.status_code, 'pixel_in_initial_html': pixel in landing.text, 'checkout_hops': []}
+            configured_pixels = sorted(set(re.findall(r'"pixel_id"\s*:\s*"(\d{4,30})"', landing.text.replace('\\"', '"'))))
+            diagnostic = {'product_path': url.path, 'landing_http_status': landing.status_code, 'pixel_in_initial_html': pixel in landing.text, 'configured_storefront_pixel_ids': configured_pixels, 'checkout_hops': []}
             self.site_diagnostics.append(diagnostic)
             if pixel not in landing.text and not runtime_pixel_verified:
                 # Shopify app pixels may be deferred and absent from initial HTML.
@@ -449,7 +452,7 @@ class FirstPurchaseController:
                         diagnostic['observed_pixel_ids'] = proof.get('observedPixelIds', [])
                         runtime_pixel_verified = configured
                 if not configured:
-                    blockers.append('STOREFRONT_PIXEL_CONFIGURATION_NOT_OBSERVED')
+                    blockers.append('STOREFRONT_PIXEL_ID_MISMATCH' if configured_pixels and pixel not in configured_pixels else 'STOREFRONT_PIXEL_CONFIGURATION_NOT_OBSERVED')
             variant = next((parse_qs(urlsplit(p.link).query).get('variant', [None])[0] for p in matches if parse_qs(urlsplit(p.link).query).get('variant')), None)
             if not variant or not re.fullmatch(r'\d+', variant):
                 blockers.append('CHECKOUT_VARIANT_NOT_IDENTIFIED')
@@ -457,7 +460,7 @@ class FirstPurchaseController:
             # Anonymous cart permalink performs no order/payment; retain no checkout token or customer data.
             current = 'https://homestro.de/cart/' + variant + ':1?checkout&source=pilot_readiness_probe'
             shop = env.get('SHOPIFY_STORE_DOMAIN', '').removeprefix('https://').rstrip('/')
-            allowed_hosts = {'homestro.de', 'www.homestro.de', 'checkout.shopify.com'}
+            allowed_hosts = {'homestro.de', 'www.homestro.de', 'checkout.shopify.com', 'shop.app'}
             if re.fullmatch(r'[a-zA-Z0-9-]+\.myshopify\.com', shop):
                 allowed_hosts.add(shop)
             checkout_ok = False
@@ -475,7 +478,8 @@ class FirstPurchaseController:
                 if checkout.status_code not in {301, 302, 303, 307, 308}:
                     break
                 target = urlsplit(urljoin(current, checkout.headers.get('location', '')))
-                if target.scheme != 'https' or target.hostname not in allowed_hosts or target.username or target.password or target.port not in (None, 443):
+                if target.scheme != 'https' or target.hostname not in allowed_hosts or target.username or target.password or target.port not in (None, 443) or (target.hostname == 'shop.app' and not target.path.startswith('/checkout/')):
+                    diagnostic['checkout_rejected_redirect'] = {'host': target.hostname, 'scheme': target.scheme, 'reason': 'UNTRUSTED_CHECKOUT_REDIRECT'}
                     break
                 current = target.geturl()
             if not checkout_ok:
