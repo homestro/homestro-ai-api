@@ -165,3 +165,66 @@ async def read_catalog_brain(*, env=None, client=None):
     finally:
         if own:
             await client.aclose()
+
+
+async def read_operations(*, env=None, client=None, now=None):
+    """Bounded authenticated read of actual scheduling/media counts, never a publisher."""
+    import json
+    import os
+
+    env = os.environ if env is None else env
+    key = env.get('PILOT_ORGANIC_API_KEY', '')
+    if not key or key.startswith('${{'):
+        return {'status': 'not_configured', 'reason': 'EXISTING_PUBLISHER_INTERNAL_CREDENTIAL_REFERENCE_REQUIRED'}
+    now = now or datetime.now(UTC)
+    own = client is None
+    client = client or httpx.AsyncClient(timeout=httpx.Timeout(10, connect=4), follow_redirects=False)
+    try:
+        async with client.stream('GET', ORIGIN + '/api/marketing/v2/operations',
+                headers={'Authorization': 'Bearer ' + key}, follow_redirects=False) as reply:
+            reply.raise_for_status()
+            data = bytearray()
+            async for chunk in reply.aiter_bytes():
+                data.extend(chunk)
+                if len(data) > 4 * 1024 * 1024:
+                    raise ValueError('OPERATIONS_RESPONSE_LIMIT')
+        value = json.loads(data)
+        generated = datetime.fromisoformat(value['generatedAt'].replace('Z', '+00:00'))
+        if (value.get('brand') != 'Homestro' or generated.tzinfo is None
+                or not -60 <= (now - generated).total_seconds() <= 900
+                or value.get('generationPerformed') is not False
+                or value.get('newPublicationConfirmed') is not False):
+            raise ValueError('OPERATIONS_SOURCE_OR_FRESHNESS_INVALID')
+        catalog = value['catalog']
+        media = value['media']
+        counts = {field: media[field] for field in ('sourceImages', 'nativeVideoProducts', 'importedImages', 'importedVideos')}
+        counts['catalogRecords'] = catalog['records']
+        if any(type(count) is not int or not 0 <= count <= 1000000 for count in counts.values()):
+            raise ValueError('OPERATIONS_COUNTS_INVALID')
+        receipts = value['receipts']
+        if not isinstance(receipts, list) or len(receipts) > 20000:
+            raise ValueError('OPERATIONS_RECEIPT_LIMIT')
+        scheduled, uncertain, recorded = 0, 0, 0
+        for row in receipts:
+            if (not isinstance(row, dict) or row.get('channel') not in {'facebook', 'instagram', 'tiktok', 'pinterest'}
+                    or row.get('mediaKind') not in {'image', 'video', 'missing'}):
+                raise ValueError('OPERATIONS_RECEIPT_INVALID')
+            if row.get('scheduledFor'):
+                date = datetime.fromisoformat(row['scheduledFor'].replace('Z', '+00:00'))
+                if date.tzinfo is None or row.get('status') != 'approved':
+                    raise ValueError('OPERATIONS_SCHEDULE_INVALID')
+                scheduled += 1
+            uncertain += row.get('status') in {'recovery_required', 'remote_pending', 'publishing'}
+            recorded += row.get('status') == 'published'
+        health = value.get('openai') or {}
+        return {'status': 'observed', 'generated_at': generated.isoformat(), 'counts': counts,
+                'scheduled_receipts': scheduled, 'uncertain_receipts': uncertain,
+                'recorded_published_receipts': recorded,
+                'openai_status': health.get('status') if health.get('status') in {'not_configured', 'blocked', 'retry_due', 'unverified'} else 'unknown',
+                'evidence_level': 'persisted_publisher_receipts_and_earliest_schedule_not_live_delivery',
+                'publication_confirmed': False, 'writes_performed': False}
+    except (ValueError, TypeError, KeyError, AttributeError, httpx.HTTPError) as exc:
+        return {'status': 'unavailable', 'error_type': type(exc).__name__, 'writes_performed': False}
+    finally:
+        if own:
+            await client.aclose()

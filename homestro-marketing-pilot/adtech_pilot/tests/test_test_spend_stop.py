@@ -35,7 +35,7 @@ class TestSpendStop(unittest.TestCase):
 
                 env = {'PILOT_LAUNCH_POLICY': 'bounded_acquisition_test', 'ALLOW_MICRO_BUDGET': 'true',
                     'DRY_RUN': 'false', 'PILOT_AD_DRY_RUN': 'false', 'META_ACCESS_TOKEN': 'secret',
-                    'META_AD_ACCOUNT_ID': 'act_12345'}
+                    'META_AD_ACCOUNT_ID': 'act_12345', 'PILOT_PAYMENT_DB_PATH': str(Path(directory) / 'payments.sqlite')}
                 evidence = AsyncMock()
                 evidence.check.return_value = {'verified': False}
                 metrics = AsyncMock(return_value={'status': 'collected', 'metrics': [{'spend_eur': spend, 'reported_purchases': 0, 'reported_purchase_value_eur': 0}]})

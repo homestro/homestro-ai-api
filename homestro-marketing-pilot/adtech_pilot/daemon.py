@@ -526,11 +526,17 @@ class PilotDaemon:
         from .content_engine import content_batch
         from .marketing_director import MarketingDirector
         from .media_registry import MediaRegistry
-        from .organic_bridge import read_catalog_brain, read_organic_results
+        from .organic_bridge import (
+            read_catalog_brain,
+            read_operations,
+            read_organic_results,
+        )
 
         catalog_work = await read_catalog_brain()
         await self.audit.record("organic_catalog_brain", catalog_work)
         logger.info("organic_catalog_brain %s", json.dumps(catalog_work, separators=(",", ":")))
+        operations = await read_operations()
+        await self.audit.record("organic_operations", operations)
         organic = await read_organic_results()
         await self.audit.record("organic_publisher_evidence", organic)
         from .search_channels import read_google, read_microsoft
@@ -605,6 +611,14 @@ class PilotDaemon:
                     if key != "drafts"}, separators=(",", ":")))
         await self.audit.record("product_selection", selection)
         logger.info("product_selection %s", json.dumps(selection, separators=(",", ":")))
+        from .daily_reports import DailyMarketingReports
+
+        if hasattr(self.audit, '_connect'):
+            evidence = await self.audit.latest_brain_evidence()
+            daily = await asyncio.to_thread(DailyMarketingReports(self.audit).refresh, evidence)
+            logger.info('daily_marketing_report %s', json.dumps({'day': daily['day'],
+                'generated_at': daily['generated_at'], 'net_profit_verified': False,
+                'budget_increase_authorized': False}, separators=(',', ':')))
         return {"ranked_candidates": ranked_candidates, "selection": selection}
 
     async def _creative_job(self) -> dict[str, Any]:
@@ -807,4 +821,3 @@ class PilotDaemon:
                 else "BLOCKED_META_PREFLIGHT"
             ),
         }
-

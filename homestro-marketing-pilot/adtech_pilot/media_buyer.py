@@ -1375,6 +1375,8 @@ class MetaPublisher:
     def _configuration(
         self,
     ) -> tuple[str, str, str, str, str, str, str, str, str] | dict[str, Any]:
+        if self.env.get('PILOT_LAUNCH_POLICY') == 'first_purchase_acquisition_test':
+            return {'reason': 'FIRST_PURCHASE_CONTROLLER_OWNS_EXACT_EXISTING_AD_NO_NEW_CAMPAIGN'}
         if self.env.get("ALLOW_MICRO_BUDGET", "false").lower() != "true":
             return {"reason": "MICRO_BUDGET_NOT_ENABLED"}
         if live_ads_dry_run(self.env):

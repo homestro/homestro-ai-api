@@ -146,10 +146,14 @@ class AutonomousBrain:
         claim = await self.audit.get_meta_micro_campaign_claim()
         if not claim or claim.get('status') not in {'ACTIVE_PENDING_REVIEW', 'RECONCILED_EXISTING_CAMPAIGN'}:
             return {'status': 'hold', 'reason': 'NO_RUNNING_MANAGED_TEST'}
+        if self.env.get('PILOT_LAUNCH_POLICY') == 'first_purchase_acquisition_test':
+            return {'status': 'hold', 'reason': 'EXACT_REVIEWED_AD_MANAGED_BY_FIRST_PURCHASE_CONTROLLER', 'new_creatives_authorized': False}
         publisher = MetaPublisher(self.audit, env=self.env, client=self.client)
         config = publisher._configuration()
-        if isinstance(config, dict) or self.env.get('PILOT_AD_MODE') != 'website_sales':
-            return {'status': 'hold', 'reason': 'LIVE_WEBSITE_TEST_REQUIRED'}
+        if isinstance(config, dict):
+            return {'status': 'hold', 'reason': 'LIVE_WEBSITE_TEST_CONFIGURATION_BLOCKED', 'configuration_blocker': config.get('reason')}
+        if self.env.get('PILOT_AD_MODE') != 'website_sales':
+            return {'status': 'hold', 'reason': 'LIVE_WEBSITE_TEST_REQUIRED', 'configuration_blocker': 'PILOT_AD_MODE_NOT_WEBSITE_SALES'}
         if self.env.get('PILOT_LAUNCH_POLICY') != 'bounded_acquisition_test':
             return {'status': 'hold', 'reason': 'BOUNDED_TEST_REQUIRED'}
         account, page, _, token, version, *_ = config
