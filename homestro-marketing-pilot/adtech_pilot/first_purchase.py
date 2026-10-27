@@ -264,7 +264,16 @@ class FirstPurchaseController:
                     snapshot['preview_read_error']['http_status'] = exc.response.status_code
             review = self.store.reviewed(campaign, str(ad['id']), creative_id, revision)
             snapshot['creative_review_basis'] = review
+            from .website_ads import owner_excluded, product_path
+
+            paths = [product_path(row.get('link', '')) for row in cards]
+            excluded = [i+1 for i, row in enumerate(cards) if owner_excluded(row)]
+            snapshot['owner_policy'] = {'excluded_card_numbers': excluded, 'duplicate_product_cards': len(paths)-len(set(paths))}
             blockers = []
+            if excluded:
+                blockers.append('OWNER_EXCLUDED_CREATIVE_PRODUCT')
+            if len(set(paths)) != len(paths):
+                blockers.append('DUPLICATE_PRODUCT_CARDS')
             if not review:
                 blockers.append('EXACT_CREATIVE_PREVIEW_REVIEW_REQUIRED')
             if not env.get('SHOPIFY_WEBHOOK_SECRET') or not (env.get('PILOT_ATTRIBUTION_SECRET') or env.get('PILOT_ADMIN_KEY')):
@@ -274,6 +283,7 @@ class FirstPurchaseController:
             source_blockers = await self.sources(client, source_cards, campaign, str(ad['id']), pixel, now)
             blockers.extend(source_blockers)
             snapshot['site_diagnostics'] = getattr(self, 'site_diagnostics', [])
+            snapshot['review_proposals'] = getattr(self, 'review_proposals', [])
             snapshot['technical_gates_passed'] = not any(b != 'EXACT_CREATIVE_PREVIEW_REVIEW_REQUIRED' for b in blockers)
             snapshot['creative_review_passed'] = bool(review)
             snapshot['tracking_configuration_verified'] = not source_blockers and not any(b == 'EXISTING_SIGNED_TRACKING_CONFIGURATION_REQUIRED' for b in blockers)
@@ -372,6 +382,28 @@ class FirstPurchaseController:
         if len(response.content) > 12 * 1024 * 1024:
             return ['CURRENT_FEED_SIZE_LIMIT']
         feed = ProductFeedManager().parse(response.content, response.headers.get('content-type'))
+        from .payment_webhooks import PaymentWebhookStore, payment_database
+        from .product_selection import read_cost_candidates
+        from .website_ads import owner_excluded, product_path
+
+        self.review_proposals = []
+        try:
+            candidates, _ = read_cost_candidates(PaymentWebhookStore(payment_database(env)), [p.model_dump(mode='json') for p in feed.products], now=now)
+            # Prefer simple household/travel products for review; no new media/object is made.
+            candidates.sort(key=lambda p: (bool(re.search(r'lenovo|bluetooth|kopfhörer|headphone', p['title'], re.I)), p['title']))
+            seen = set()
+            for candidate in candidates:
+                if owner_excluded(candidate) or product_path(candidate['link']) in seen:
+                    continue
+                seen.add(product_path(candidate['link']))
+                self.review_proposals.append({'source_id': candidate['id'], 'title': candidate['title'],
+                    'image_url': candidate['image_link'], 'product_url': candidate['link'], 'price_eur': str(candidate['price']),
+                    'german_copy': candidate['title']+': Details, Varianten und aktuelle Preise findest du bei Homestro.',
+                    'existing_source_media': True, 'draft_only': True, 'requires_exact_review': True, 'creative_created': False})
+                if len(self.review_proposals) == 3:
+                    break
+        except Exception:
+            pass  # Missing cost evidence never invents a proposal or blocks existing valid-source reads.
         blockers = []
         runtime_pixel_checked, runtime_pixel_verified = False, False
         self.site_diagnostics = []
@@ -383,6 +415,8 @@ class FirstPurchaseController:
                 blockers.append('CREATIVE_DESTINATION_NOT_OWN_STORE')
                 continue
             matches = [p for p in feed.products if urlsplit(p.link).path.rstrip('/') == url.path.rstrip('/') and p.availability == 'in_stock']
+            if matches and any(owner_excluded(p.model_dump(mode='json')) for p in matches):
+                blockers.append('OWNER_EXCLUDED_CREATIVE_PRODUCT')
             if not matches:
                 blockers.append('CREATIVE_SOURCE_NOT_CURRENT_IN_STOCK')
                 continue

@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlsplit
 import httpx
 
 from .performance_loader import load_meta_performance, performance_decision
-from .website_ads import website_story
+from .website_ads import product_path, website_story
 
 
 def next_product_batch(products, counts, limit=10, trend_candidates=None):
@@ -36,7 +36,7 @@ def next_product_batch(products, counts, limit=10, trend_candidates=None):
             _, ids = website_story([product], '12345')
         except (ValueError, TypeError):
             continue
-        link = product['link']
+        link = product_path(product['link'])
         if link in seen:
             continue
         seen.add(link)
