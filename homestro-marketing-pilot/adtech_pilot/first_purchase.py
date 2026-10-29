@@ -456,7 +456,12 @@ class FirstPurchaseController:
                         self.store.defer_provider(campaign, 'META_API_RATE_LIMIT_BACKOFF', now, 900)
                     elif error.get('code') == 100 and error.get('error_subcode') == 2446307:
                         self.store.defer_provider(campaign, 'META_NATIVE_CAP_MINIMUM_EXCEEDS_AUTHORIZATION', now, 21600)
-                    if error.get('code') == 100 and stage in {'paused_native_cap_preparation', 'paused_native_lifetime_budget_preparation'}:
+                    elif (error.get('code') == 100 and error.get('error_subcode') == 1885058
+                          and stage == 'paused_native_100eur_cap_fallback'):
+                        # Meta rejected the fallback cap. Stop the minute-by-minute
+                        # retry loop and retain a sanitized provider explanation.
+                        self.store.defer_provider(campaign, 'META_NATIVE_100EUR_CAP_FALLBACK_REJECTED', now, 21600)
+                    if error.get('code') == 100 and stage in {'paused_native_cap_preparation', 'paused_native_lifetime_budget_preparation', 'paused_native_100eur_cap_fallback'}:
                         # Parameter errors may explain a provider minimum. Keep
                         # bounded human labels only, never payloads/URLs/credentials.
                         for key in ('error_user_title', 'error_user_msg', 'message'):
