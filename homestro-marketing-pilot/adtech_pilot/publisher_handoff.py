@@ -89,8 +89,15 @@ class PublisherHandoff:
                 job = asset['job_id']
                 with closing(self.audit._connect()) as db:
                     stored = db.execute('SELECT next_attempt FROM pilot_media_handoff WHERE job=?', (job,)).fetchone()
+                # Poll already queued drafts on every cycle; only failed handoffs
+                # need backoff. Never re-import an existing media job.
                 if stored and stored[0] > now.timestamp():
-                    continue
+                    with closing(self.audit._connect()) as db:
+                        prior = db.execute('SELECT payload FROM pilot_media_handoff WHERE job=?', (job,)).fetchone()
+                    if prior:
+                        previous = json.loads(prior[0])
+                        if previous.get('state') != 'publisher_queue_confirmed':
+                            continue
                 delay = timedelta(minutes=5)
                 try:
                     current = await request('GET', 'media/imports/' + job)
@@ -123,6 +130,10 @@ class PublisherHandoff:
                 except (ValueError, KeyError, OSError, httpx.HTTPError) as exc:
                     result = {'job_id': job, 'state': 'publisher_handoff_unconfirmed',
                               'error_type': type(exc).__name__, 'publication_confirmed': False}
+                # Existing confirmed queues are read-only polled; no duplicate imports.
+                # Published receipts require platform IDs/permalinks from the publisher.
+                if result.get('state') == 'publisher_queue_confirmed':
+                    delay = timedelta(minutes=5)
                 self.save(job, result, (now + delay).timestamp())
                 results.append(result)
             rows = self.records()
