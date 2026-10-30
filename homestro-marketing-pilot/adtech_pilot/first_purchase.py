@@ -284,20 +284,10 @@ class FirstPurchaseController:
                         error = response.json().get('error', {})
                         minimum_rejection = error.get('code') == 100 and error.get('error_subcode') == 2446307
                     if minimum_rejection:
-                        # Owner explicitly approved EUR100 as the provider-native
-                        # fallback if Meta rejects the preferred EUR35 cap.
-                        # Keep the existing EUR5/day adset budget and seven-day
-                        # schedule. The application still pauses at EUR35 observed
-                        # spend; the provider's hard backstop is EUR100.
-                        stage = 'paused_native_100eur_cap_fallback'
-                        response = await client.post(base + campaign, headers=headers, data={'spend_cap': '10000'})
-                        response.raise_for_status()
-                        confirmed = await get(campaign, 'id,spend_cap,status')
-                        if str(confirmed.get('spend_cap')) != '10000' or confirmed.get('status') != 'PAUSED':
-                            return await pause('PROVIDER_100EUR_FALLBACK_CAP_NOT_CONFIRMED')
-                        remote['spend_cap'] = '10000'
-                        cap = Decimal(10000)
-                        snapshot['provider_cap_fallback_eur'] = '100.00'
+                        # Meta's native minimum exceeds the owner's EUR35 authorization.
+                        # Never try a EUR100 fallback or activate without a verified cap.
+                        self.store.defer_provider(campaign, 'META_NATIVE_CAP_MINIMUM_EXCEEDS_AUTHORIZATION', now, 21600)
+                        return await pause('META_NATIVE_CAP_MINIMUM_EXCEEDS_AUTHORIZATION')
                     else:
                         response.raise_for_status()
                         confirmed = await get(campaign, 'id,spend_cap,status')
