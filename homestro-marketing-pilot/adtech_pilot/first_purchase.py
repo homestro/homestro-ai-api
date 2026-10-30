@@ -381,8 +381,9 @@ class FirstPurchaseController:
                     return await pause('PROVIDER_SPEND_CAP_INVALID')
                 may_release_next_day = cap < target_cap and self.store.previous_envelope_confirmed(int(cap), envelope['day'])
                 if cap == 10000:
-                    snapshot['provider_cap_fallback_eur'] = '100.00'
-                    snapshot['native_spend_cap_readback_cents'] = 10000
+                    # Legacy EUR100 campaign cap is not an authorized EUR35 safety backstop.
+                    # Do not activate based on this cap even if an account cap was set.
+                    return await pause('LEGACY_100EUR_CAMPAIGN_CAP_NOT_AUTHORIZED')
                 elif cap == 0 or cap > target_cap or may_release_next_day:
                     response = await client.post(base + campaign, headers=headers, data={'spend_cap': str(target_cap)})
                     response.raise_for_status()
