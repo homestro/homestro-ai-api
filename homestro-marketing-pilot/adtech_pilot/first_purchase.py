@@ -276,7 +276,7 @@ class FirstPurchaseController:
                 cap = Decimal(str(remote.get('spend_cap') or '0'))
                 if not cap.is_finite() or cap < 0 or cap != int(cap):
                     return await pause('PROVIDER_SPEND_CAP_INVALID')
-                if cap == 0 or (cap > target_cap and cap != 10000):
+                if cap == 0 or cap > target_cap:
                     stage = 'paused_native_cap_preparation'
                     response = await client.post(base + campaign, headers=headers, data={'spend_cap': str(target_cap)})
                     minimum_rejection = False
@@ -284,20 +284,28 @@ class FirstPurchaseController:
                         error = response.json().get('error', {})
                         minimum_rejection = error.get('code') == 100 and error.get('error_subcode') == 2446307
                     if minimum_rejection:
-                        # Owner explicitly approved EUR100 as the provider-native
-                        # fallback if Meta rejects the preferred EUR35 cap.
-                        # Keep the existing EUR5/day adset budget and seven-day
-                        # schedule. The application still pauses at EUR35 observed
-                        # spend; the provider's hard backstop is EUR100.
-                        stage = 'paused_native_100eur_cap_fallback'
-                        response = await client.post(base + campaign, headers=headers, data={'spend_cap': '10000'})
+                        # Never substitute a EUR100 provider cap for the owner's EUR35 hard ceiling.
+                        # Meta may accept a frozen adset lifetime budget instead.
+                        stage = 'paused_native_lifetime_spend_readback'
+                        actual = (await get(str(adset['id'])+'/insights', params={'fields': 'adset_id,account_currency,spend', 'date_preset': 'maximum', 'level': 'adset', 'limit': '2'})).get('data')
+                        if not isinstance(actual, list) or len(actual) > 1 or (actual and (str(actual[0].get('adset_id')) != str(adset['id']) or actual[0].get('account_currency') != 'EUR')):
+                            return await pause('ADSET_LIFETIME_SPEND_SCOPE_UNVERIFIED')
+                        adset_spent = Decimal(str(actual[0]['spend'])) if actual else Decimal(0)
+                        if not adset_spent.is_finite() or adset_spent < 0 or adset_spent > Decimal(spends['maximum']):
+                            return await pause('ADSET_LIFETIME_SPEND_INVALID')
+                        remaining = min(Decimal(5)-Decimal(spends['today']), Decimal(35)-Decimal(spends['maximum']))
+                        if remaining <= 0:
+                            return await pause('TEST_SPEND_ALLOWANCE_EXHAUSTED', latch=True)
+                        frozen_lifetime_cap = self.store.lifetime_cap(str(adset['id']), int((adset_spent+remaining)*100))
+                        stage = 'paused_native_lifetime_budget_preparation'
+                        response = await client.post(base+str(adset['id']), headers=headers,
+                            data={'daily_budget': '0', 'lifetime_budget': str(frozen_lifetime_cap)})
                         response.raise_for_status()
-                        confirmed = await get(campaign, 'id,spend_cap,status')
-                        if str(confirmed.get('spend_cap')) != '10000' or confirmed.get('status') != 'PAUSED':
-                            return await pause('PROVIDER_100EUR_FALLBACK_CAP_NOT_CONFIRMED')
-                        remote['spend_cap'] = '10000'
-                        cap = Decimal(10000)
-                        snapshot['provider_cap_fallback_eur'] = '100.00'
+                        confirmed = await get(str(adset['id']), 'id,daily_budget,lifetime_budget,start_time,end_time,status,effective_status')
+                        if str(confirmed.get('id')) != str(adset['id']) or str(confirmed.get('lifetime_budget')) != str(frozen_lifetime_cap) or confirmed.get('daily_budget') not in (None, 0, '0') or instant(confirmed['end_time']) != end:
+                            return await pause('PROVIDER_FROZEN_LIFETIME_BUDGET_NOT_CONFIRMED')
+                        snapshot['observed_limits']['daily_budget_cents'] = confirmed.get('daily_budget') or '0'
+                        native_lifetime = True
                     else:
                         response.raise_for_status()
                         confirmed = await get(campaign, 'id,spend_cap,status')
@@ -390,10 +398,7 @@ class FirstPurchaseController:
                 if not cap.is_finite() or cap < 0 or cap != int(cap):
                     return await pause('PROVIDER_SPEND_CAP_INVALID')
                 may_release_next_day = cap < target_cap and self.store.previous_envelope_confirmed(int(cap), envelope['day'])
-                if cap == 10000:
-                    snapshot['provider_cap_fallback_eur'] = '100.00'
-                    snapshot['native_spend_cap_readback_cents'] = 10000
-                elif cap == 0 or cap > target_cap or may_release_next_day:
+                if cap == 0 or cap > target_cap or may_release_next_day:
                     response = await client.post(base + campaign, headers=headers, data={'spend_cap': str(target_cap)})
                     response.raise_for_status()
                     confirmed = await get(campaign, 'id,spend_cap,status')
