@@ -747,8 +747,8 @@ class PilotDaemon:
 
     async def _catalog_access_job(self) -> dict[str, Any]:
         """Diagnose Meta catalog access without requiring or enabling paid spend."""
-        if os.getenv("PILOT_AD_MODE", "catalog") == "website_sales":
-            return {"status": "not_required", "reason": "WEBSITE_SALES_DOES_NOT_USE_META_CATALOG"}
+        # Diagnose the Meta catalog even when the existing ad runs in website mode.
+        # Read-only: this does not switch ad formats or create duplicate campaigns.
         result = await MetaPublisher(self.audit).check_catalog_access()
         await self.audit.record("meta_catalog_access_diagnostic", result)
         return result
