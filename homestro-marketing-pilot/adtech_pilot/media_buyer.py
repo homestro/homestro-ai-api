@@ -1659,7 +1659,7 @@ class MetaSaaSPublisher:
     """Create one idempotent, PAUSED preview concept; this class never activates ads."""
 
     API_ROOT = "https://graph.facebook.com"
-    EXPECTED_ACCOUNT_ID = "322742110630620"
+    EXPECTED_ACCOUNT_ID = "313767293442442"
     EXPECTED_PIXEL_ID = "774286518060183"
     PORTFOLIO_DAILY_CAP_CENTS = 50_000
     ACCOUNT_SPEND_CAP_CENTS = 3_500
