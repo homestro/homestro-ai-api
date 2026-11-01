@@ -176,7 +176,14 @@ class FirstPurchaseController:
         campaign = str((claim or {}).get('campaign_id') or '')
         scope = env.get('PILOT_FIRST_PURCHASE_CAMPAIGN_ID', '')
         if not re.fullmatch(r'\d{4,30}', scope) or campaign != scope:
-            return {'status': 'blocked', 'reason': 'EXACT_OWNED_CAMPAIGN_SCOPE_REQUIRED', 'activation_performed': False}
+            return {
+                'status': 'blocked',
+                'reason': 'EXACT_OWNED_CAMPAIGN_SCOPE_REQUIRED',
+                'activation_performed': False,
+                'scope_campaign_id': scope if re.fullmatch(r'\d{4,30}', scope) else None,
+                'owned_campaign_id': campaign or None,
+                'owned_claim_status': (claim or {}).get('status'),
+            }
         consent = self.store.authorize(campaign, now)
         account, token, pixel, page = (env.get(k, '') for k in ('META_AD_ACCOUNT_ID', 'META_ACCESS_TOKEN', 'META_PIXEL_ID', 'META_PAGE_ID'))
         version = env.get('META_API_VERSION', 'v26.0')
