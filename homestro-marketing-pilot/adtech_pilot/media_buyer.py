@@ -978,11 +978,16 @@ class MetaPublisher:
         if (
             not isinstance(claim, dict)
             or str(claim.get("campaign_id", "")) != campaign_id
-            or str(claim.get("account_id", "")).removeprefix("act_")
-               != account_id.removeprefix("act_")
+            or claim.get("status") not in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}
         ):
             return {"status": "blocked", "reason": "EXACT_OWNED_CAMPAIGN_SCOPE_REQUIRED",
                     "campaign_id": campaign_id}
+        # A stale local account label is not authority to mutate anything. The
+        # remote campaign/account relationship is verified below before writes.
+        stored_claim_account_matches = (
+            str(claim.get("account_id", "")).removeprefix("act_")
+            == account_id.removeprefix("act_")
+        )
 
         catalog = await self.check_catalog_access()
         if catalog.get("status") != "checked":
@@ -1092,6 +1097,7 @@ class MetaPublisher:
                     "product_set_name": catalog["product_set_name"],
                     "shopify_feed_records": feed_record_count,
                     "campaign_status": "PAUSED",
+                    "stored_claim_account_matches": stored_claim_account_matches,
                     "daily_budget_eur": "5.00",
                     "account_spend_cap_eur": "35.00",
                     "writes_performed": False,
@@ -1165,6 +1171,7 @@ class MetaPublisher:
                 "product_set_name": catalog["product_set_name"],
                 "shopify_feed_records": feed_record_count,
                 "campaign_status": "PAUSED",
+                "stored_claim_account_matches": stored_claim_account_matches,
                 "daily_budget_eur": "5.00",
                 "account_spend_cap_eur": "35.00",
                 "writes_performed": True,
