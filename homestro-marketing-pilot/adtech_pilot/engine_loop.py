@@ -138,6 +138,18 @@ async def autonomous_draft_worker(
                 if raw.isdigit():
                     payload[key] = int(raw)
             payload["meta_stage"] = parts[4][:40]
+        provider_details = getattr(exc, "meta_details", {})
+        if isinstance(provider_details, dict):
+            for key in (
+                "meta_error_type",
+                "meta_error_title",
+                "meta_error_message",
+                "meta_error_summary",
+                "meta_fbtrace_id",
+            ):
+                value = provider_details.get(key)
+                if isinstance(value, str):
+                    payload[key] = " ".join(value.split())[:240]
         try:
             await audit.record("meta_paused_concept", payload)
         except Exception:
