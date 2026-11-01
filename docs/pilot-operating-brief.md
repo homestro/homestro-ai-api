@@ -1,3 +1,11 @@
+## Archived Meta campaign retirement and token preflight — 1 November 2026
+
+Owner authorized removal of archived campaign reference `120254444566440274` from the active first-purchase scope. Railway production variable `PILOT_FIRST_PURCHASE_CAMPAIGN_ID` was cleared. Startup cleanup removes only matching rows from `meta_micro_campaign_claim`, `pilot_first_purchase_consent`, and `pilot_first_purchase_backoff`; append-only audit history is retained.
+
+Commit `75293014cbc312e0392f5d3c965de230650765a6` deployed successfully as Railway deployment `70b0181c-6b6f-41a0-b286-afccba68b8c6`. `/healthz` returned HTTP 200. The first-purchase worker now blocks without the retired campaign scope and does not query the archived campaign.
+
+The paused concept worker still cannot read the A1 ad account: Meta returns HTTP 403, code 200 at `account_read`; campaign writes remain false and no campaign was created. The prior preflight also returned a Page permission error (code 10), and catalog lookup returned code 100/subcode 33. The token permission picker had ads_management, ads_read, business_management, and catalog_management selected, but effective access to the account/assets is still not confirmed. Next owner-side step is to grant the system user effective access to the A1 account and the exact Homestro Page, Pixel, and catalog, then issue a token for that assigned system user and deploy it. Preserve the €5/day and €35 total ceiling; do not report launch until a paused whole-catalog concept is read back from Meta.
+
 Warning: truncated output (original token count: 13966)
 Total output lines: 411
 
