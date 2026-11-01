@@ -1752,6 +1752,42 @@ class MetaSaaSPublisher:
                     value = error.get(source)
                     if isinstance(value, str):
                         safe_details[target] = " ".join(value.split())[:240]
+                if stage == "account_read":
+                    try:
+                        accounts_response = await client.get(
+                            f"{self.API_ROOT}/{self.api_version}/me/adaccounts",
+                            headers={"Authorization": f"Bearer {self.token}"},
+                            params={"fields": "id,account_id", "limit": "100"},
+                        )
+                        accounts_payload = accounts_response.json()
+                        rows = accounts_payload.get("data") if isinstance(accounts_payload, dict) else None
+                        if accounts_response.status_code < 400 and isinstance(rows, list):
+                            account_ids = [
+                                str(row.get("account_id") or row.get("id", ""))
+                                for row in rows
+                                if isinstance(row, dict)
+                            ]
+                            target_id = self.account_id.removeprefix("act_")
+                            safe_details["meta_target_account_visible"] = (
+                                "true" if target_id in account_ids else "false"
+                            )
+                            safe_details["meta_accessible_ad_account_ids"] = ",".join(
+                                account_ids[:50]
+                            )[:1000]
+                            paging = accounts_payload.get("paging", {})
+                            safe_details["meta_account_list_complete"] = (
+                                "false"
+                                if isinstance(paging, dict) and paging.get("next")
+                                else "true"
+                            )
+                        else:
+                            safe_details["meta_accessible_accounts_probe"] = (
+                                f"failed_http_{accounts_response.status_code}"
+                            )
+                    except Exception as probe_exc:
+                        safe_details["meta_accessible_accounts_probe"] = (
+                            f"failed_{type(probe_exc).__name__}"
+                        )
                 raise MetaGraphAPIError(
                     response.status_code,
                     code if isinstance(code, int) else None,
