@@ -112,7 +112,7 @@ async def autonomous_draft_worker(
             ),
         )
         result = await publisher.deploy_paused_concept(filtered[0], initial_budget_eur=5.0)
-        result["writes_performed"] = result.get("status") == "CONCEPT_CREATED"
+        result["writes_performed"] = result.get("status") in {"CONCEPT_CREATED", "CONCEPT_RECONCILED"} or result.get("writes_performed") is True
         result["feed_records"] = len(report.products)
         result["filtered_candidates"] = len(filtered)
         await audit.record("meta_paused_concept", result)
