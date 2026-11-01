@@ -186,6 +186,12 @@ def create_app(
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(watchdog.run(stop_daemon), name="purchase-watchdog")
         tasks.add(task)
+        if os.getenv("PILOT_PAUSED_CONCEPT_ENABLED", "true").lower() == "true":
+            task = asyncio.create_task(
+                autonomous_draft_worker(product_feed, audit, stop_daemon),
+                name="paused-meta-concept",
+            )
+            tasks.add(task)
         if os.getenv("PILOT_DAEMON_ENABLED", "true").lower() == "true":
             github_token = os.getenv("PILOT_GITHUB_TOKEN", "")
             reporter = (
