@@ -1715,10 +1715,21 @@ class MetaSaaSPublisher:
                 error = payload.get("error", {}) if isinstance(payload, dict) else {}
                 code = error.get("code") if isinstance(error, dict) else None
                 subcode = error.get("error_subcode") if isinstance(error, dict) else None
+                clean_path = path.lstrip("/")
+                if clean_path == self.account_id:
+                    stage = "account_read"
+                elif clean_path == self.page_id:
+                    stage = "page_read"
+                elif clean_path == f"{self.account_id}/adspixels":
+                    stage = "pixel_access_read"
+                elif clean_path == f"{self.account_id}/campaigns":
+                    stage = "campaign_list_read"
+                else:
+                    stage = "meta_api_request"
                 raise RuntimeError(
                     f"META_API_ERROR:{response.status_code}:"
                     f"{code if isinstance(code, int) else 'unknown'}:"
-                    f"{subcode if isinstance(subcode, int) else 'unknown'}"
+                    f"{subcode if isinstance(subcode, int) else 'unknown'}:{stage}"
                 )
             return payload
         finally:
