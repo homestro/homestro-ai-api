@@ -321,6 +321,12 @@ class FirstPurchaseController:
             stage = 'creative'
             ads = (await get(str(adset['id']) + '/ads', 'id,status,effective_status,creative{id},ad_review_feedback')).get('data', [])
             if len(ads) != 1 or ads[0].get('ad_review_feedback') or ads[0].get('effective_status') not in {'ACTIVE', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'PAUSED'}:
+                snapshot['ad_eligibility_diagnostic'] = {
+                    'ads_count': len(ads),
+                    'ad_status': ads[0].get('status') if len(ads) == 1 else None,
+                    'ad_effective_status': ads[0].get('effective_status') if len(ads) == 1 else None,
+                    'review_feedback_present': bool(ads[0].get('ad_review_feedback')) if len(ads) == 1 else None,
+                }
                 return await pause('EXISTING_SINGLE_ELIGIBLE_REVIEWED_AD_REQUIRED')
             ad = ads[0]
             creative_id = str(ad['creative']['id'])
