@@ -51,15 +51,32 @@ async def autonomous_draft_worker(
 ) -> None:
     """Create one approved-scope concept after boot; all Meta objects stay PAUSED."""
     publisher = None
+    log.info("meta_paused_concept_worker %s", json.dumps({
+        "status": "STARTED",
+        "writes_performed": False,
+    }, separators=(",", ":")))
     try:
-        await asyncio.wait_for(stop_event.wait(), timeout=15)
+        await asyncio.wait_for(stop_event.wait(), timeout=5)
+        log.warning("meta_paused_concept_worker %s", json.dumps({
+            "status": "STOPPED_BEFORE_RUN",
+            "reason": "APPLICATION_SHUTDOWN",
+            "writes_performed": False,
+        }, separators=(",", ":")))
         return
     except TimeoutError:
         pass
     except asyncio.CancelledError:
+        log.warning("meta_paused_concept_worker %s", json.dumps({
+            "status": "CANCELLED_BEFORE_RUN",
+            "writes_performed": False,
+        }, separators=(",", ":")))
         raise
 
     env = os.environ
+    log.info("meta_paused_concept_worker %s", json.dumps({
+        "status": "READING_PRODUCT_FEED",
+        "writes_performed": False,
+    }, separators=(",", ":")))
     required = {
         "META_ACCESS_TOKEN": env.get("META_ACCESS_TOKEN", "").strip(),
         "META_AD_ACCOUNT_ID": env.get("META_AD_ACCOUNT_ID", "").strip(),
