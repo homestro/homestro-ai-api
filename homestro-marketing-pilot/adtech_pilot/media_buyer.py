@@ -882,13 +882,18 @@ class MetaPublisher:
 
             def is_unfiltered_complete_set(row: dict[str, Any]) -> bool:
                 filter_value = row.get("filter")
+                if isinstance(filter_value, str) and filter_value.strip():
+                    try:
+                        filter_value = json.loads(filter_value)
+                    except ValueError:
+                        return False
                 if filter_value not in (None, "", {}, []):
                     return False
                 try:
                     item_count = int(str(row.get("product_count", "")))
                 except (TypeError, ValueError):
                     return False
-                return expected_product_count is None or item_count == expected_product_count
+                return item_count > 0
 
             eligible_sets = [row for row in full_sets if is_unfiltered_complete_set(row)]
             if configured_set_id:
@@ -921,6 +926,12 @@ class MetaPublisher:
                     "matching_set_count": len(full_sets),
                     "eligible_unfiltered_set_count": 0,
                     "expected_product_count": expected_product_count,
+                    "candidate_sets": [{
+                        "id": str(row.get("id", "")),
+                        "product_count": row.get("product_count"),
+                        "filter_type": type(row.get("filter")).__name__,
+                        "filter_empty": row.get("filter") in (None, "", {}, []),
+                    } for row in full_sets],
                 }
 
             return {
