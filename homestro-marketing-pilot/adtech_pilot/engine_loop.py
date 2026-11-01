@@ -6,17 +6,20 @@ campaigns, generates media, or changes the ad account's spend cap.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
 from .feed_manager import ProductFeedManager
 from .first_purchase import AutopilotFeedController
 from .media_buyer import MetaSaaSPublisher
+from .order_economics import decode_ref, tracked_url, tracking_ref
 
 log = logging.getLogger("uvicorn.error")
 
@@ -42,6 +45,100 @@ def _feed_url_allowed(value: str) -> bool:
         )
     except ValueError:
         return False
+
+
+async def _ensure_signed_tracking(publisher: MetaSaaSPublisher, result: dict[str, Any]) -> dict[str, str]:
+    campaign_id = str(result.get("campaign_id", "")).strip()
+    ad_id = str(result.get("ad_id", "")).strip()
+    adset_id = str(result.get("adset_id", "")).strip()
+    creative_id = str(result.get("creative_id", "")).strip()
+    if not all(value.isdigit() for value in (campaign_id, ad_id, adset_id, creative_id)):
+        raise RuntimeError("SIGNED_ATTRIBUTION_OBJECT_IDS_INVALID")
+
+    secret = os.environ.get("PILOT_ATTRIBUTION_SECRET", "").strip() or os.environ.get("PILOT_ADMIN_KEY", "").strip()
+    if not secret:
+        raise RuntimeError("SIGNED_ATTRIBUTION_SECRET_MISSING")
+
+    now = datetime.now(timezone.utc)
+    adset = await publisher._call("GET", adset_id, params={"fields": "end_time,status"})
+    if str(adset.get("status", "")).upper() == "ACTIVE":
+        raise RuntimeError("SIGNED_ATTRIBUTION_ADSET_MUST_REMAIN_PAUSED")
+    end_raw = str(adset.get("end_time", "")).strip()
+    if not end_raw:
+        raise RuntimeError("SIGNED_ATTRIBUTION_ADSET_END_TIME_MISSING")
+    end_at = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+    expires_at = min(now + timedelta(days=7), end_at - timedelta(minutes=2))
+    if expires_at - now <= timedelta(hours=1):
+        raise RuntimeError("SIGNED_ATTRIBUTION_WINDOW_TOO_SHORT")
+
+    creative = await publisher._call("GET", creative_id, params={"fields": "id,object_story_spec"})
+    story = creative.get("object_story_spec")
+    if not isinstance(story, dict) or not isinstance(story.get("link_data"), dict):
+        raise RuntimeError("SIGNED_ATTRIBUTION_CREATIVE_LINK_DATA_MISSING")
+    link_data = story["link_data"]
+    destination = str(link_data.get("link", "")).strip()
+    if not destination:
+        raise RuntimeError("SIGNED_ATTRIBUTION_DESTINATION_MISSING")
+
+    existing_ref = parse_qs(urlsplit(destination).query).get("pilot_ref", [None])[0]
+    decoded = decode_ref(existing_ref, secret=secret, at=now) if existing_ref else None
+    if (
+        decoded
+        and decoded.get("channel") == "meta"
+        and decoded.get("campaign") == campaign_id
+        and decoded.get("ad") == ad_id
+        and datetime.fromisoformat(str(decoded.get("expires", "")).replace("Z", "+00:00")) >= expires_at
+    ):
+        return {"status": "ALREADY_ATTACHED", "creative_id": creative_id}
+
+    experiment = hashlib.sha256(f"{campaign_id}:{ad_id}:homestro-purchase".encode()).hexdigest()[:24]
+    ref = tracking_ref(
+        campaign_id,
+        ad_id,
+        experiment,
+        secret=secret,
+        issued_at=now,
+        expires_at=expires_at,
+        channel="meta",
+    )
+    link_data["link"] = tracked_url(destination, ref, secret=secret, at=now)
+
+    publisher.write_attempted = True
+    await publisher._call(
+        "POST",
+        ad_id,
+        data={
+            "creative": json.dumps({"object_story_spec": story}, ensure_ascii=False),
+            "status": "PAUSED",
+        },
+    )
+    ad_readback = await publisher._call(
+        "GET", ad_id, params={"fields": "id,status,effective_status,creative{id}"}
+    )
+    new_creative_id = str((ad_readback.get("creative") or {}).get("id", "")).strip()
+    if (
+        str(ad_readback.get("id", "")) != ad_id
+        or str(ad_readback.get("status", "")).upper() != "PAUSED"
+        or not new_creative_id.isdigit()
+    ):
+        raise RuntimeError("SIGNED_ATTRIBUTION_AD_UPDATE_READBACK_FAILED")
+    creative_readback = await publisher._call(
+        "GET", new_creative_id, params={"fields": "id,object_story_spec"}
+    )
+    readback_story = creative_readback.get("object_story_spec") or {}
+    readback_data = readback_story.get("link_data") or {}
+    readback_url = str(readback_data.get("link", ""))
+    readback_ref = parse_qs(urlsplit(readback_url).query).get("pilot_ref", [None])[0]
+    verified = decode_ref(readback_ref, secret=secret, at=now) if readback_ref else None
+    if (
+        str(creative_readback.get("id", "")) != new_creative_id
+        or not verified
+        or verified.get("campaign") != campaign_id
+        or verified.get("ad") != ad_id
+        or verified.get("channel") != "meta"
+    ):
+        raise RuntimeError("SIGNED_ATTRIBUTION_READBACK_FAILED")
+    return {"status": "ATTACHED", "creative_id": new_creative_id, "expires_at": expires_at.isoformat()}
 
 
 async def autonomous_draft_worker(
@@ -129,6 +226,13 @@ async def autonomous_draft_worker(
             ),
         )
         result = await publisher.deploy_paused_concept(filtered[0], initial_budget_eur=5.0)
+        if result.get("status") in {"CONCEPT_CREATED", "CONCEPT_RECONCILED"}:
+            tracking = await _ensure_signed_tracking(publisher, result)
+            result["creative_id"] = tracking["creative_id"]
+            result["signed_attribution"] = {
+                "status": tracking["status"],
+                "expires_at": tracking.get("expires_at"),
+            }
         result["ownership_binding"] = "NOT_APPLICABLE"
         campaign_id = str(result.get("campaign_id", "")).strip()
         product_id = str(filtered[0].get("id", "")).strip()
