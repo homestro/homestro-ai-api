@@ -85,18 +85,29 @@ class FirstPurchaseStore:
             row = db.execute('SELECT cap_cents FROM pilot_first_purchase_lifetime_cap WHERE adset=?', (adset,)).fetchone()
             return row[0] if row else None
 
-    def authorize(self, campaign, now):
+    def authorize(self, campaign, now, *, catalog_feed_authorized=False):
         terms = {'markets': ['DE', 'AT'], 'daily_eur': '5.00', 'total_eur': '35.00', 'days': 7,
                  'automatic_increase': False, 'starts_at_actual_activation': True,
-                 'new_paid_generation_authorized': False, 'unseen_creatives_authorized': False,
-                 'source': 'explicit_owner_voice_authorization_20261027'}
+                 'new_paid_generation_authorized': bool(catalog_feed_authorized),
+                 'unseen_creatives_authorized': bool(catalog_feed_authorized),
+                 'source': 'explicit_owner_voice_catalog_authorization_20261101' if catalog_feed_authorized else 'explicit_owner_voice_authorization_20261027'}
+        encoded_terms = json.dumps(terms, sort_keys=True)
         with closing(self.audit._connect()) as db, db:
             db.execute('INSERT INTO pilot_first_purchase_consent(singleton,authorization,campaign,terms,state,authorized_at) '
                        'VALUES(1,?,?,?,?,?) ON CONFLICT(singleton) DO NOTHING',
-                       (AUTHORIZATION, campaign, json.dumps(terms, sort_keys=True), 'authorized', now.isoformat()))
+                       (AUTHORIZATION, campaign, encoded_terms, 'authorized', now.isoformat()))
             row = db.execute('SELECT campaign,terms FROM pilot_first_purchase_consent WHERE singleton=1').fetchone()
-            if row != (campaign, json.dumps(terms, sort_keys=True)):
+            if not row or row[0] != campaign:
                 raise ValueError('PERSISTED_CONSENT_SCOPE_MISMATCH')
+            if row[1] != encoded_terms:
+                old = json.loads(row[1])
+                same_caps = (old.get('markets') == ['DE', 'AT'] and old.get('daily_eur') == '5.00'
+                             and old.get('total_eur') == '35.00' and old.get('days') == 7
+                             and old.get('automatic_increase') is False)
+                if not catalog_feed_authorized or not same_caps:
+                    raise ValueError('PERSISTED_CONSENT_SCOPE_MISMATCH')
+                db.execute('UPDATE pilot_first_purchase_consent SET terms=? WHERE singleton=1 AND campaign=?',
+                           (encoded_terms, campaign))
         return self.read()
 
     def read(self):
@@ -184,7 +195,12 @@ class FirstPurchaseController:
                 'owned_campaign_id': campaign or None,
                 'owned_claim_status': (claim or {}).get('status'),
             }
-        consent = self.store.authorize(campaign, now)
+        catalog_feed_authorized = (
+            campaign == '120254564749740274'
+            and scope == campaign
+            and env.get('PILOT_CATALOG_AUTO_REVIEW_AUTHORIZED') == 'true'
+        )
+        consent = self.store.authorize(campaign, now, catalog_feed_authorized=catalog_feed_authorized)
         account, token, pixel, page = (env.get(k, '') for k in ('META_AD_ACCOUNT_ID', 'META_ACCESS_TOKEN', 'META_PIXEL_ID', 'META_PAGE_ID'))
         version = env.get('META_API_VERSION', 'v26.0')
         if not re.fullmatch(r'act_\d{4,30}', account) or not token or not re.fullmatch(r'v\d+\.\d+', version):
@@ -320,29 +336,47 @@ class FirstPurchaseController:
                     return await pause('FROZEN_LIFETIME_TEST_CAP_REACHED', latch=True)
             stage = 'creative'
             ads = (await get(str(adset['id']) + '/ads', 'id,status,effective_status,creative{id},ad_review_feedback')).get('data', [])
-            if len(ads) != 1 or ads[0].get('ad_review_feedback') or ads[0].get('effective_status') not in {'ACTIVE', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'PAUSED'}:
-                snapshot['ad_eligibility_diagnostic'] = {
-                    'ads_count': len(ads),
-                    'ad_status': ads[0].get('status') if len(ads) == 1 else None,
-                    'ad_effective_status': ads[0].get('effective_status') if len(ads) == 1 else None,
-                    'review_feedback_present': bool(ads[0].get('ad_review_feedback')) if len(ads) == 1 else None,
-                }
-                return await pause('EXISTING_SINGLE_ELIGIBLE_REVIEWED_AD_REQUIRED')
-            ad = ads[0]
-            creative_id = str(ad['creative']['id'])
-            if not all(re.fullmatch(r'\d{4,30}', str(value)) for value in (ad['id'], creative_id)):
+            if not isinstance(ads, list) or not ads:
+                return await pause('EXISTING_ADS_NOT_FOUND')
+            catalog_ads = []
+            reviewed_candidates = []
+            for candidate in ads:
+                if candidate.get('ad_review_feedback') or candidate.get('effective_status') not in {'ACTIVE', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'PAUSED'}:
+                    continue
+                candidate_creative_id = str((candidate.get('creative') or {}).get('id', ''))
+                if not re.fullmatch(r'\d{4,30}', str(candidate.get('id'))) or not re.fullmatch(r'\d{4,30}', candidate_creative_id):
+                    continue
+                candidate_creative = await get(candidate_creative_id, 'id,object_story_spec,product_set_id')
+                candidate_story = candidate_creative.get('object_story_spec') or {}
+                if (str(candidate_story.get('page_id')) == page and candidate_creative.get('product_set_id')
+                        and isinstance(candidate_story.get('template_data'), dict)):
+                    catalog_ads.append((candidate, candidate_creative, candidate_story))
+                elif (str(candidate_story.get('page_id')) == page and isinstance(candidate_story.get('link_data'), dict)):
+                    reviewed_candidates.append((candidate, candidate_creative, candidate_story))
+            is_catalog_ad = len(catalog_ads) == 1
+            if is_catalog_ad:
+                ad, creative, story = catalog_ads[0]
+            elif not catalog_ads and len(ads) == 1 and len(reviewed_candidates) == 1:
+                ad, creative, story = reviewed_candidates[0]
+            else:
+                snapshot['ad_eligibility_diagnostic'] = {'ads_count': len(ads), 'catalog_ads_count': len(catalog_ads)}
+                return await pause('EXACT_CATALOG_AD_IDENTITY_REQUIRED')
+            if not all(re.fullmatch(r'\d{4,30}', str(value)) for value in (ad['id'], (ad.get('creative') or {}).get('id'))):
                 return await pause('AD_OR_CREATIVE_ID_NOT_VERIFIED')
-            creative = await get(creative_id, 'id,object_story_spec')
-            story = creative.get('object_story_spec') or {}
-            if str(story.get('page_id')) != page or not isinstance(story.get('link_data'), dict):
-                return await pause('EXISTING_CREATIVE_PAGE_OR_WEBSITE_DESTINATION_UNVERIFIED')
+            creative_id = str((ad.get('creative') or {}).get('id'))
+            if str(story.get('page_id')) != page:
+                return await pause('EXISTING_CREATIVE_PAGE_IDENTITY_UNVERIFIED')
+            if is_catalog_ad and not isinstance(story.get('template_data'), dict):
+                return await pause('CATALOG_CREATIVE_TEMPLATE_UNVERIFIED')
+            if not is_catalog_ad and not isinstance(story.get('link_data'), dict):
+                return await pause('EXISTING_CREATIVE_WEBSITE_DESTINATION_UNVERIFIED')
             revision = hashlib.sha256(json.dumps(story, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-            data = story['link_data']
+            data = story['template_data'] if is_catalog_ad else story['link_data']
             cards = data.get('child_attachments') or [data]
             if not isinstance(cards, list) or not 1 <= len(cards) <= 10:
                 return await pause('CREATIVE_CARD_SCOPE_INVALID')
             snapshot.update(ad_id=str(ad['id']), ad_status=ad.get('status'), ad_effective_status=ad.get('effective_status'), creative_id=creative_id, creative_revision=revision,
-                            creative_preview={'message': data.get('message'), 'cards': [{'title': r.get('name'), 'image': r.get('picture'), 'destination': r.get('link', '').split('?')[0]} for r in cards]})
+                            creative_preview={'message': data.get('message'), 'product_set_id': creative.get('product_set_id'), 'cards': [{'title': r.get('name'), 'image': r.get('picture'), 'destination': r.get('link', '').split('?')[0]} for r in cards]})
             try:
                 from lxml import html
 
@@ -358,6 +392,9 @@ class FirstPurchaseController:
                 if isinstance(exc, httpx.HTTPStatusError):
                     snapshot['preview_read_error']['http_status'] = exc.response.status_code
             review = self.store.reviewed(campaign, str(ad['id']), creative_id, revision)
+            terms = json.loads(consent.get('terms') or '{}')
+            if is_catalog_ad and catalog_feed_authorized and terms.get('unseen_creatives_authorized') is True:
+                review = 'owner_authorized_all_products_catalog_feed'
             snapshot['creative_review_basis'] = review
             from .website_ads import owner_excluded, product_path
 
