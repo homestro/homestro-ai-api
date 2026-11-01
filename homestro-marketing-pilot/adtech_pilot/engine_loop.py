@@ -146,6 +146,10 @@ async def autonomous_draft_worker(
                 "meta_error_message",
                 "meta_error_summary",
                 "meta_fbtrace_id",
+                "meta_target_account_visible",
+                "meta_accessible_ad_account_ids",
+                "meta_account_list_complete",
+                "meta_accessible_accounts_probe",
             ):
                 value = provider_details.get(key)
                 if isinstance(value, str):
