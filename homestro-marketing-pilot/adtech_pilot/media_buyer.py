@@ -1810,14 +1810,15 @@ class MetaSaaSPublisher:
             raise ValueError("CONCEPT_BUDGET_MUST_REMAIN_5_EUR_PER_DAY")
         title = str(product.get("title", "")).strip()
         product_id = str(product.get("id", "")).strip()
-        if product_id.startswith("gid://shopify/Product/"):
-            product_id = product_id.rsplit("/", 1)[-1]
         link = str(product.get("link", "")).strip()
         image = str(product.get("image_link", "")).strip()
         parsed_link, parsed_image = urlsplit(link), urlsplit(image)
         if not title:
             raise ValueError("PRODUCT_TITLE_MISSING")
-        if not re.fullmatch(r"\d{4,30}", product_id):
+        if not product_id or len(product_id) > 128:
+            raise ValueError("SHOPIFY_PRODUCT_ID_INVALID")
+        product_key = re.sub(r"[^A-Za-z0-9_-]+", "-", product_id).strip("-")[:64]
+        if not product_key:
             raise ValueError("SHOPIFY_PRODUCT_ID_INVALID")
         if (
             parsed_link.scheme != "https"
@@ -1832,7 +1833,7 @@ class MetaSaaSPublisher:
         ):
             raise ValueError("PRODUCT_IMAGE_NOT_ALLOWED")
         campaigns, account_cap_cents = await self._check_assets_and_cap()
-        concept_name = f"AUTOPILOT CONCEPT // {product_id} // {title}"[:240]
+        concept_name = f"AUTOPILOT CONCEPT // {product_key} // {title}"[:240]
         for campaign in campaigns:
             if str(campaign.get("name", "")) == concept_name:
                 return {
@@ -1861,7 +1862,7 @@ class MetaSaaSPublisher:
         adset = await self._call(
             "POST", f"{self.account_id}/adsets",
             data={
-                "name": f"Concept // DE-AT // {product_id}",
+                "name": f"Concept // DE-AT // {product_key}",
                 "campaign_id": campaign_id,
                 "daily_budget": str(self.CONCEPT_DAILY_BUDGET_CENTS),
                 "billing_event": "IMPRESSIONS",
@@ -1898,7 +1899,7 @@ class MetaSaaSPublisher:
         creative = await self._call(
             "POST", f"{self.account_id}/adcreatives",
             data={
-                "name": f"Paused concept // {product_id}"[:240],
+                "name": f"Paused concept // {product_key}"[:240],
                 "object_story_spec": json.dumps(story, ensure_ascii=False),
             },
         )
@@ -1908,7 +1909,7 @@ class MetaSaaSPublisher:
         ad = await self._call(
             "POST", f"{self.account_id}/ads",
             data={
-                "name": f"Paused concept ad // {product_id}"[:240],
+                "name": f"Paused concept ad // {product_key}"[:240],
                 "adset_id": adset_id,
                 "creative": json.dumps({"creative_id": creative_id}),
                 "status": "PAUSED",
