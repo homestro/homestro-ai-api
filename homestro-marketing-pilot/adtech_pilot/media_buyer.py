@@ -1793,7 +1793,7 @@ class MetaSaaSPublisher:
                         pages_response = await client.get(
                             f"{self.API_ROOT}/{self.api_version}/me/accounts",
                             headers={"Authorization": f"Bearer {self.token}"},
-                            params={"fields": "id,tasks", "limit": "100"},
+                            params={"fields": "id,name,tasks", "limit": "100"},
                         )
                         pages_payload = pages_response.json()
                         rows = pages_payload.get("data") if isinstance(pages_payload, dict) else None
@@ -1808,6 +1808,14 @@ class MetaSaaSPublisher:
                             )
                             safe_details["meta_accessible_page_ids"] = ",".join(
                                 page_ids[:50]
+                            )[:1000]
+                            page_names = [
+                                f"{row.get('id', '')}:{row.get('name', '')}"
+                                for row in rows
+                                if isinstance(row, dict)
+                            ]
+                            safe_details["meta_accessible_pages"] = " | ".join(
+                                page_names[:20]
                             )[:1000]
                             paging = pages_payload.get("paging", {})
                             safe_details["meta_page_list_complete"] = (
