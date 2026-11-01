@@ -1219,14 +1219,30 @@ class MetaPublisher:
         except asyncio.CancelledError:
             raise
         except httpx.HTTPStatusError as exc:
-            return {
+            response = exc.response
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            error = body.get("error", {}) if isinstance(body, dict) else {}
+            if not isinstance(error, dict):
+                error = {}
+            result = {
                 "status": "blocked",
                 "reason": "META_CATALOG_UPDATE_FAILED",
                 "campaign_id": campaign_id,
-                "http_status": exc.response.status_code,
+                "stage": stage,
+                "http_status": response.status_code,
                 "writes_performed": writes_performed,
                 "activation_performed": False,
             }
+            if isinstance(error.get("code"), int):
+                result["meta_error_code"] = error["code"]
+            if isinstance(error.get("error_subcode"), int):
+                result["meta_error_subcode"] = error["error_subcode"]
+            if isinstance(error.get("type"), str):
+                result["meta_error_type"] = error["type"][:80]
+            return result
         except Exception as exc:
             return {
                 "status": "blocked",
