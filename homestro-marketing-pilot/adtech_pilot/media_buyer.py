@@ -2007,13 +2007,89 @@ class MetaSaaSPublisher:
         ):
             raise RuntimeError("META_EXISTING_ADSETS_UNVERIFIED")
         if existing_rows:
+            matching_adsets = [
+                row for row in existing_rows
+                if isinstance(row, dict) and str(row.get("name", "")) == adset_name
+            ]
+            if len(matching_adsets) != 1:
+                return {
+                    "status": "BLOCKED",
+                    "reason": "EXISTING_ADSET_SCOPE_AMBIGUOUS",
+                    "campaign_id": campaign_id,
+                    "writes_performed": True,
+                }
+            existing_adset_id = str(matching_adsets[0].get("id", ""))
+            existing_ads = await self._call(
+                "GET", f"{existing_adset_id}/ads",
+                params={"fields": "id,status,creative", "limit": "100"},
+            )
+            existing_ad_rows = existing_ads.get("data")
+            if not isinstance(existing_ad_rows, list) or (
+                isinstance(existing_ads.get("paging"), dict)
+                and existing_ads["paging"].get("next")
+            ) or len(existing_ad_rows) != 1:
+                return {
+                    "status": "BLOCKED",
+                    "reason": "EXISTING_AD_SCOPE_UNVERIFIED",
+                    "campaign_id": campaign_id,
+                    "adset_id": existing_adset_id,
+                    "writes_performed": True,
+                }
+            existing_ad = existing_ad_rows[0]
+            existing_ad_id = str(existing_ad.get("id", ""))
+            existing_creative = existing_ad.get("creative")
+            existing_creative_id = (
+                str(existing_creative.get("id", ""))
+                if isinstance(existing_creative, dict) else ""
+            )
+            final_campaign = await self._call(
+                "GET", campaign_id, params={"fields": "id,status,effective_status"}
+            )
+            final_adset = await self._call(
+                "GET", existing_adset_id, params={"fields": "id,status,effective_status"}
+            )
+            final_ad = await self._call(
+                "GET", existing_ad_id, params={"fields": "id,status,effective_status"}
+            )
+            configured_statuses = [
+                str(final_campaign.get("status", "")).upper(),
+                str(final_adset.get("status", "")).upper(),
+                str(final_ad.get("status", "")).upper(),
+            ]
+            effective_statuses = [
+                str(final_campaign.get("effective_status", "")).upper(),
+                str(final_adset.get("effective_status", "")).upper(),
+                str(final_ad.get("effective_status", "")).upper(),
+            ]
+            if any(status != "PAUSED" for status in configured_statuses):
+                return {
+                    "status": "BLOCKED",
+                    "reason": "META_CONFIGURED_STATUS_NOT_PAUSED",
+                    "campaign_id": campaign_id,
+                    "adset_id": existing_adset_id,
+                    "creative_id": existing_creative_id,
+                    "ad_id": existing_ad_id,
+                    "configured_statuses": configured_statuses,
+                    "effective_statuses": effective_statuses,
+                    "writes_performed": True,
+                }
             return {
-                "status": "SKIPPED_DUPLICATE",
+                "status": "CONCEPT_RECONCILED",
                 "campaign_id": campaign_id,
-                "campaign_name": concept_name,
-                "campaign_status": "PAUSED",
-                "existing_adset_id": str(existing_rows[0].get("id", "")),
-                "reason": "EXISTING_PAUSED_ADSET_REQUIRES_REVIEW",
+                "adset_id": existing_adset_id,
+                "creative_id": existing_creative_id,
+                "ad_id": existing_ad_id,
+                "campaign_status": configured_statuses[0],
+                "adset_status": configured_statuses[1],
+                "ad_status": configured_statuses[2],
+                "effective_statuses": effective_statuses,
+                "daily_budget_eur": "5.00",
+                "account_spend_cap_cents": account_cap_cents,
+                "product_id": product_id,
+                "product_title": title,
+                "creative_card_count": 1,
+                "reconciled_existing_objects": True,
+                "writes_performed": True,
             }
 
         self.write_attempted = True
