@@ -18,7 +18,7 @@ from .feed_manager import ProductFeedManager
 from .first_purchase import AutopilotFeedController
 from .media_buyer import MetaSaaSPublisher
 
-log = logging.getLogger("adtech_pilot.paused_concept")
+log = logging.getLogger("uvicorn.error")
 
 
 def _feed_url_allowed(value: str) -> bool:
