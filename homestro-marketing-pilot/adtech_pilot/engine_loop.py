@@ -120,13 +120,23 @@ async def autonomous_draft_worker(
         raise
     except Exception as exc:
         # Do not log provider bodies, URLs with queries, request headers, or tokens.
-        code = str(exc).split(":", 1)[0][:80]
+        parts = str(exc).split(":")
+        code = parts[0][:80]
         payload = {
             "status": "BLOCKED",
             "reason": code,
             "error_type": type(exc).__name__,
             "writes_performed": "unknown" if publisher is not None and publisher.write_attempted else False,
         }
+        if code == "META_API_ERROR" and len(parts) >= 5:
+            for key, raw in (
+                ("meta_http_status", parts[1]),
+                ("meta_error_code", parts[2]),
+                ("meta_error_subcode", parts[3]),
+            ):
+                if raw.isdigit():
+                    payload[key] = int(raw)
+            payload["meta_stage"] = parts[4][:40]
         try:
             await audit.record("meta_paused_concept", payload)
         except Exception:
