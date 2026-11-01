@@ -1815,16 +1815,22 @@ class MetaSaaSPublisher:
         link = str(product.get("link", "")).strip()
         image = str(product.get("image_link", "")).strip()
         parsed_link, parsed_image = urlsplit(link), urlsplit(image)
+        if not title:
+            raise ValueError("PRODUCT_TITLE_MISSING")
+        if not re.fullmatch(r"\d{4,30}", product_id):
+            raise ValueError("SHOPIFY_PRODUCT_ID_INVALID")
         if (
-            not title or not re.fullmatch(r"\d{4,30}", product_id)
-            or parsed_link.scheme != "https"
+            parsed_link.scheme != "https"
             or parsed_link.hostname not in {"homestro.de", "www.homestro.de"}
             or parsed_link.username or parsed_link.password
-            or parsed_image.scheme != "https"
-            or parsed_image.hostname not in {"cdn.shopify.com", "homestro.de", "www.homestro.de"}
+        ):
+            raise ValueError("PRODUCT_LINK_NOT_ALLOWED")
+        if (
+            parsed_image.scheme != "https"
+            or not parsed_image.hostname
             or parsed_image.username or parsed_image.password
         ):
-            raise ValueError("PRODUCT_SOURCE_NOT_ALLOWED")
+            raise ValueError("PRODUCT_IMAGE_NOT_ALLOWED")
         campaigns, account_cap_cents = await self._check_assets_and_cap()
         concept_name = f"AUTOPILOT CONCEPT // {product_id} // {title}"[:240]
         for campaign in campaigns:
