@@ -833,7 +833,9 @@ class MetaPublisher:
             if own_client:
                 await client.aclose()
 
-    async def check_catalog_access(\n        self, *, expected_product_count: int | None = None\n    ) -> dict[str, Any]:
+    async def check_catalog_access(
+        self, *, expected_product_count: int | None = None
+    ) -> dict[str, Any]:
         """Read catalog and whole-catalog product-set access; never writes Meta objects."""
         token = self.env.get("META_ACCESS_TOKEN", "").strip()
         catalog_id = self.env.get("META_PRODUCT_CATALOG_ID", "").strip()
