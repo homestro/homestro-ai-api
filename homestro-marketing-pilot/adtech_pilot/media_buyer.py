@@ -1788,6 +1788,41 @@ class MetaSaaSPublisher:
                         safe_details["meta_accessible_accounts_probe"] = (
                             f"failed_{type(probe_exc).__name__}"
                         )
+                elif stage == "page_read":
+                    try:
+                        pages_response = await client.get(
+                            f"{self.API_ROOT}/{self.api_version}/me/accounts",
+                            headers={"Authorization": f"Bearer {self.token}"},
+                            params={"fields": "id,tasks", "limit": "100"},
+                        )
+                        pages_payload = pages_response.json()
+                        rows = pages_payload.get("data") if isinstance(pages_payload, dict) else None
+                        if pages_response.status_code < 400 and isinstance(rows, list):
+                            page_ids = [
+                                str(row.get("id", ""))
+                                for row in rows
+                                if isinstance(row, dict)
+                            ]
+                            safe_details["meta_target_page_visible"] = (
+                                "true" if self.page_id in page_ids else "false"
+                            )
+                            safe_details["meta_accessible_page_ids"] = ",".join(
+                                page_ids[:50]
+                            )[:1000]
+                            paging = pages_payload.get("paging", {})
+                            safe_details["meta_page_list_complete"] = (
+                                "false"
+                                if isinstance(paging, dict) and paging.get("next")
+                                else "true"
+                            )
+                        else:
+                            safe_details["meta_accessible_pages_probe"] = (
+                                f"failed_http_{pages_response.status_code}"
+                            )
+                    except Exception as probe_exc:
+                        safe_details["meta_accessible_pages_probe"] = (
+                            f"failed_{type(probe_exc).__name__}"
+                        )
                 raise MetaGraphAPIError(
                     response.status_code,
                     code if isinstance(code, int) else None,
