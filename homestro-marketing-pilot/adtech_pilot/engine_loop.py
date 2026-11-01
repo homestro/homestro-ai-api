@@ -27,7 +27,10 @@ def _feed_url_allowed(value: str) -> bool:
         host = (parsed.hostname or "").lower()
         return (
             parsed.scheme == "https"
-            and host in {"homestro.de", "www.homestro.de"}
+            and (
+                host in {"homestro.de", "www.homestro.de"}
+                or host.endswith(".myshopify.com")
+            )
             and parsed.username is None
             and parsed.password is None
             and parsed.port in (None, 443)
@@ -70,6 +73,7 @@ async def autonomous_draft_worker(
     if not _feed_url_allowed(required["HOMESTRO_PRODUCT_FEED_URL"]):
         log.warning("meta_paused_concept %s", json.dumps({
             "status": "BLOCKED", "reason": "FEED_URL_NOT_ALLOWED",
+            "feed_host": (urlsplit(required["HOMESTRO_PRODUCT_FEED_URL"]).hostname or "")[:120],
             "writes_performed": False,
         }))
         return
