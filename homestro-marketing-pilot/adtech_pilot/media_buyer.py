@@ -1976,6 +1976,7 @@ class MetaSaaSPublisher:
                 "objective": "OUTCOME_SALES",
                 "status": "PAUSED",
                 "special_ad_categories": "[]",
+                "is_adset_budget_sharing_enabled": "false",
             },
         )
         campaign_id = str(campaign.get("id", ""))
