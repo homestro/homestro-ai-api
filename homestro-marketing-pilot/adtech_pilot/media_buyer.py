@@ -9,7 +9,7 @@ import os
 import re
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -1653,3 +1653,328 @@ async def autopilot_loop(
             await asyncio.wait_for(stop.wait(), timeout=interval_hours * 3600)
         except TimeoutError:
             continue
+
+
+class MetaSaaSPublisher:
+    """Create one idempotent, PAUSED preview concept; this class never activates ads."""
+
+    API_ROOT = "https://graph.facebook.com"
+    EXPECTED_ACCOUNT_ID = "322742110630620"
+    EXPECTED_PIXEL_ID = "774286518060183"
+    PORTFOLIO_DAILY_CAP_CENTS = 50_000
+    ACCOUNT_SPEND_CAP_CENTS = 3_500
+    CONCEPT_DAILY_BUDGET_CENTS = 500
+
+    def __init__(
+        self,
+        token: str,
+        account_id: str,
+        pixel_id: str,
+        page_id: str,
+        api_version: str = "v26.0",
+        *,
+        client: httpx.AsyncClient | None = None,
+    ):
+        account_number = str(account_id).removeprefix("act_")
+        if account_number != self.EXPECTED_ACCOUNT_ID:
+            raise ValueError("META_ACCOUNT_NOT_OWNER_APPROVED_A1")
+        if str(pixel_id) != self.EXPECTED_PIXEL_ID:
+            raise ValueError("META_PIXEL_NOT_MATCHED_TO_SHOPIFY")
+        if not re.fullmatch(r"\d{4,30}", str(page_id)):
+            raise ValueError("META_PAGE_ID_INVALID")
+        if not re.fullmatch(r"v\d+\.\d+", api_version):
+            raise ValueError("META_API_VERSION_INVALID")
+        if not token:
+            raise ValueError("META_ACCESS_TOKEN_MISSING")
+        self.account_id = f"act_{account_number}"
+        self.pixel_id = str(pixel_id)
+        self.page_id = str(page_id)
+        self.api_version = api_version
+        self.token = token
+        self.client = client
+
+    async def _call(self, method: str, path: str, *, params=None, data=None) -> dict[str, Any]:
+        own_client = self.client is None
+        client = self.client or httpx.AsyncClient(
+            timeout=httpx.Timeout(35, connect=8), follow_redirects=False
+        )
+        try:
+            response = await client.request(
+                method,
+                f"{self.API_ROOT}/{self.api_version}/{path.lstrip('/')}",
+                headers={"Authorization": f"Bearer {self.token}"},
+                params=params,
+                data=data,
+            )
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            if response.status_code >= 400 or not isinstance(payload, dict) or "error" in payload:
+                error = payload.get("error", {}) if isinstance(payload, dict) else {}
+                code = error.get("code") if isinstance(error, dict) else None
+                subcode = error.get("error_subcode") if isinstance(error, dict) else None
+                raise RuntimeError(
+                    f"META_API_ERROR:{response.status_code}:"
+                    f"{code if isinstance(code, int) else 'unknown'}:"
+                    f"{subcode if isinstance(subcode, int) else 'unknown'}"
+                )
+            return payload
+        finally:
+            if own_client:
+                await client.aclose()
+
+    async def _all_pages(self, path: str, fields: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        after: str | None = None
+        for _ in range(50):
+            params: dict[str, str] = {"fields": fields, "limit": "100"}
+            if after:
+                params["after"] = after
+            payload = await self._call("GET", path, params=params)
+            data = payload.get("data")
+            if not isinstance(data, list) or any(not isinstance(x, dict) for x in data):
+                raise RuntimeError("META_API_LIST_INVALID")
+            rows.extend(data)
+            paging = payload.get("paging") or {}
+            if not isinstance(paging, dict) or not paging.get("next"):
+                return rows
+            cursors = paging.get("cursors") or {}
+            after = cursors.get("after") if isinstance(cursors, dict) else None
+            if not isinstance(after, str) or not after:
+                raise RuntimeError("META_API_PAGINATION_INCOMPLETE")
+        raise RuntimeError("META_API_PAGE_LIMIT_EXCEEDED")
+
+    async def _check_assets_and_cap(self) -> tuple[list[dict[str, Any]], int]:
+        account = await self._call(
+            "GET", self.account_id,
+            params={"fields": "id,currency,spend_cap"},
+        )
+        if str(account.get("id", "")).removeprefix("act_") != self.EXPECTED_ACCOUNT_ID:
+            raise RuntimeError("META_ACCOUNT_ID_READBACK_MISMATCH")
+        if str(account.get("currency", "")).upper() != "EUR":
+            raise RuntimeError("META_ACCOUNT_CURRENCY_NOT_EUR")
+        try:
+            spend_cap_cents = int(str(account.get("spend_cap", "")))
+        except (TypeError, ValueError):
+            raise RuntimeError("META_ACCOUNT_SPEND_CAP_UNVERIFIED")
+        if spend_cap_cents <= 0 or spend_cap_cents > self.ACCOUNT_SPEND_CAP_CENTS:
+            raise RuntimeError("META_ACCOUNT_SPEND_CAP_OUTSIDE_35_EUR")
+
+        accessible_pixels = await self._all_pages(
+            f"{self.account_id}/adspixels", "id"
+        )
+        if self.pixel_id not in {str(row.get("id", "")) for row in accessible_pixels}:
+            raise RuntimeError("META_PIXEL_NOT_ACCESSIBLE_TO_A1")
+        page = await self._call("GET", self.page_id, params={"fields": "id"})
+        if str(page.get("id", "")) != self.page_id:
+            raise RuntimeError("META_PAGE_ID_READBACK_MISMATCH")
+
+        campaigns = await self._all_pages(
+            f"{self.account_id}/campaigns",
+            "id,name,status,effective_status,daily_budget,lifetime_budget,adsets{daily_budget,status,effective_status}",
+        )
+        active_daily_cents = 0
+        for campaign in campaigns:
+            state = str(campaign.get("effective_status") or campaign.get("status") or "").upper()
+            if state != "ACTIVE":
+                continue
+            if campaign.get("lifetime_budget") not in (None, "", "0", 0):
+                raise RuntimeError("ACTIVE_LIFETIME_BUDGET_REQUIRES_REVIEW")
+            if campaign.get("daily_budget") not in (None, "", "0", 0):
+                active_daily_cents += int(str(campaign["daily_budget"]))
+                continue
+            adsets = campaign.get("adsets") or {}
+            adset_rows = adsets.get("data") if isinstance(adsets, dict) else None
+            if not isinstance(adset_rows, list):
+                raise RuntimeError("META_ACTIVE_ADSETS_UNREADABLE")
+            if isinstance(adsets.get("paging"), dict) and adsets["paging"].get("next"):
+                raise RuntimeError("META_ACTIVE_ADSETS_INCOMPLETE")
+            for adset in adset_rows:
+                if not isinstance(adset, dict):
+                    raise RuntimeError("META_ACTIVE_ADSET_INVALID")
+                adset_state = str(
+                    adset.get("effective_status") or adset.get("status") or ""
+                ).upper()
+                if adset_state == "ACTIVE":
+                    active_daily_cents += int(str(adset.get("daily_budget") or 0))
+        if active_daily_cents + self.CONCEPT_DAILY_BUDGET_CENTS > self.PORTFOLIO_DAILY_CAP_CENTS:
+            raise RuntimeError("PORTFOLIO_DAILY_CAP_500_EUR_EXCEEDED")
+        return campaigns, spend_cap_cents
+
+    async def deploy_paused_concept(
+        self, product: dict[str, Any], initial_budget_eur: float = 5.0
+    ) -> dict[str, Any]:
+        if round(float(initial_budget_eur) * 100) != self.CONCEPT_DAILY_BUDGET_CENTS:
+            raise ValueError("CONCEPT_BUDGET_MUST_REMAIN_5_EUR_PER_DAY")
+        title = str(product.get("title", "")).strip()
+        product_id = str(product.get("id", "")).strip()
+        link = str(product.get("link", "")).strip()
+        image = str(product.get("image_link", "")).strip()
+        parsed_link, parsed_image = urlsplit(link), urlsplit(image)
+        if (
+            not title or not re.fullmatch(r"\d{4,30}", product_id)
+            or parsed_link.scheme != "https"
+            or parsed_link.hostname not in {"homestro.de", "www.homestro.de"}
+            or parsed_link.username or parsed_link.password
+            or parsed_image.scheme != "https"
+            or parsed_image.hostname not in {"cdn.shopify.com", "homestro.de", "www.homestro.de"}
+            or parsed_image.username or parsed_image.password
+        ):
+            raise ValueError("PRODUCT_SOURCE_NOT_ALLOWED")
+        campaigns, account_cap_cents = await self._check_assets_and_cap()
+        concept_name = f"AUTOPILOT CONCEPT // {product_id} // {title}"[:240]
+        for campaign in campaigns:
+            if str(campaign.get("name", "")) == concept_name:
+                return {
+                    "status": "SKIPPED_DUPLICATE",
+                    "campaign_id": str(campaign.get("id", "")),
+                    "campaign_name": concept_name,
+                    "campaign_status": str(campaign.get("effective_status") or campaign.get("status") or ""),
+                }
+
+        now = datetime.now(timezone.utc)
+        starts = (now + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        ends = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        campaign = await self._call(
+            "POST", f"{self.account_id}/campaigns",
+            data={
+                "name": concept_name,
+                "objective": "OUTCOME_SALES",
+                "status": "PAUSED",
+                "special_ad_categories": "[]",
+            },
+        )
+        campaign_id = str(campaign.get("id", ""))
+        if not re.fullmatch(r"\d{4,30}", campaign_id):
+            raise RuntimeError("META_CAMPAIGN_ID_MISSING")
+        adset = await self._call(
+            "POST", f"{self.account_id}/adsets",
+            data={
+                "name": f"Concept // DE-AT // {product_id}",
+                "campaign_id": campaign_id,
+                "daily_budget": str(self.CONCEPT_DAILY_BUDGET_CENTS),
+                "billing_event": "IMPRESSIONS",
+                "optimization_goal": "OFFSITE_CONVERSIONS",
+                "destination_type": "WEBSITE",
+                "start_time": starts,
+                "end_time": ends,
+                "promoted_object": json.dumps({
+                    "pixel_id": self.pixel_id,
+                    "custom_event_type": "PURCHASE",
+                }),
+                "targeting": json.dumps({
+                    "geo_locations": {"countries": ["DE", "AT"]},
+                    "age_min": 18,
+                    "publisher_platforms": ["facebook", "instagram"],
+                }),
+                "status": "PAUSED",
+            },
+        )
+        adset_id = str(adset.get("id", ""))
+        if not re.fullmatch(r"\d{4,30}", adset_id):
+            raise RuntimeError("META_ADSET_ID_MISSING")
+        story = {
+            "page_id": self.page_id,
+            "link_data": {
+                "link": link,
+                "picture": image,
+                "name": title[:40],
+                "message": f"{title}. Details, Varianten und aktuelle Preise findest du bei Homestro.",
+                "description": str(product.get("description", ""))[:300],
+                "call_to_action": {"type": "SHOP_NOW", "value": {"link": link}},
+            },
+        }
+        creative = await self._call(
+            "POST", f"{self.account_id}/adcreatives",
+            data={
+                "name": f"Paused concept // {product_id}"[:240],
+                "object_story_spec": json.dumps(story, ensure_ascii=False),
+            },
+        )
+        creative_id = str(creative.get("id", ""))
+        if not re.fullmatch(r"\d{4,30}", creative_id):
+            raise RuntimeError("META_CREATIVE_ID_MISSING")
+        ad = await self._call(
+            "POST", f"{self.account_id}/ads",
+            data={
+                "name": f"Paused concept ad // {product_id}"[:240],
+                "adset_id": adset_id,
+                "creative": json.dumps({"creative_id": creative_id}),
+                "status": "PAUSED",
+            },
+        )
+        ad_id = str(ad.get("id", ""))
+        if not re.fullmatch(r"\d{4,30}", ad_id):
+            raise RuntimeError("META_AD_ID_MISSING")
+
+        final_campaign = await self._call(
+            "GET", campaign_id, params={"fields": "id,status,effective_status"}
+        )
+        final_adset = await self._call(
+            "GET", adset_id, params={"fields": "id,status,effective_status"}
+        )
+        final_ad = await self._call(
+            "GET", ad_id, params={"fields": "id,status,effective_status"}
+        )
+        statuses = [
+            str(final_campaign.get("effective_status") or final_campaign.get("status") or "").upper(),
+            str(final_adset.get("effective_status") or final_adset.get("status") or "").upper(),
+            str(final_ad.get("effective_status") or final_ad.get("status") or "").upper(),
+        ]
+        if any(status not in {"PAUSED", "CAMPAIGN_PAUSED", "ADSET_PAUSED"} for status in statuses):
+            raise RuntimeError("META_PAUSED_STATUS_READBACK_FAILED")
+
+        preview_url = None
+        preview_status = "UNAVAILABLE"
+        try:
+            preview = await self._call(
+                "GET", f"{ad_id}/previews",
+                params={"ad_format": "DESKTOP_FEED_STANDARD"},
+            )
+            preview_rows = preview.get("data")
+            html = (
+                str(preview_rows[0].get("body", ""))
+                if isinstance(preview_rows, list) and preview_rows
+                and isinstance(preview_rows[0], dict)
+                else ""
+            )
+            match = re.search(r"<iframe[^>]+src=[\"']([^\"']+)", html, re.IGNORECASE)
+            candidate = __import__("html").unescape(match.group(1)) if match else ""
+            preview_parts = urlsplit(candidate)
+            if (
+                preview_parts.scheme == "https"
+                and preview_parts.hostname in {"facebook.com", "www.facebook.com"}
+                and preview_parts.path.startswith("/ads/api/preview_iframe.php")
+                and "access_token" not in preview_parts.query.lower()
+            ):
+                preview_url = candidate
+                preview_status = "READY"
+        except Exception:
+            preview_status = "UNAVAILABLE"
+
+        ads_manager_url = (
+            "https://www.facebook.com/adsmanager/manage/ads"
+            f"?act={self.EXPECTED_ACCOUNT_ID}&selected_ad_ids={ad_id}"
+        )
+        return {
+            "status": "CONCEPT_CREATED",
+            "campaign_id": campaign_id,
+            "adset_id": adset_id,
+            "creative_id": creative_id,
+            "ad_id": ad_id,
+            "campaign_status": statuses[0],
+            "adset_status": statuses[1],
+            "ad_status": statuses[2],
+            "daily_budget_eur": "5.00",
+            "account_spend_cap_cents": account_cap_cents,
+            "window_start_utc": starts,
+            "window_end_utc": ends,
+            "product_id": product_id,
+            "product_title": title,
+            "creative_card_count": 1,
+            "owner_preview_authorization_required": True,
+            "preview_url": preview_url,
+            "preview_status": preview_status,
+            "ads_manager_url": ads_manager_url,
+        }

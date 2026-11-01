@@ -13,6 +13,7 @@ import re
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 from urllib.parse import parse_qs, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -549,3 +550,48 @@ class FirstPurchaseController:
             if not checkout_ok:
                 blockers.append(checkout_failure)
         return sorted(set(blockers))
+
+
+class AutopilotFeedController:
+    """Filter existing Shopify feed records for a single paused preview concept."""
+
+    BANNED_PRODUCT_IDS = {"16025694273918"}
+    MIN_PRICE_EUR = Decimal("15.00")
+
+    def process_and_filter_feed(self, raw_products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        from urllib.parse import urlsplit
+        from .feed_manager import FeedProduct
+        from .website_ads import owner_excluded, product_path
+
+        valid: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        seen_paths: set[str] = set()
+        for raw in raw_products:
+            if not isinstance(raw, dict):
+                continue
+            product_id = str(raw.get("id", "")).strip()
+            title = str(raw.get("title", "")).strip()
+            if not product_id or product_id in self.BANNED_PRODUCT_IDS:
+                continue
+            if any(term in title.casefold() for term in ("fellpflegebürste", "fellpflege bürste", "pet grooming brush")):
+                continue
+            if owner_excluded(raw):
+                continue
+            try:
+                product = FeedProduct.model_validate(raw)
+            except Exception:
+                continue
+            if product.currency != "EUR" or product.availability != "in_stock":
+                continue
+            if product.price < self.MIN_PRICE_EUR or not product.image_link:
+                continue
+            image_host = urlsplit(product.image_link).hostname
+            if image_host not in {"cdn.shopify.com", "homestro.de", "www.homestro.de"}:
+                continue
+            path = product_path(product.link)
+            if product.id in seen_ids or path in seen_paths:
+                continue
+            seen_ids.add(product.id)
+            seen_paths.add(path)
+            valid.append(product.model_dump(mode="json"))
+        return valid
