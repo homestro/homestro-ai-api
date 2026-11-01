@@ -62,8 +62,6 @@ async def autonomous_draft_worker(
     env = os.environ
     required = {
         "META_ACCESS_TOKEN": env.get("META_ACCESS_TOKEN", "").strip(),
-        "META_AD_ACCOUNT_ID": env.get("META_AD_ACCOUNT_ID", "").strip(),
-        "META_PIXEL_ID": env.get("META_PIXEL_ID", "").strip(),
         "META_PAGE_ID": env.get("META_PAGE_ID", "").strip(),
         "HOMESTRO_PRODUCT_FEED_URL": env.get("HOMESTRO_PRODUCT_FEED_URL", "").strip(),
     }
@@ -103,8 +101,8 @@ async def autonomous_draft_worker(
             return
         publisher = MetaSaaSPublisher(
             required["META_ACCESS_TOKEN"],
-            required["META_AD_ACCOUNT_ID"],
-            required["META_PIXEL_ID"],
+            MetaSaaSPublisher.EXPECTED_ACCOUNT_ID,
+            MetaSaaSPublisher.EXPECTED_PIXEL_ID,
             required["META_PAGE_ID"],
             api_version=(
                 env.get("META_API_VERSION", "").strip()
