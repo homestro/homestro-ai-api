@@ -1,8 +1,4 @@
-"""One-shot, fail-closed Meta concept creation for the existing FastAPI service.
-
-Creates exactly one paused concept from a validated Shopify feed. It never activates
-campaigns, generates media, or changes the ad account's spend cap.
-"""
+"""Periodic, fail-closed synchronization of the owned Meta campaign to the Shopify catalog."""
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 
 from .feed_manager import ProductFeedManager
-from .first_purchase import AutopilotFeedController
+from .first_purchase import FirstPurchaseStore
 from .media_buyer import MetaPublisher, MetaSaaSPublisher
 from .order_economics import decode_ref, tracked_url, tracking_ref
 
@@ -203,6 +199,31 @@ async def autonomous_draft_worker(
                 result["feed_records_read"] = feed_record_count
                 if result.get("status") in {"catalog_updated_paused", "catalog_verified"}:
                     retry_seconds = 86400
+                elif str(result.get("campaign_id", "")).isdigit():
+                    try:
+                        backoff = FirstPurchaseStore(audit).provider_backoff(
+                            str(result["campaign_id"]), datetime.now(timezone.utc)
+                        )
+                        if backoff:
+                            retry_at = datetime.fromisoformat(
+                                str(backoff["retry_after"]).replace("Z", "+00:00")
+                            )
+                            now_utc = datetime.now(timezone.utc)
+                            # Give Meta one minute beyond its stored cooldown before retrying.
+                            retry_seconds = max(
+                                1, int((retry_at - now_utc).total_seconds()) + 60
+                            )
+                            result["provider_retry_after"] = retry_at.isoformat()
+                            result["retry_source"] = "persisted_meta_rate_limit_backoff"
+                            result["next_retry_at"] = (
+                                now_utc + timedelta(seconds=retry_seconds)
+                            ).isoformat()
+                    except Exception:
+                        pass
+                result["active_confirmed"] = (
+                    result.get("campaign_status") == "ACTIVE"
+                    and result.get("activation_performed") is True
+                )
                 result["ownership_binding"] = (
                     "EXACT_EXISTING_CAMPAIGN" if result.get("campaign_id")
                     == required["PILOT_FIRST_PURCHASE_CAMPAIGN_ID"] else "NOT_CONFIRMED"
