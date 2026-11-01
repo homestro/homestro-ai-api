@@ -1092,6 +1092,35 @@ class MetaPublisher:
                 return {"status": "blocked", "reason": "EXISTING_ADSET_LIMITS_NOT_VERIFIED",
                         "campaign_id": campaign_id, "adset_id": adset_id or None}
 
+            if targeting.get("publisher_platforms") != ["facebook"]:
+                facebook_targeting = dict(targeting)
+                facebook_targeting["publisher_platforms"] = ["facebook"]
+                facebook_targeting.pop("instagram_positions", None)
+                facebook_targeting.pop("messenger_positions", None)
+                facebook_targeting.pop("audience_network_positions", None)
+                stage = "facebook_only_placement_update"
+                placement_response = await client.post(
+                    f"{self.ENDPOINT}/{version}/{adset_id}",
+                    headers=headers,
+                    data={"targeting": json.dumps(facebook_targeting), "status": "PAUSED"},
+                )
+                self._json_response(placement_response, require_object_id=False)
+                stage = "facebook_only_placement_readback"
+                adset_readback = await self._get(
+                    client, adset_id, headers,
+                    {"fields": "id,status,daily_budget,targeting"},
+                )
+                readback_targeting = adset_readback.get("targeting") or {}
+                if (
+                    str(adset_readback.get("id", "")) != adset_id
+                    or str(adset_readback.get("status", "")).upper() != "PAUSED"
+                    or str(adset_readback.get("daily_budget", "")) != "500"
+                    or readback_targeting.get("publisher_platforms") != ["facebook"]
+                ):
+                    return {"status": "write_unconfirmed", "reason": "FACEBOOK_ONLY_PLACEMENTS_NOT_CONFIRMED",
+                            "campaign_id": campaign_id, "adset_id": adset_id,
+                            "writes_performed": True, "activation_performed": False}
+                targeting = readback_targeting
             stage = "ads_read"
             ads_result = await self._get(
                 client, f"{adset_id}/ads", headers,
