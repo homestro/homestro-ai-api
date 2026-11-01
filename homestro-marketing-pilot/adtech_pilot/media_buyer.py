@@ -1117,6 +1117,7 @@ class MetaPublisher:
                 return {"status": "blocked", "reason": "EXISTING_PAUSED_AD_READBACK_FAILED",
                         "campaign_id": campaign_id, "adset_id": adset_id}
 
+            stage = "previous_creative_read"
             previous = await self._get(
                 client, old_creative_id, headers,
                 {"fields": "id,product_set_id,object_story_spec"},
@@ -1143,6 +1144,7 @@ class MetaPublisher:
                     "activation_performed": False,
                 }
 
+            stage = "catalog_creative_create"
             creative_id = await self._post(
                 client, f"{account_id}/adcreatives", headers,
                 {
@@ -1161,6 +1163,7 @@ class MetaPublisher:
                 },
             )
             writes_performed = True
+            stage = "ad_creative_update"
             updated = await client.post(
                 f"{self.ENDPOINT}/{version}/{ad_id}",
                 headers=headers,
@@ -1170,10 +1173,12 @@ class MetaPublisher:
                 },
             )
             self._json_response(updated, require_object_id=False)
+            stage = "ad_readback"
             ad_readback = await self._get(
                 client, ad_id, headers, {"fields": "id,campaign_id,adset_id,status,creative"},
             )
             actual_creative_id = str((ad_readback.get("creative") or {}).get("id", ""))
+            stage = "creative_readback"
             creative_readback = await self._get(
                 client, actual_creative_id, headers,
                 {"fields": "id,product_set_id,object_story_spec"},
@@ -1242,6 +1247,8 @@ class MetaPublisher:
                 result["meta_error_subcode"] = error["error_subcode"]
             if isinstance(error.get("type"), str):
                 result["meta_error_type"] = error["type"][:80]
+            if isinstance(error.get("message"), str):
+                result["meta_error_message"] = error["message"][:240]
             return result
         except Exception as exc:
             return {
