@@ -150,6 +150,10 @@ async def autonomous_draft_worker(
                 "meta_accessible_ad_account_ids",
                 "meta_account_list_complete",
                 "meta_accessible_accounts_probe",
+                "meta_target_page_visible",
+                "meta_accessible_page_ids",
+                "meta_page_list_complete",
+                "meta_accessible_pages_probe",
             ):
                 value = provider_details.get(key)
                 if isinstance(value, str):
