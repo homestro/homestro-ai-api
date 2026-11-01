@@ -2024,7 +2024,24 @@ class MetaSaaSPublisher:
                 "campaign_id": campaign_id,
                 "daily_budget": str(self.CONCEPT_DAILY_BUDGET_CENTS),
                 "billing_event": "IMPRESSIONS",
-                "bid_strategy": "LOWEST_COST_WITHOUT_CAP",        adset_id = str(adset.get("id", ""))
+                "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
+                "optimization_goal": "OFFSITE_CONVERSIONS",
+                "destination_type": "WEBSITE",
+                "start_time": starts,
+                "end_time": ends,
+                "promoted_object": json.dumps({
+                    "pixel_id": self.pixel_id,
+                    "custom_event_type": "PURCHASE",
+                }),
+                "targeting": json.dumps({
+                    "geo_locations": {"countries": ["DE", "AT"]},
+                    "age_min": 18,
+                    "publisher_platforms": ["facebook", "instagram"],
+                }),
+                "status": "PAUSED",
+            },
+        )
+        adset_id = str(adset.get("id", ""))
         if not re.fullmatch(r"\d{4,30}", adset_id):
             raise RuntimeError("META_ADSET_ID_MISSING")
         story = {
