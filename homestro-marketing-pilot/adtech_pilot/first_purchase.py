@@ -26,6 +26,7 @@ from .order_economics import decode_ref, instant
 POLICY = 'first_purchase_acquisition_test'
 AUTHORIZATION = 'homestro-DE-AT-5EUR-day-35EUR-7days-owner-20261027'
 STOPPED_CLAIMS = {'STOPPED_TEST_BUDGET', 'STOPPED_PERFORMANCE', 'STOPPED_OWNER', 'STOPPED_TEST_EXPIRED'}
+RETIRED_ARCHIVED_CAMPAIGN_ID = '120254444566440274'
 
 
 class FirstPurchaseStore:
@@ -46,6 +47,23 @@ class FirstPurchaseStore:
               adset TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500));
               CREATE TABLE IF NOT EXISTS pilot_first_purchase_backoff(
               campaign TEXT PRIMARY KEY,until_at TEXT NOT NULL,reason TEXT NOT NULL);''')
+            # Retire only the exact owner-identified archived campaign from
+            # operational state. Keep append-only audit history intact.
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta_micro_campaign_claim'"
+            ).fetchone():
+                db.execute(
+                    'DELETE FROM meta_micro_campaign_claim WHERE slot=? AND campaign_id=?',
+                    ('single_live_meta_campaign', RETIRED_ARCHIVED_CAMPAIGN_ID),
+                )
+            db.execute(
+                'DELETE FROM pilot_first_purchase_consent WHERE singleton=1 AND campaign=?',
+                (RETIRED_ARCHIVED_CAMPAIGN_ID,),
+            )
+            db.execute(
+                'DELETE FROM pilot_first_purchase_backoff WHERE campaign=?',
+                (RETIRED_ARCHIVED_CAMPAIGN_ID,),
+            )
 
     def defer_provider(self, campaign, reason, now, seconds):
         with closing(self.audit._connect()) as db, db:
