@@ -76,6 +76,9 @@ async def _ensure_signed_tracking(publisher: MetaSaaSPublisher, result: dict[str
     if not isinstance(story, dict) or not isinstance(story.get("link_data"), dict):
         raise RuntimeError("SIGNED_ATTRIBUTION_CREATIVE_LINK_DATA_MISSING")
     link_data = story["link_data"]
+    # Meta rejects redundant image sources in link_data; keep the explicit source URL.
+    if link_data.get("picture") and link_data.get("image_hash"):
+        link_data.pop("image_hash", None)
     destination = str(link_data.get("link", "")).strip()
     if not destination:
         raise RuntimeError("SIGNED_ATTRIBUTION_DESTINATION_MISSING")
