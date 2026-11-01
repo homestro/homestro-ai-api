@@ -1,3 +1,11 @@
+## Meta account binding and exact permission denial — 1 November 2026
+
+The paused-concept worker previously ignored Railway's `META_AD_ACCOUNT_ID` and used the retired hardcoded account `322742110630620`. The worker now reads the configured account ID, and the approved account constant is `313767293442442`. The account-binding fix deployed successfully as Railway deployment `75a9a2b0-e410-44c6-9f42-88aac0a74164`.
+
+A subsequent bounded-error-logging update deployed successfully as `b5a3c291-18fc-4524-8762-cd4bd326cbd6`. `/healthz` returned HTTP 200. The current Meta preflight now reaches the configured account and returns HTTP 403, code 200, at `account_read`, with Meta's response: “Ad account owner has NOT grant ads_management or ads_read permission”. No campaign objects were written (`writes_performed=false`, `remote_campaigns_created=0`).
+
+Next owner action: ensure the system-user token generated for the connected Meta app actually has effective `ads_read` or `ads_management` permission for this ad-account owner. Selecting the ad account as an assigned asset alone does not satisfy the permission grant. Do not retry campaign writes until the same-account read preflight succeeds. Keep the €5/day and €35 total ceiling.
+
 ## Archived Meta campaign retirement and token preflight — 1 November 2026
 
 Owner authorized removal of archived campaign reference `120254444566440274` from the active first-purchase scope. Railway production variable `PILOT_FIRST_PURCHASE_CAMPAIGN_ID` was cleared. Startup cleanup removes only matching rows from `meta_micro_campaign_claim`, `pilot_first_purchase_consent`, and `pilot_first_purchase_backoff`; append-only audit history is retained.
