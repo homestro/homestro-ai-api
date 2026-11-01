@@ -50,7 +50,7 @@ async def autonomous_draft_worker(
     stop_event: asyncio.Event,
 ) -> None:
     """Create one approved-scope concept after boot; all Meta objects stay PAUSED."""
-    meta_write_attempted = False
+    publisher = None
     try:
         await asyncio.wait_for(stop_event.wait(), timeout=15)
         return
@@ -110,7 +110,6 @@ async def autonomous_draft_worker(
                 or "v26.0"
             ),
         )
-        meta_write_attempted = True
         result = await publisher.deploy_paused_concept(filtered[0], initial_budget_eur=5.0)
         result["writes_performed"] = result.get("status") == "CONCEPT_CREATED"
         result["feed_records"] = len(report.products)
@@ -126,7 +125,7 @@ async def autonomous_draft_worker(
             "status": "BLOCKED",
             "reason": code,
             "error_type": type(exc).__name__,
-            "writes_performed": "unknown" if meta_write_attempted else False,
+            "writes_performed": "unknown" if publisher is not None and publisher.write_attempted else False,
         }
         try:
             await audit.record("meta_paused_concept", payload)
