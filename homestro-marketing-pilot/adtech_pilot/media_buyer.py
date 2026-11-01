@@ -1251,6 +1251,10 @@ class MetaPublisher:
                 result["meta_error_type"] = error["type"][:80]
             if isinstance(error.get("message"), str):
                 result["meta_error_message"] = error["message"][:240]
+            if isinstance(error.get("error_user_title"), str):
+                result["meta_error_user_title"] = error["error_user_title"][:160]
+            if isinstance(error.get("error_user_msg"), str):
+                result["meta_error_user_msg"] = error["error_user_msg"][:240]
             return result
         except Exception as exc:
             return {
