@@ -488,6 +488,17 @@ class FirstPurchaseController:
                                 detail[key] = value[:800]
                 except (ValueError, TypeError, AttributeError):
                     pass
+            # A provider rate limit is not a reason to issue another write. If
+            # this cycle already read the owned campaign as PAUSED and has not
+            # entered the activation phase, retain that verified state and let
+            # the durable backoff govern the next read-only retry.
+            if (snapshot.get('campaign_status') == 'PAUSED'
+                    and stage != 'activation'
+                    and detail.get('code') in {4, 17, 32, 613, 80004}):
+                return {**snapshot, 'status': 'paused_confirmed',
+                        'reason': 'META_API_RATE_LIMIT_BACKOFF',
+                        'provider_mutations_deferred': True,
+                        'pause_write_skipped': True, **detail}
             try:
                 return {**await pause('ACQUISITION_READINESS_OR_CONTROL_FAILED'), **detail}
             except Exception:
