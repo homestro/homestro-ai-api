@@ -1655,6 +1655,21 @@ async def autopilot_loop(
             continue
 
 
+class MetaGraphAPIError(RuntimeError):
+    """A Meta Graph failure with bounded, non-secret diagnostic fields."""
+
+    def __init__(
+        self, status_code: int, code: int | None, subcode: int | None,
+        stage: str, details: dict[str, str],
+    ) -> None:
+        code_text = str(code) if isinstance(code, int) else "unknown"
+        subcode_text = str(subcode) if isinstance(subcode, int) else "unknown"
+        super().__init__(
+            f"META_API_ERROR:{status_code}:{code_text}:{subcode_text}:{stage}"
+        )
+        self.meta_details = details
+
+
 class MetaSaaSPublisher:
     """Create one idempotent, PAUSED preview concept; this class never activates ads."""
 
@@ -1726,10 +1741,23 @@ class MetaSaaSPublisher:
                     stage = "campaign_list_read"
                 else:
                     stage = "meta_api_request"
-                raise RuntimeError(
-                    f"META_API_ERROR:{response.status_code}:"
-                    f"{code if isinstance(code, int) else 'unknown'}:"
-                    f"{subcode if isinstance(subcode, int) else 'unknown'}:{stage}"
+                safe_details: dict[str, str] = {}
+                for source, target in (
+                    ("type", "meta_error_type"),
+                    ("error_user_title", "meta_error_title"),
+                    ("error_user_msg", "meta_error_message"),
+                    ("message", "meta_error_summary"),
+                    ("fbtrace_id", "meta_fbtrace_id"),
+                ):
+                    value = error.get(source)
+                    if isinstance(value, str):
+                        safe_details[target] = " ".join(value.split())[:240]
+                raise MetaGraphAPIError(
+                    response.status_code,
+                    code if isinstance(code, int) else None,
+                    subcode if isinstance(subcode, int) else None,
+                    stage,
+                    safe_details,
                 )
             return payload
         finally:
