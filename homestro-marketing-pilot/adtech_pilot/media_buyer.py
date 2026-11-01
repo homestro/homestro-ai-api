@@ -1108,7 +1108,7 @@ class MetaPublisher:
                         "objective": "OUTCOME_SALES",
                         "status": "PAUSED",
                         "special_ad_categories": "[]",
-                        "is_adset_budget_sharing_enabled": "false",
+                        "is_adset_budget_sharing_enabled": "False",
                     },
                 )
             else:
@@ -1738,7 +1738,11 @@ class MetaSaaSPublisher:
                 elif clean_path == f"{self.account_id}/adspixels":
                     stage = "pixel_access_read"
                 elif clean_path == f"{self.account_id}/campaigns":
-                    stage = "campaign_list_read"
+                    stage = (
+                        "campaign_create"
+                        if method.upper() == "POST"
+                        else "campaign_list_read"
+                    )
                 else:
                     stage = "meta_api_request"
                 safe_details: dict[str, str] = {}
