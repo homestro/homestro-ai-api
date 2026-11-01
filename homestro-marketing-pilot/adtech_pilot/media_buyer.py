@@ -1692,6 +1692,7 @@ class MetaSaaSPublisher:
         self.api_version = api_version
         self.token = token
         self.client = client
+        self.write_attempted = False
 
     async def _call(self, method: str, path: str, *, params=None, data=None) -> dict[str, Any]:
         own_client = self.client is None
@@ -1809,6 +1810,8 @@ class MetaSaaSPublisher:
             raise ValueError("CONCEPT_BUDGET_MUST_REMAIN_5_EUR_PER_DAY")
         title = str(product.get("title", "")).strip()
         product_id = str(product.get("id", "")).strip()
+        if product_id.startswith("gid://shopify/Product/"):
+            product_id = product_id.rsplit("/", 1)[-1]
         link = str(product.get("link", "")).strip()
         image = str(product.get("image_link", "")).strip()
         parsed_link, parsed_image = urlsplit(link), urlsplit(image)
@@ -1836,6 +1839,7 @@ class MetaSaaSPublisher:
         now = datetime.now(timezone.utc)
         starts = (now + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%S%z")
         ends = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        self.write_attempted = True
         campaign = await self._call(
             "POST", f"{self.account_id}/campaigns",
             data={
