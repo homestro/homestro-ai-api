@@ -129,6 +129,37 @@ async def autonomous_draft_worker(
             ),
         )
         result = await publisher.deploy_paused_concept(filtered[0], initial_budget_eur=5.0)
+        result["ownership_binding"] = "NOT_APPLICABLE"
+        campaign_id = str(result.get("campaign_id", "")).strip()
+        product_id = str(filtered[0].get("id", "")).strip()
+        if (
+            result.get("status") in {"CONCEPT_CREATED", "CONCEPT_RECONCILED"}
+            and campaign_id.isdigit()
+            and product_id
+        ):
+            account_id = required["META_AD_ACCOUNT_ID"]
+            account_id = account_id if account_id.startswith("act_") else f"act_{account_id}"
+            claim = await audit.get_meta_micro_campaign_claim()
+            if claim is None:
+                if await audit.claim_meta_micro_campaign(account_id, product_id):
+                    await audit.update_meta_micro_campaign(
+                        status="RECONCILED_EXISTING_CAMPAIGN",
+                        campaign_id=campaign_id,
+                    )
+                    claim = await audit.get_meta_micro_campaign_claim()
+            if claim and claim.get("campaign_id") == campaign_id:
+                if claim.get("status") == "CLAIMED":
+                    await audit.update_meta_micro_campaign(
+                        status="RECONCILED_EXISTING_CAMPAIGN",
+                        campaign_id=campaign_id,
+                    )
+                result["ownership_binding"] = "BOUND_TO_EXACT_PAUSED_CAMPAIGN"
+            elif claim:
+                result["ownership_binding"] = "BLOCKED_EXISTING_CAMPAIGN_CLAIM"
+                result["existing_claim_campaign_id"] = claim.get("campaign_id")
+                result["existing_claim_status"] = claim.get("status")
+            else:
+                result["ownership_binding"] = "BLOCKED_CLAIM_RACE"
         result["writes_performed"] = result.get("status") in {"CONCEPT_CREATED", "CONCEPT_RECONCILED"} or result.get("writes_performed") is True
         result["feed_records"] = len(report.products)
         result["filtered_candidates"] = len(filtered)
