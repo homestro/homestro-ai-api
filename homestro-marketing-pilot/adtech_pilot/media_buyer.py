@@ -833,7 +833,7 @@ class MetaPublisher:
             if own_client:
                 await client.aclose()
 
-    async def check_catalog_access(self) -> dict[str, Any]:
+    async def check_catalog_access(\n        self, *, expected_product_count: int | None = None\n    ) -> dict[str, Any]:
         """Read catalog and whole-catalog product-set access; never writes Meta objects."""
         token = self.env.get("META_ACCESS_TOKEN", "").strip()
         catalog_id = self.env.get("META_PRODUCT_CATALOG_ID", "").strip()
@@ -861,7 +861,7 @@ class MetaPublisher:
                 client,
                 f"{catalog_id}/product_sets",
                 headers,
-                {"fields": "id,name", "limit": "100"},
+                {"fields": "id,name,product_count,filter", "limit": "100"},
             )
             rows = result.get("data")
             if not isinstance(rows, list):
@@ -877,28 +877,48 @@ class MetaPublisher:
                 and self.ID_PATTERN.fullmatch(str(row.get("id", "")))
             ]
             configured_set_id = self.env.get("META_PRODUCT_SET_ID", "").strip()
+
+            def is_unfiltered_complete_set(row: dict[str, Any]) -> bool:
+                filter_value = row.get("filter")
+                if filter_value not in (None, "", {}, []):
+                    return False
+                try:
+                    item_count = int(str(row.get("product_count", "")))
+                except (TypeError, ValueError):
+                    return False
+                return expected_product_count is None or item_count == expected_product_count
+
+            eligible_sets = [row for row in full_sets if is_unfiltered_complete_set(row)]
             if configured_set_id:
                 if not self.ID_PATTERN.fullmatch(configured_set_id):
                     return {"status": "blocked", "reason": "META_PRODUCT_SET_ID_INVALID"}
                 selected = [
-                    row for row in full_sets
+                    row for row in eligible_sets
                     if str(row.get("id")) == configured_set_id
                 ]
                 if len(selected) != 1:
                     return {
                         "status": "blocked",
-                        "reason": "META_CONFIGURED_SET_IS_NOT_ALL_PRODUCTS",
+                        "reason": "META_CONFIGURED_SET_IS_NOT_VERIFIED_ALL_PRODUCTS",
                         "catalog_id": catalog_id,
+                        "matching_set_count": len(full_sets),
+                        "eligible_unfiltered_set_count": len(eligible_sets),
                     }
                 full_set = selected[0]
-            elif len(full_sets) == 1:
-                full_set = full_sets[0]
+            elif len(eligible_sets) == 1:
+                full_set = eligible_sets[0]
+            elif len(eligible_sets) > 1:
+                # Same label, empty filters, and exact feed count prove equivalent
+                # full-catalog scopes; stable numeric ordering makes retries idempotent.
+                full_set = sorted(eligible_sets, key=lambda row: int(str(row["id"])))[0]
             else:
                 return {
                     "status": "blocked",
                     "reason": "META_ALL_PRODUCTS_SET_NOT_FOUND_OR_AMBIGUOUS",
                     "catalog_id": catalog_id,
                     "matching_set_count": len(full_sets),
+                    "eligible_unfiltered_set_count": 0,
+                    "expected_product_count": expected_product_count,
                 }
 
             return {
@@ -907,6 +927,8 @@ class MetaPublisher:
                 "catalog_name": str(catalog.get("name", ""))[:160],
                 "product_set_id": str(full_set["id"]),
                 "product_set_name": str(full_set.get("name", ""))[:80],
+                "product_count": int(str(full_set.get("product_count", "0"))),
+                "selection_basis": "unfiltered_exact_feed_count" if expected_product_count is not None else "unique_unfiltered_all_products_set",
                 "visible_product_set_count": len(rows),
                 "campaign_writes_performed": False,
             }
@@ -989,7 +1011,7 @@ class MetaPublisher:
             == account_id.removeprefix("act_")
         )
 
-        catalog = await self.check_catalog_access()
+        catalog = await self.check_catalog_access(expected_product_count=feed_record_count)
         if catalog.get("status") != "checked":
             return {"status": "blocked", "reason": catalog.get("reason", "META_ALL_PRODUCTS_SET_NOT_VERIFIED"),
                     "catalog_check": catalog}
