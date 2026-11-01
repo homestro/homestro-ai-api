@@ -1099,50 +1099,52 @@ class MetaPublisher:
             )
             ads = ads_result.get("data")
             if (
-                not isinstance(ads, list) or len(ads) != 1
+                not isinstance(ads, list)
                 or (isinstance(ads_result.get("paging"), dict) and ads_result["paging"].get("next"))
             ):
-                return {"status": "blocked", "reason": "EXISTING_SINGLE_AD_REQUIRED",
+                return {"status": "blocked", "reason": "EXISTING_ADS_READ_INCOMPLETE",
                         "campaign_id": campaign_id, "adset_id": adset_id}
-            ad = ads[0]
-            ad_id = str(ad.get("id", ""))
-            old_creative_id = str((ad.get("creative") or {}).get("id", ""))
-            if (
-                not self.ID_PATTERN.fullmatch(ad_id)
-                or str(ad.get("campaign_id", "")) != campaign_id
-                or str(ad.get("adset_id", "")) != adset_id
-                or str(ad.get("status", "")).upper() != "PAUSED"
-                or not self.ID_PATTERN.fullmatch(old_creative_id)
-            ):
-                return {"status": "blocked", "reason": "EXISTING_PAUSED_AD_READBACK_FAILED",
-                        "campaign_id": campaign_id, "adset_id": adset_id}
-
-            stage = "previous_creative_read"
-            previous = await self._get(
-                client, old_creative_id, headers,
-                {"fields": "id,product_set_id,object_story_spec"},
-            )
-            if (
-                str(previous.get("product_set_id", "")) == str(catalog["product_set_id"])
-                and isinstance((previous.get("object_story_spec") or {}).get("template_data"), dict)
-            ):
-                return {
-                    "status": "catalog_verified",
-                    "campaign_id": campaign_id,
-                    "adset_id": adset_id,
-                    "ad_id": ad_id,
-                    "creative_id": old_creative_id,
-                    "product_catalog_id": catalog["catalog_id"],
-                    "product_set_id": catalog["product_set_id"],
-                    "product_set_name": catalog["product_set_name"],
-                    "shopify_feed_records": feed_record_count,
-                    "campaign_status": "PAUSED",
-                    "stored_claim_account_matches": stored_claim_account_matches,
-                    "daily_budget_eur": "5.00",
-                    "account_spend_cap_eur": "35.00",
-                    "writes_performed": False,
-                    "activation_performed": False,
-                }
+            ad_id = ""
+            actual_creative_id = ""
+            for existing_ad in ads:
+                existing_ad_id = str(existing_ad.get("id", ""))
+                existing_creative_id = str((existing_ad.get("creative") or {}).get("id", ""))
+                if (
+                    not self.ID_PATTERN.fullmatch(existing_ad_id)
+                    or str(existing_ad.get("campaign_id", "")) != campaign_id
+                    or str(existing_ad.get("adset_id", "")) != adset_id
+                    or str(existing_ad.get("status", "")).upper() != "PAUSED"
+                    or not self.ID_PATTERN.fullmatch(existing_creative_id)
+                ):
+                    return {"status": "blocked", "reason": "EXISTING_PAUSED_AD_READBACK_FAILED",
+                            "campaign_id": campaign_id, "adset_id": adset_id}
+                stage = "existing_creative_read"
+                existing_creative = await self._get(
+                    client, existing_creative_id, headers,
+                    {"fields": "id,product_set_id,object_story_spec"},
+                )
+                existing_story = existing_creative.get("object_story_spec") or {}
+                if (
+                    str(existing_creative.get("product_set_id", "")) == str(catalog["product_set_id"])
+                    and isinstance(existing_story.get("template_data"), dict)
+                ):
+                    return {
+                        "status": "catalog_verified",
+                        "campaign_id": campaign_id,
+                        "adset_id": adset_id,
+                        "ad_id": existing_ad_id,
+                        "creative_id": existing_creative_id,
+                        "product_catalog_id": catalog["catalog_id"],
+                        "product_set_id": catalog["product_set_id"],
+                        "product_set_name": catalog["product_set_name"],
+                        "shopify_feed_records": feed_record_count,
+                        "campaign_status": "PAUSED",
+                        "stored_claim_account_matches": stored_claim_account_matches,
+                        "daily_budget_eur": "5.00",
+                        "account_spend_cap_eur": "35.00",
+                        "writes_performed": False,
+                        "activation_performed": False,
+                    }
 
             stage = "catalog_creative_create"
             creative_id = await self._post(
@@ -1163,16 +1165,16 @@ class MetaPublisher:
                 },
             )
             writes_performed = True
-            stage = "ad_creative_update"
-            updated = await client.post(
-                f"{self.ENDPOINT}/{version}/{ad_id}",
-                headers=headers,
-                data={
+            stage = "catalog_ad_create"
+            ad_id = await self._post(
+                client, f"{account_id}/ads", headers,
+                {
+                    "name": "Homestro All Products Catalog Ad",
+                    "adset_id": adset_id,
                     "creative": json.dumps({"creative_id": creative_id}),
                     "status": "PAUSED",
                 },
             )
-            self._json_response(updated, require_object_id=False)
             stage = "ad_readback"
             ad_readback = await self._get(
                 client, ad_id, headers, {"fields": "id,campaign_id,adset_id,status,creative"},
