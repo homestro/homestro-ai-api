@@ -1956,56 +1956,75 @@ class MetaSaaSPublisher:
             raise ValueError("PRODUCT_IMAGE_NOT_ALLOWED")
         campaigns, account_cap_cents = await self._check_assets_and_cap()
         concept_name = f"AUTOPILOT CONCEPT // {product_key} // {title}"[:240]
-        for campaign in campaigns:
-            if str(campaign.get("name", "")) == concept_name:
+        campaign_id = ""
+        for existing_campaign in campaigns:
+            if str(existing_campaign.get("name", "")) != concept_name:
+                continue
+            existing_campaign_id = str(existing_campaign.get("id", ""))
+            existing_status = str(
+                existing_campaign.get("effective_status")
+                or existing_campaign.get("status")
+                or ""
+            ).upper()
+            if existing_status not in {"PAUSED", "CAMPAIGN_PAUSED"}:
                 return {
                     "status": "SKIPPED_DUPLICATE",
-                    "campaign_id": str(campaign.get("id", "")),
+                    "campaign_id": existing_campaign_id,
                     "campaign_name": concept_name,
-                    "campaign_status": str(campaign.get("effective_status") or campaign.get("status") or ""),
+                    "campaign_status": existing_status,
                 }
+            campaign_id = existing_campaign_id
+            break
 
         now = datetime.now(timezone.utc)
         starts = (now + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%S%z")
         ends = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S%z")
-        self.write_attempted = True
-        campaign = await self._call(
-            "POST", f"{self.account_id}/campaigns",
-            data={
-                "name": concept_name,
-                "objective": "OUTCOME_SALES",
-                "status": "PAUSED",
-                "special_ad_categories": "[]",
-                "is_adset_budget_sharing_enabled": "false",
-            },
+        if not campaign_id:
+            self.write_attempted = True
+            campaign = await self._call(
+                "POST", f"{self.account_id}/campaigns",
+                data={
+                    "name": concept_name,
+                    "objective": "OUTCOME_SALES",
+                    "status": "PAUSED",
+                    "special_ad_categories": "[]",
+                    "is_adset_budget_sharing_enabled": "false",
+                },
+            )
+            campaign_id = str(campaign.get("id", ""))
+            if not re.fullmatch(r"\d{4,30}", campaign_id):
+                raise RuntimeError("META_CAMPAIGN_ID_MISSING")
+
+        adset_name = f"Concept // DE-AT // {product_key}"
+        existing_adsets = await self._call(
+            "GET", f"{campaign_id}/adsets",
+            params={"fields": "id,name,status,effective_status", "limit": "100"},
         )
-        campaign_id = str(campaign.get("id", ""))
-        if not re.fullmatch(r"\d{4,30}", campaign_id):
-            raise RuntimeError("META_CAMPAIGN_ID_MISSING")
+        existing_rows = existing_adsets.get("data")
+        if not isinstance(existing_rows, list) or (
+            isinstance(existing_adsets.get("paging"), dict)
+            and existing_adsets["paging"].get("next")
+        ):
+            raise RuntimeError("META_EXISTING_ADSETS_UNVERIFIED")
+        if existing_rows:
+            return {
+                "status": "SKIPPED_DUPLICATE",
+                "campaign_id": campaign_id,
+                "campaign_name": concept_name,
+                "campaign_status": "PAUSED",
+                "existing_adset_id": str(existing_rows[0].get("id", "")),
+                "reason": "EXISTING_PAUSED_ADSET_REQUIRES_REVIEW",
+            }
+
+        self.write_attempted = True
         adset = await self._call(
             "POST", f"{self.account_id}/adsets",
             data={
-                "name": f"Concept // DE-AT // {product_key}",
+                "name": adset_name,
                 "campaign_id": campaign_id,
                 "daily_budget": str(self.CONCEPT_DAILY_BUDGET_CENTS),
                 "billing_event": "IMPRESSIONS",
-                "optimization_goal": "OFFSITE_CONVERSIONS",
-                "destination_type": "WEBSITE",
-                "start_time": starts,
-                "end_time": ends,
-                "promoted_object": json.dumps({
-                    "pixel_id": self.pixel_id,
-                    "custom_event_type": "PURCHASE",
-                }),
-                "targeting": json.dumps({
-                    "geo_locations": {"countries": ["DE", "AT"]},
-                    "age_min": 18,
-                    "publisher_platforms": ["facebook", "instagram"],
-                }),
-                "status": "PAUSED",
-            },
-        )
-        adset_id = str(adset.get("id", ""))
+                "bid_strategy": "LOWEST_COST_WITHOUT_CAP",        adset_id = str(adset.get("id", ""))
         if not re.fullmatch(r"\d{4,30}", adset_id):
             raise RuntimeError("META_ADSET_ID_MISSING")
         story = {
