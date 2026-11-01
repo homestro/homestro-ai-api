@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .creative_factory import BrandKit, CreativeFactory, HistoricalWin, OpenAIProvider
 from .daemon import PilotDaemon
 from .email_delivery import EmailDelivery
+from .engine_loop import autonomous_draft_worker
 from .feed_manager import Channel, ProductFeedManager
 from .github_reporter import GitHubPRReporter
 from .media_buyer import (
