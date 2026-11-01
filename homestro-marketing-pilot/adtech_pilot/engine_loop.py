@@ -28,7 +28,11 @@ def _feed_url_allowed(value: str) -> bool:
         return (
             parsed.scheme == "https"
             and (
-                host in {"homestro.de", "www.homestro.de"}
+                host in {
+                    "homestro.de",
+                    "www.homestro.de",
+                    "homestro-ai-api-fixed-current-production.up.railway.app",
+                }
                 or host.endswith(".myshopify.com")
             )
             and parsed.username is None
