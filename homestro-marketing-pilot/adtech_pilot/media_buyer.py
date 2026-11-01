@@ -1035,6 +1035,7 @@ class MetaPublisher:
         )
         headers = {"Authorization": f"Bearer {token}"}
         writes_performed = False
+        stage = "account_read"
         try:
             account = await self._get(
                 client, account_id, headers,
@@ -1050,6 +1051,7 @@ class MetaPublisher:
                 return {"status": "blocked", "reason": "GLOBAL_35_EUR_ACCOUNT_CAP_READBACK_FAILED",
                         "campaign_id": campaign_id}
 
+            stage = "campaign_read"
             campaign = await self._get(
                 client, campaign_id, headers,
                 {"fields": "id,account_id,objective,status"},
@@ -1064,6 +1066,7 @@ class MetaPublisher:
                 return {"status": "blocked", "reason": "OWNED_PAUSED_CAMPAIGN_READBACK_FAILED",
                         "campaign_id": campaign_id}
 
+            stage = "adsets_read"
             adsets_result = await self._get(
                 client, f"{campaign_id}/adsets", headers,
                 {"fields": "id,status,daily_budget,targeting,start_time,end_time", "limit": "100"},
@@ -1089,6 +1092,7 @@ class MetaPublisher:
                 return {"status": "blocked", "reason": "EXISTING_ADSET_LIMITS_NOT_VERIFIED",
                         "campaign_id": campaign_id, "adset_id": adset_id or None}
 
+            stage = "ads_read"
             ads_result = await self._get(
                 client, f"{adset_id}/ads", headers,
                 {"fields": "id,campaign_id,adset_id,status,creative", "limit": "100"},
