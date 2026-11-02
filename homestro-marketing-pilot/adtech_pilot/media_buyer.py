@@ -1133,11 +1133,10 @@ class MetaPublisher:
             ):
                 return {"status": "blocked", "reason": "EXISTING_ADS_READ_INCOMPLETE",
                         "campaign_id": campaign_id, "adset_id": adset_id}
-            if len(ads) > 1:
-                return {"status": "blocked", "reason": "EXISTING_SINGLE_CATALOG_AD_REQUIRED",
-                        "campaign_id": campaign_id, "adset_id": adset_id}
             ad_id = ""
             actual_creative_id = ""
+            matching_catalog_ad_id = ""
+            matching_catalog_creative_id = ""
             for existing_ad in ads:
                 existing_ad_id = str(existing_ad.get("id", ""))
                 existing_creative_id = str((existing_ad.get("creative") or {}).get("id", ""))
@@ -1157,20 +1156,21 @@ class MetaPublisher:
                 )
                 existing_story = existing_creative.get("object_story_spec") or {}
                 existing_template = existing_story.get("template_data")
-                ad_id = existing_ad_id
-                name_mapped = (
-                    isinstance(existing_template, dict)
-                    and "{{product.name}}" in str(existing_template.get("name", ""))
-                )
-                description_mapped = (
-                    isinstance(existing_template, dict)
-                    and "{{product.description}}" in str(existing_template.get("description", ""))
-                )
                 if (
                     str(existing_creative.get("product_set_id", "")) == str(catalog["product_set_id"])
                     and isinstance(existing_template, dict)
-                    and name_mapped and description_mapped
                 ):
+                    if matching_catalog_ad_id:
+                        return {"status": "blocked", "reason": "MULTIPLE_ADS_MATCH_CATALOG_PRODUCT_SET",
+                                "campaign_id": campaign_id, "adset_id": adset_id}
+                    matching_catalog_ad_id = existing_ad_id
+                    matching_catalog_creative_id = existing_creative_id
+                    ad_id = existing_ad_id
+                    actual_creative_id = existing_creative_id
+                    name_mapped = "{{product.name}}" in str(existing_template.get("name", ""))
+                    description_mapped = "{{product.description}}" in str(existing_template.get("description", ""))
+                    if not (name_mapped and description_mapped):
+                        continue
                     return {
                         "status": "catalog_verified",
                         "campaign_id": campaign_id,
@@ -1189,6 +1189,9 @@ class MetaPublisher:
                         "activation_performed": False,
                     }
 
+            if not matching_catalog_ad_id:
+                return {"status": "blocked", "reason": "EXISTING_CATALOG_AD_IDENTITY_NOT_FOUND",
+                        "campaign_id": campaign_id, "adset_id": adset_id}
             stage = "catalog_creative_create"
             creative_id = await self._post(
                 client, f"{account_id}/adcreatives", headers,
