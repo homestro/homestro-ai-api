@@ -1133,6 +1133,9 @@ class MetaPublisher:
             ):
                 return {"status": "blocked", "reason": "EXISTING_ADS_READ_INCOMPLETE",
                         "campaign_id": campaign_id, "adset_id": adset_id}
+            if len(ads) > 1:
+                return {"status": "blocked", "reason": "EXISTING_SINGLE_CATALOG_AD_REQUIRED",
+                        "campaign_id": campaign_id, "adset_id": adset_id}
             ad_id = ""
             actual_creative_id = ""
             for existing_ad in ads:
@@ -1153,9 +1156,20 @@ class MetaPublisher:
                     {"fields": "id,product_set_id,object_story_spec"},
                 )
                 existing_story = existing_creative.get("object_story_spec") or {}
+                existing_template = existing_story.get("template_data")
+                ad_id = existing_ad_id
+                name_mapped = (
+                    isinstance(existing_template, dict)
+                    and "{{product.name}}" in str(existing_template.get("name", ""))
+                )
+                description_mapped = (
+                    isinstance(existing_template, dict)
+                    and "{{product.description}}" in str(existing_template.get("description", ""))
+                )
                 if (
                     str(existing_creative.get("product_set_id", "")) == str(catalog["product_set_id"])
-                    and isinstance(existing_story.get("template_data"), dict)
+                    and isinstance(existing_template, dict)
+                    and name_mapped and description_mapped
                 ):
                     return {
                         "status": "catalog_verified",
@@ -1194,16 +1208,29 @@ class MetaPublisher:
                 },
             )
             writes_performed = True
-            stage = "catalog_ad_create"
-            ad_id = await self._post(
-                client, f"{account_id}/ads", headers,
-                {
-                    "name": "Homestro All Products Catalog Ad",
-                    "adset_id": adset_id,
-                    "creative": json.dumps({"creative_id": creative_id}),
-                    "status": "PAUSED",
-                },
-            )
+            if ad_id:
+                stage = "catalog_ad_creative_update"
+                writes_performed = True
+                update_response = await client.post(
+                    f"{self.ENDPOINT}/{version}/{ad_id}",
+                    headers=headers,
+                    data={
+                        "creative": json.dumps({"creative_id": creative_id}),
+                        "status": "PAUSED",
+                    },
+                )
+                self._json_response(update_response, require_object_id=False)
+            else:
+                stage = "catalog_ad_create"
+                ad_id = await self._post(
+                    client, f"{account_id}/ads", headers,
+                    {
+                        "name": "Homestro All Products Catalog Ad",
+                        "adset_id": adset_id,
+                        "creative": json.dumps({"creative_id": creative_id}),
+                        "status": "PAUSED",
+                    },
+                )
             stage = "ad_readback"
             ad_readback = await self._get(
                 client, ad_id, headers, {"fields": "id,campaign_id,adset_id,status,creative"},
@@ -1223,6 +1250,8 @@ class MetaPublisher:
                 or str(creative_readback.get("product_set_id", "")) != str(catalog["product_set_id"])
                 or str(readback_story.get("page_id", "")) != page_id
                 or not isinstance(readback_story.get("template_data"), dict)
+                or "{{product.name}}" not in str((readback_story.get("template_data") or {}).get("name", ""))
+                or "{{product.description}}" not in str((readback_story.get("template_data") or {}).get("description", ""))
             ):
                 return {"status": "write_unconfirmed", "reason": "CATALOG_CREATIVE_READBACK_MISMATCH",
                         "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
