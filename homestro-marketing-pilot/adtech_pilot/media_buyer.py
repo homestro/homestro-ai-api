@@ -1192,48 +1192,30 @@ class MetaPublisher:
             if not matching_catalog_ad_id:
                 return {"status": "blocked", "reason": "EXISTING_CATALOG_AD_IDENTITY_NOT_FOUND",
                         "campaign_id": campaign_id, "adset_id": adset_id}
-            stage = "catalog_creative_create"
-            creative_id = await self._post(
-                client, f"{account_id}/adcreatives", headers,
-                {
-                    "name": "Homestro Catalog Creative All Products",
-                    "product_set_id": str(catalog["product_set_id"]),
-                    "object_story_spec": json.dumps({
-                        "page_id": page_id,
-                        "template_data": {
-                            "message": "Entdecke Produkte von Homestro für deinen Alltag.",
-                            "name": "{{product.name}}",
-                            "description": "{{product.description}}",
-                            "link": "https://homestro.de",
-                            "call_to_action": {"type": "SHOP_NOW"},
+            stage = "catalog_ad_creative_update"
+            ad_id = matching_catalog_ad_id
+            writes_performed = True
+            update_response = await client.post(
+                f"{self.ENDPOINT}/{version}/{ad_id}",
+                headers=headers,
+                data={
+                    "creative": json.dumps({
+                        "product_set_id": str(catalog["product_set_id"]),
+                        "object_story_spec": {
+                            "page_id": page_id,
+                            "template_data": {
+                                "message": "Entdecke Produkte von Homestro für deinen Alltag.",
+                                "name": "{{product.name}}",
+                                "description": "{{product.description}}",
+                                "link": "https://homestro.de",
+                                "call_to_action": {"type": "SHOP_NOW"},
+                            },
                         },
                     }, ensure_ascii=False),
+                    "status": "PAUSED",
                 },
             )
-            writes_performed = True
-            if ad_id:
-                stage = "catalog_ad_creative_update"
-                writes_performed = True
-                update_response = await client.post(
-                    f"{self.ENDPOINT}/{version}/{ad_id}",
-                    headers=headers,
-                    data={
-                        "creative": json.dumps({"creative_id": creative_id}),
-                        "status": "PAUSED",
-                    },
-                )
-                self._json_response(update_response, require_object_id=False)
-            else:
-                stage = "catalog_ad_create"
-                ad_id = await self._post(
-                    client, f"{account_id}/ads", headers,
-                    {
-                        "name": "Homestro All Products Catalog Ad",
-                        "adset_id": adset_id,
-                        "creative": json.dumps({"creative_id": creative_id}),
-                        "status": "PAUSED",
-                    },
-                )
+            self._json_response(update_response, require_object_id=False)
             stage = "ad_readback"
             ad_readback = await self._get(
                 client, ad_id, headers, {"fields": "id,campaign_id,adset_id,status,creative"},
