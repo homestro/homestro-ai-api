@@ -322,9 +322,9 @@ class FirstPurchaseController:
                 return await pause('ADSET_BUDGET_SCHEDULE_OR_DE_AT_TARGETING_INVALID')
             promoted = adset.get('promoted_object') or {}
             snapshot['pixel_validation'] = {
-                'expected_pixel_id': pixel if re.fullmatch(r'\\d{4,30}', pixel) else None,
+                'expected_pixel_id': pixel if re.fullmatch(r'\d{4,30}', pixel) else None,
                 'adset_promoted_pixel_id': str(promoted.get('pixel_id', '')) or None,
-                'matches': str(promoted.get('pixel_id')) == pixel and bool(re.fullmatch(r'\\d{4,30}', pixel)),
+                'matches': str(promoted.get('pixel_id')) == pixel and bool(re.fullmatch(r'\d{4,30}', pixel)),
             }
             if (not snapshot['pixel_validation']['matches']
                     or promoted.get('custom_event_type') != 'PURCHASE'
@@ -443,7 +443,7 @@ class FirstPurchaseController:
                     'ids_match': bool(creative_set_id and creative_set_id == adset_set_id
                                       and (not configured_set_id or configured_set_id == creative_set_id)),
                 }
-                if (not re.fullmatch(r'\\d{4,30}', creative_set_id)
+                if (not re.fullmatch(r'\d{4,30}', creative_set_id)
                         or creative_set_id != adset_set_id
                         or (configured_set_id and configured_set_id != creative_set_id)):
                     blockers.append('CATALOG_PRODUCT_SET_ID_MISMATCH')
