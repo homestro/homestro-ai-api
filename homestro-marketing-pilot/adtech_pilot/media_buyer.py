@@ -1208,7 +1208,7 @@ class MetaPublisher:
                         "template_data": {
                             "message": "Entdecke Produkte von Homestro für deinen Alltag.",
                             "name": "{{product.name}}",
-                            "description": "{{product.description}}",
+                            "description": "Produktdetails: {{product.description}}",
                             "link": "https://homestro.de",
                             "call_to_action": {"type": "SHOP_NOW"},
                         },
