@@ -352,27 +352,37 @@ class FirstPurchaseController:
                     old_adset_id + '/ads',
                     'id,campaign_id,adset_id,status,creative',
                 )).get('data', [])
-                if not isinstance(source_ads, list) or len(source_ads) != 1:
-                    return await pause('REPLACEMENT_SOURCE_AD_NOT_UNIQUE')
-                source_ad = source_ads[0]
+                if not isinstance(source_ads, list) or not source_ads:
+                    return await pause('REPLACEMENT_SOURCE_ADS_READ_INVALID')
+                catalog_sources = []
+                for candidate_ad in source_ads:
+                    candidate_ad_id = str(candidate_ad.get('id', ''))
+                    candidate_creative_id = str((candidate_ad.get('creative') or {}).get('id', ''))
+                    if (
+                        not re.fullmatch(r'\d{4,30}', candidate_ad_id)
+                        or not re.fullmatch(r'\d{4,30}', candidate_creative_id)
+                        or str(candidate_ad.get('campaign_id', '')) != campaign
+                        or str(candidate_ad.get('adset_id', '')) != old_adset_id
+                    ):
+                        continue
+                    candidate_creative = await get(
+                        candidate_creative_id, 'id,product_set_id,object_story_spec'
+                    )
+                    candidate_story = candidate_creative.get('object_story_spec') or {}
+                    candidate_template = candidate_story.get('template_data')
+                    if (
+                        str(candidate_creative.get('product_set_id', '')) == catalog_set_id
+                        and str(candidate_story.get('page_id', '')) == page
+                        and isinstance(candidate_template, dict)
+                        and '{{product.name}}' in str(candidate_template.get('name', ''))
+                    ):
+                        catalog_sources.append((candidate_ad, candidate_creative))
+                if len(catalog_sources) != 1:
+                    return await pause('REPLACEMENT_SOURCE_CATALOG_AD_NOT_UNIQUE')
+                source_ad, source_creative = catalog_sources[0]
                 source_ad_id = str(source_ad.get('id', ''))
                 source_creative_id = str((source_ad.get('creative') or {}).get('id', ''))
-                if (
-                    not re.fullmatch(r'\d{4,30}', source_ad_id)
-                    or not re.fullmatch(r'\d{4,30}', source_creative_id)
-                    or str(source_ad.get('campaign_id', '')) != campaign
-                    or str(source_ad.get('adset_id', '')) != old_adset_id
-                ):
-                    return await pause('REPLACEMENT_SOURCE_AD_IDENTITY_INVALID')
-                source_creative = await get(source_creative_id, 'id,product_set_id,object_story_spec')
                 source_story = source_creative.get('object_story_spec') or {}
-                if (
-                    str(source_creative.get('product_set_id', '')) != catalog_set_id
-                    or str(source_story.get('page_id', '')) != page
-                    or not isinstance(source_story.get('template_data'), dict)
-                    or '{{product.name}}' not in str((source_story.get('template_data') or {}).get('name', ''))
-                ):
-                    return await pause('REPLACEMENT_SOURCE_CATALOG_CREATIVE_INVALID')
 
                 # Pause existing child ad and set before creating the replacement.
                 if str(source_ad.get('status', '')).upper() != 'PAUSED':
