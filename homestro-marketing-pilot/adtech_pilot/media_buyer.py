@@ -1085,7 +1085,7 @@ class MetaPublisher:
             countries = set(geo.get("countries") or [])
             if (
                 not self.ID_PATTERN.fullmatch(adset_id)
-                or str(adset.get("status", "")).upper() != "PAUSED"
+                or str(adset.get("status", "")).upper() not in {"PAUSED", "ACTIVE"}
                 or str(adset.get("daily_budget", "")) != "500"
                 or not {"DE", "AT"}.issubset(countries)
             ):
