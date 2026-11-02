@@ -303,9 +303,216 @@ class FirstPurchaseController:
             if timezone.get('timezone_name') not in {'Europe/Berlin', 'Europe/Vienna'}:
                 return await pause('DAILY_SPEND_REPORTING_TIMEZONE_NOT_DE_AT')
             stage = 'adset'
-            adsets = (await get(campaign + '/adsets', 'id,status,effective_status,daily_budget,lifetime_budget,start_time,end_time,targeting,promoted_object,optimization_goal')).get('data', [])
-            if len(adsets) != 1:
-                return await pause('SINGLE_OWNED_ADSET_REQUIRED')
+            adsets_result = await get(
+                campaign + '/adsets',
+                'id,campaign_id,status,effective_status,daily_budget,billing_event,lifetime_budget,start_time,end_time,targeting,promoted_object,optimization_goal,bid_strategy,destination_type',
+            )
+            adsets = adsets_result.get('data', [])
+            if not isinstance(adsets, list) or not adsets:
+                return await pause('OWNED_ADSETS_READ_INVALID')
+            configured_set_id = env.get('META_PRODUCT_SET_ID', '').strip()
+            if not re.fullmatch(r'\d{4,30}', configured_set_id):
+                return await pause('META_PRODUCT_SET_ID_INVALID')
+            catalog_check = await MetaPublisher(self.audit, env=env, client=client).check_catalog_access()
+            if (catalog_check.get('status') != 'checked'
+                    or str(catalog_check.get('product_set_id', '')) != configured_set_id):
+                snapshot['catalog_check'] = catalog_check
+                return await pause('META_ALL_PRODUCTS_SET_NOT_VERIFIED')
+            catalog_set_id = configured_set_id
+            matching_adsets = [
+                row for row in adsets
+                if str(((row.get('promoted_object') or {}).get('product_set_id') or '')) == catalog_set_id
+            ]
+            if len(matching_adsets) > 1:
+                return await pause('MULTIPLE_CATALOG_REPLACEMENT_ADSETS_FOUND')
+
+            if not matching_adsets:
+                # Meta rejects changing promoted_object on an existing ad set
+                # (1885090). Retire the owned old set and create a replacement
+                # from the start with the verified catalog and pixel.
+                if len(adsets) != 1:
+                    return await pause('REPLACEMENT_SOURCE_ADSET_AMBIGUOUS')
+                old_adset = adsets[0]
+                old_adset_id = str(old_adset.get('id', ''))
+                old_targeting = old_adset.get('targeting') or {}
+                old_countries = set((old_targeting.get('geo_locations') or {}).get('countries') or [])
+                old_promoted = old_adset.get('promoted_object') or {}
+                if (
+                    not re.fullmatch(r'\d{4,30}', old_adset_id)
+                    or str(old_adset.get('campaign_id', campaign)) != campaign
+                    or str(old_adset.get('daily_budget', '')) != '500'
+                    or old_adset.get('lifetime_budget') not in (None, 0, '0')
+                    or not {'DE', 'AT'}.issubset(old_countries)
+                    or str(old_promoted.get('pixel_id', '')) != pixel
+                    or old_adset.get('optimization_goal') != 'OFFSITE_CONVERSIONS'
+                    or old_adset.get('billing_event') != 'IMPRESSIONS'
+                ):
+                    return await pause('REPLACEMENT_SOURCE_LIMITS_NOT_VERIFIED')
+                source_ads = (await get(
+                    old_adset_id + '/ads',
+                    'id,campaign_id,adset_id,status,creative',
+                )).get('data', [])
+                if not isinstance(source_ads, list) or len(source_ads) != 1:
+                    return await pause('REPLACEMENT_SOURCE_AD_NOT_UNIQUE')
+                source_ad = source_ads[0]
+                source_ad_id = str(source_ad.get('id', ''))
+                source_creative_id = str((source_ad.get('creative') or {}).get('id', ''))
+                if (
+                    not re.fullmatch(r'\d{4,30}', source_ad_id)
+                    or not re.fullmatch(r'\d{4,30}', source_creative_id)
+                    or str(source_ad.get('campaign_id', '')) != campaign
+                    or str(source_ad.get('adset_id', '')) != old_adset_id
+                ):
+                    return await pause('REPLACEMENT_SOURCE_AD_IDENTITY_INVALID')
+                source_creative = await get(source_creative_id, 'id,product_set_id,object_story_spec')
+                source_story = source_creative.get('object_story_spec') or {}
+                if (
+                    str(source_creative.get('product_set_id', '')) != catalog_set_id
+                    or str(source_story.get('page_id', '')) != page
+                    or not isinstance(source_story.get('template_data'), dict)
+                    or '{{product.name}}' not in str((source_story.get('template_data') or {}).get('name', ''))
+                ):
+                    return await pause('REPLACEMENT_SOURCE_CATALOG_CREATIVE_INVALID')
+
+                # Pause existing child ad and set before creating the replacement.
+                if str(source_ad.get('status', '')).upper() != 'PAUSED':
+                    stage = 'old_ad_pause'
+                    old_ad_pause = await client.post(
+                        base + source_ad_id, headers=headers, data={'status': 'PAUSED'}
+                    )
+                    old_ad_pause.raise_for_status()
+                    if old_ad_pause.json().get('success') is not True:
+                        return await pause('OLD_AD_PAUSE_NOT_ACKNOWLEDGED')
+                    old_ad_readback = await get(source_ad_id, 'id,status')
+                    if str(old_ad_readback.get('status', '')).upper() != 'PAUSED':
+                        return await pause('OLD_AD_PAUSE_NOT_CONFIRMED')
+                if str(old_adset.get('status', '')).upper() != 'PAUSED':
+                    stage = 'old_adset_pause'
+                    old_set_pause = await client.post(
+                        base + old_adset_id, headers=headers, data={'status': 'PAUSED'}
+                    )
+                    old_set_pause.raise_for_status()
+                    if old_set_pause.json().get('success') is not True:
+                        return await pause('OLD_ADSET_PAUSE_NOT_ACKNOWLEDGED')
+                    old_set_readback = await get(old_adset_id, 'id,status')
+                    if str(old_set_readback.get('status', '')).upper() != 'PAUSED':
+                        return await pause('OLD_ADSET_PAUSE_NOT_CONFIRMED')
+
+                replacement_targeting = json.loads(json.dumps(old_targeting))
+                replacement_targeting['publisher_platforms'] = ['facebook']
+                replacement_targeting.pop('instagram_positions', None)
+                replacement_targeting.pop('messenger_positions', None)
+                replacement_targeting.pop('audience_network_positions', None)
+                start_time = now.astimezone(UTC).isoformat()
+                end_time = (now.astimezone(UTC) + timedelta(days=7)).isoformat()
+                replacement_payload = {
+                    'name': 'Homestro All Products // DE-AT // Replacement',
+                    'campaign_id': campaign,
+                    'daily_budget': '500',
+                    'billing_event': 'IMPRESSIONS',
+                    'optimization_goal': 'OFFSITE_CONVERSIONS',
+                    'destination_type': old_adset.get('destination_type') or 'WEBSITE',
+                    'promoted_object': json.dumps({
+                        'pixel_id': pixel,
+                        'custom_event_type': 'PURCHASE',
+                        'product_set_id': catalog_set_id,
+                    }),
+                    'targeting': json.dumps(replacement_targeting),
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'status': 'PAUSED',
+                }
+                if old_adset.get('bid_strategy'):
+                    replacement_payload['bid_strategy'] = old_adset['bid_strategy']
+                stage = 'replacement_adset_create'
+                replacement_response = await client.post(
+                    base + account + '/adsets', headers=headers, data=replacement_payload
+                )
+                replacement_response.raise_for_status()
+                replacement_data = replacement_response.json()
+                replacement_id = str(replacement_data.get('id', ''))
+                if not re.fullmatch(r'\d{4,30}', replacement_id):
+                    return await pause('REPLACEMENT_ADSET_ID_MISSING')
+                replacement_readback = await get(
+                    replacement_id,
+                    'id,campaign_id,status,daily_budget,billing_event,optimization_goal,start_time,end_time,targeting,promoted_object',
+                )
+                replacement_promoted = replacement_readback.get('promoted_object') or {}
+                replacement_geo = ((replacement_readback.get('targeting') or {}).get('geo_locations') or {}).get('countries') or []
+                if (
+                    str(replacement_readback.get('id', '')) != replacement_id
+                    or str(replacement_readback.get('campaign_id', '')) != campaign
+                    or str(replacement_readback.get('status', '')).upper() != 'PAUSED'
+                    or str(replacement_readback.get('daily_budget', '')) != '500'
+                    or replacement_readback.get('billing_event') != 'IMPRESSIONS'
+                    or replacement_readback.get('optimization_goal') != 'OFFSITE_CONVERSIONS'
+                    or str(replacement_promoted.get('pixel_id', '')) != pixel
+                    or replacement_promoted.get('custom_event_type') != 'PURCHASE'
+                    or str(replacement_promoted.get('product_set_id', '')) != catalog_set_id
+                    or not {'DE', 'AT'}.issubset(set(replacement_geo))
+                ):
+                    snapshot.update(replacement_adset_id=replacement_id, writes_performed=True)
+                    return await pause('REPLACEMENT_ADSET_READBACK_MISMATCH')
+
+                # Reuse the already owned catalog creative; do not generate or
+                # duplicate creative media.
+                stage = 'replacement_ad_create'
+                new_ad_response = await client.post(
+                    base + account + '/ads',
+                    headers=headers,
+                    data={
+                        'name': 'Homestro All Products Catalog Ad',
+                        'adset_id': replacement_id,
+                        'creative': json.dumps({'creative_id': source_creative_id}),
+                        'status': 'PAUSED',
+                    },
+                )
+                new_ad_response.raise_for_status()
+                new_ad_id = str(new_ad_response.json().get('id', ''))
+                if not re.fullmatch(r'\d{4,30}', new_ad_id):
+                    snapshot.update(replacement_adset_id=replacement_id, writes_performed=True)
+                    return await pause('REPLACEMENT_AD_ID_MISSING')
+                new_ad_readback = await get(
+                    new_ad_id, 'id,campaign_id,adset_id,status,creative'
+                )
+                if (
+                    str(new_ad_readback.get('id', '')) != new_ad_id
+                    or str(new_ad_readback.get('campaign_id', '')) != campaign
+                    or str(new_ad_readback.get('adset_id', '')) != replacement_id
+                    or str(new_ad_readback.get('status', '')).upper() != 'PAUSED'
+                    or str((new_ad_readback.get('creative') or {}).get('id', '')) != source_creative_id
+                ):
+                    snapshot.update(replacement_adset_id=replacement_id, replacement_ad_id=new_ad_id, writes_performed=True)
+                    return await pause('REPLACEMENT_AD_READBACK_MISMATCH')
+                snapshot.update(
+                    replacement_adset_id=replacement_id,
+                    replacement_ad_id=new_ad_id,
+                    replacement_created=True,
+                    writes_performed=True,
+                )
+                adsets = [replacement_readback]
+
+            else:
+                adset = matching_adsets[0]
+                # Retire any old ad sets left in this owned campaign.
+                for stale_adset in adsets:
+                    if str(stale_adset.get('id', '')) == str(adset.get('id', '')):
+                        continue
+                    stale_id = str(stale_adset.get('id', ''))
+                    if not re.fullmatch(r'\d{4,30}', stale_id):
+                        return await pause('STALE_ADSET_ID_INVALID')
+                    if str(stale_adset.get('status', '')).upper() != 'PAUSED':
+                        stale_pause = await client.post(
+                            base + stale_id, headers=headers, data={'status': 'PAUSED'}
+                        )
+                        stale_pause.raise_for_status()
+                        if stale_pause.json().get('success') is not True:
+                            return await pause('STALE_ADSET_PAUSE_NOT_ACKNOWLEDGED')
+                        stale_readback = await get(stale_id, 'id,status')
+                        if str(stale_readback.get('status', '')).upper() != 'PAUSED':
+                            return await pause('STALE_ADSET_PAUSE_NOT_CONFIRMED')
+                adsets = [adset]
+
             adset = adsets[0]
             if not re.fullmatch(r'\d{4,30}', str(adset.get('id'))):
                 return await pause('ADSET_ID_NOT_VERIFIED')
