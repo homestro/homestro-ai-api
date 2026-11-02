@@ -1192,55 +1192,87 @@ class MetaPublisher:
             if not matching_catalog_ad_id:
                 return {"status": "blocked", "reason": "EXISTING_CATALOG_AD_IDENTITY_NOT_FOUND",
                         "campaign_id": campaign_id, "adset_id": adset_id}
-            stage = "catalog_ad_creative_update"
-            ad_id = matching_catalog_ad_id
+            # AdCreative content is immutable in Meta. Create a catalog creative,
+            # then attach its ID to the existing paused ad; do not send an inline
+            # creative spec in the Ad.update call.
+            stage = "catalog_ad_creative_create"
             writes_performed = True
-            update_response = await client.post(
+            creative_response = await client.post(
+                f"{self.ENDPOINT}/{version}/{account_id}/adcreatives",
+                headers=headers,
+                data={
+                    "name": f"Homestro catalog creative // {campaign_id}"[:240],
+                    "product_set_id": str(catalog["product_set_id"]),
+                    "object_story_spec": json.dumps({
+                        "page_id": page_id,
+                        "template_data": {
+                            "message": "Entdecke Produkte von Homestro für deinen Alltag.",
+                            "name": "{{product.name}}",
+                            "description": "{{product.description}}",
+                            "link": "https://homestro.de",
+                            "call_to_action": {"type": "SHOP_NOW"},
+                        },
+                    }, ensure_ascii=False),
+                },
+            )
+            creative_payload = self._json_response(creative_response)
+            new_creative_id = str(creative_payload.get("id", ""))
+            if not self.ID_PATTERN.fullmatch(new_creative_id):
+                return {"status": "write_unconfirmed", "reason": "META_CATALOG_CREATIVE_ID_MISSING",
+                        "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
+                        "writes_performed": True, "activation_performed": False}
+
+            stage = "catalog_ad_creative_attach"
+            attach_response = await client.post(
                 f"{self.ENDPOINT}/{version}/{ad_id}",
                 headers=headers,
                 data={
-                    "creative": json.dumps({
-                        "product_set_id": str(catalog["product_set_id"]),
-                        "object_story_spec": {
-                            "page_id": page_id,
-                            "template_data": {
-                                "message": "Entdecke Produkte von Homestro für deinen Alltag.",
-                                "name": "{{product.name}}",
-                                "description": "{{product.description}}",
-                                "link": "https://homestro.de",
-                                "call_to_action": {"type": "SHOP_NOW"},
-                            },
-                        },
-                    }, ensure_ascii=False),
+                    "creative": json.dumps({"creative_id": new_creative_id}),
                     "status": "PAUSED",
                 },
             )
-            self._json_response(update_response, require_object_id=False)
-            stage = "ad_readback"
+            self._json_response(attach_response, require_object_id=False)
+            stage = "catalog_ad_readback"
             ad_readback = await self._get(
-                client, ad_id, headers, {"fields": "id,campaign_id,adset_id,status,creative"},
+                client, ad_id, headers,
+                {"fields": "id,campaign_id,adset_id,status,effective_status,creative"},
             )
             actual_creative_id = str((ad_readback.get("creative") or {}).get("id", ""))
-            stage = "creative_readback"
+            stage = "catalog_creative_readback"
             creative_readback = await self._get(
                 client, actual_creative_id, headers,
                 {"fields": "id,product_set_id,object_story_spec"},
             )
             readback_story = creative_readback.get("object_story_spec") or {}
-            if (
-                str(ad_readback.get("id", "")) != ad_id
-                or str(ad_readback.get("campaign_id", "")) != campaign_id
-                or str(ad_readback.get("adset_id", "")) != adset_id
-                or str(ad_readback.get("status", "")).upper() != "PAUSED"
-                or str(creative_readback.get("product_set_id", "")) != str(catalog["product_set_id"])
-                or str(readback_story.get("page_id", "")) != page_id
-                or not isinstance(readback_story.get("template_data"), dict)
-                or "{{product.name}}" not in str((readback_story.get("template_data") or {}).get("name", ""))
-                or "{{product.description}}" not in str((readback_story.get("template_data") or {}).get("description", ""))
-            ):
+            readback_template = readback_story.get("template_data")
+            mismatch_fields = []
+            if str(ad_readback.get("id", "")) != ad_id:
+                mismatch_fields.append("ad_id")
+            if str(ad_readback.get("campaign_id", "")) != campaign_id:
+                mismatch_fields.append("campaign_id")
+            if str(ad_readback.get("adset_id", "")) != adset_id:
+                mismatch_fields.append("adset_id")
+            if str(ad_readback.get("status", "")).upper() != "PAUSED":
+                mismatch_fields.append("ad_status")
+            if actual_creative_id != new_creative_id:
+                mismatch_fields.append("creative_id")
+            if str(creative_readback.get("product_set_id", "")) != str(catalog["product_set_id"]):
+                mismatch_fields.append("product_set_id")
+            if str(readback_story.get("page_id", "")) != page_id:
+                mismatch_fields.append("page_id")
+            if not isinstance(readback_template, dict):
+                mismatch_fields.extend(["template_data.name", "template_data.description"])
+            else:
+                if "{{product.name}}" not in str(readback_template.get("name", "")):
+                    mismatch_fields.append("template_data.name")
+                if "{{product.description}}" not in str(readback_template.get("description", "")):
+                    mismatch_fields.append("template_data.description")
+            if mismatch_fields:
                 return {"status": "write_unconfirmed", "reason": "CATALOG_CREATIVE_READBACK_MISMATCH",
                         "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
-                        "writes_performed": writes_performed, "activation_performed": False}
+                        "creative_id": actual_creative_id or None,
+                        "mismatch_fields": mismatch_fields,
+                        "writes_performed": True, "activation_performed": False}
 
             await self.audit.record("meta_catalog_campaign_migrated", {
                 "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
