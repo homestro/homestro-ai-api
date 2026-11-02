@@ -321,7 +321,14 @@ class FirstPurchaseController:
             if not (daily_mode or native_lifetime) or not start <= now < end or end - start > timedelta(days=7) or set(adset.get('targeting', {}).get('geo_locations', {}).get('countries', [])) != {'DE', 'AT'}:
                 return await pause('ADSET_BUDGET_SCHEDULE_OR_DE_AT_TARGETING_INVALID')
             promoted = adset.get('promoted_object') or {}
-            if str(promoted.get('pixel_id')) != pixel or promoted.get('custom_event_type') != 'PURCHASE' or adset.get('optimization_goal') != 'OFFSITE_CONVERSIONS':
+            snapshot['pixel_validation'] = {
+                'expected_pixel_id': pixel if re.fullmatch(r'\\d{4,30}', pixel) else None,
+                'adset_promoted_pixel_id': str(promoted.get('pixel_id', '')) or None,
+                'matches': str(promoted.get('pixel_id')) == pixel and bool(re.fullmatch(r'\\d{4,30}', pixel)),
+            }
+            if (not snapshot['pixel_validation']['matches']
+                    or promoted.get('custom_event_type') != 'PURCHASE'
+                    or adset.get('optimization_goal') != 'OFFSITE_CONVERSIONS'):
                 return await pause('PURCHASE_TRACKING_CONFIGURATION_NOT_VERIFIED')
             # Prepare a restrictive native cap while already paused, even when
             # creative/site review is outstanding. Discover provider rejection
@@ -368,6 +375,17 @@ class FirstPurchaseController:
                 return await pause('EXISTING_CREATIVE_PAGE_IDENTITY_UNVERIFIED')
             if is_catalog_ad and not isinstance(story.get('template_data'), dict):
                 return await pause('CATALOG_CREATIVE_TEMPLATE_UNVERIFIED')
+            if is_catalog_ad:
+                template = story['template_data']
+                name_mapping = '{{product.name}}' in str(template.get('name', ''))
+                description_mapping = '{{product.description}}' in str(template.get('description', ''))
+                snapshot['dynamic_template_validation'] = {
+                    'template_data_used': True,
+                    'product_name_mapped': name_mapping,
+                    'product_description_mapped': description_mapping,
+                }
+                if not (name_mapping and description_mapping):
+                    return await pause('CATALOG_DYNAMIC_TEMPLATE_FIELDS_NOT_MAPPED')
             if not is_catalog_ad and not isinstance(story.get('link_data'), dict):
                 return await pause('EXISTING_CREATIVE_WEBSITE_DESTINATION_UNVERIFIED')
             revision = hashlib.sha256(json.dumps(story, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -414,6 +432,47 @@ class FirstPurchaseController:
             source_cards = cards + ([data] if data.get('link') and data.get('link') not in {r.get('link') for r in cards} else [])
             source_blockers = await self.sources(client, source_cards, campaign, str(ad['id']), pixel, now)
             blockers.extend(source_blockers)
+            if is_catalog_ad:
+                creative_set_id = str(creative.get('product_set_id', ''))
+                adset_set_id = str(promoted.get('product_set_id', ''))
+                configured_set_id = env.get('META_PRODUCT_SET_ID', '').strip()
+                snapshot['catalog_validation'] = {
+                    'creative_product_set_id': creative_set_id or None,
+                    'adset_promoted_product_set_id': adset_set_id or None,
+                    'configured_product_set_id': configured_set_id or None,
+                    'ids_match': bool(creative_set_id and creative_set_id == adset_set_id
+                                      and (not configured_set_id or configured_set_id == creative_set_id)),
+                }
+                if (not re.fullmatch(r'\\d{4,30}', creative_set_id)
+                        or creative_set_id != adset_set_id
+                        or (configured_set_id and configured_set_id != creative_set_id)):
+                    blockers.append('CATALOG_PRODUCT_SET_ID_MISMATCH')
+                else:
+                    set_readback = await get(creative_set_id, 'id,name,product_count,filter')
+                    raw_filter = set_readback.get('filter')
+                    if isinstance(raw_filter, str) and raw_filter.strip():
+                        try:
+                            raw_filter = json.loads(raw_filter)
+                        except ValueError:
+                            raw_filter = '__invalid_filter__'
+                    try:
+                        set_product_count = int(str(set_readback.get('product_count', '0')))
+                    except (TypeError, ValueError):
+                        set_product_count = 0
+                    feed_count = getattr(self, 'feed_product_count', None)
+                    snapshot['catalog_validation'].update({
+                        'product_set_name': str(set_readback.get('name', ''))[:80],
+                        'product_set_item_count': set_product_count,
+                        'shopify_feed_item_count': feed_count,
+                        'shopify_in_stock_item_count': getattr(self, 'feed_in_stock_count', None),
+                        'unfiltered': raw_filter in (None, '', {}, []),
+                        'item_count_matches_shopify_feed': feed_count is not None and set_product_count == feed_count,
+                    })
+                    if (str(set_readback.get('id', '')) != creative_set_id
+                            or set_product_count <= 0
+                            or raw_filter not in (None, '', {}, [])
+                            or (feed_count is not None and set_product_count != feed_count)):
+                        blockers.append('CATALOG_PRODUCT_SET_CONTENTS_NOT_VERIFIED')
             snapshot['site_diagnostics'] = getattr(self, 'site_diagnostics', [])
             snapshot['review_proposals'] = getattr(self, 'review_proposals', [])
             snapshot['technical_gates_passed'] = not any(b != 'EXACT_CREATIVE_PREVIEW_REVIEW_REQUIRED' for b in blockers)
@@ -528,6 +587,8 @@ class FirstPurchaseController:
         if len(response.content) > 12 * 1024 * 1024:
             return ['CURRENT_FEED_SIZE_LIMIT']
         feed = ProductFeedManager().parse(response.content, response.headers.get('content-type'))
+        self.feed_product_count = len(feed.products)
+        self.feed_in_stock_count = sum(1 for product in feed.products if product.availability == 'in_stock')
         from .payment_webhooks import PaymentWebhookStore, payment_database
         from .product_selection import read_cost_candidates
         from .website_ads import owner_excluded, product_path
