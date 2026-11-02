@@ -212,6 +212,18 @@ class FirstPurchaseController:
                     'daily_ceiling_eur': '5.00', 'total_ceiling_eur': '35.00', 'automatic_increase': False,
                     'new_paid_generation_performed': False, 'activation_performed': False}
 
+        # Respect Meta's persisted cooldown before making even status reads.
+        # This prevents the one-minute worker from extending a provider throttle.
+        backoff = self.store.provider_backoff(campaign, now)
+        if backoff:
+            return {
+                **snapshot,
+                'status': 'provider_backoff',
+                'provider_reads_deferred': True,
+                'provider_mutations_deferred': True,
+                **backoff,
+            }
+
         async def get(path, fields=None, params=None):
             response = await client.get(base + path, headers=headers, params=params or {'fields': fields, 'limit': '100'})
             response.raise_for_status()
