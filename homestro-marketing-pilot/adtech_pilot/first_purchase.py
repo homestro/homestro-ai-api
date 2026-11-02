@@ -383,9 +383,10 @@ class FirstPurchaseController:
                     'template_data_used': True,
                     'product_name_mapped': name_mapping,
                     'product_description_mapped': description_mapping,
+                    'description_optional': True,
                 }
-                if not (name_mapping and description_mapping):
-                    return await pause('CATALOG_DYNAMIC_TEMPLATE_FIELDS_NOT_MAPPED')
+                if not name_mapping:
+                    return await pause('CATALOG_PRODUCT_NAME_TEMPLATE_NOT_MAPPED')
             if not is_catalog_ad and not isinstance(story.get('link_data'), dict):
                 return await pause('EXISTING_CREATIVE_WEBSITE_DESTINATION_UNVERIFIED')
             revision = hashlib.sha256(json.dumps(story, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
