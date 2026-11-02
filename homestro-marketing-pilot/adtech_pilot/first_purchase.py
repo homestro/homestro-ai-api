@@ -14,19 +14,70 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
 
 from .feed_manager import ProductFeedManager
 from .micro_budget import configured_daily_budget_limit_eur, live_ads_dry_run
-from .order_economics import decode_ref, instant
+from .order_economics import decode_ref, instant, tracked_url, tracking_ref
 
 POLICY = 'first_purchase_acquisition_test'
 AUTHORIZATION = 'homestro-DE-AT-5EUR-day-35EUR-7days-owner-20261027'
 STOPPED_CLAIMS = {'STOPPED_TEST_BUDGET', 'STOPPED_PERFORMANCE', 'STOPPED_OWNER', 'STOPPED_TEST_EXPIRED'}
 RETIRED_ARCHIVED_CAMPAIGN_ID = '120254444566440274'
+
+
+def _shopify_variant_key(value):
+    """Return a numeric Shopify variant key from known Shopify feed/API IDs."""
+    text = str(value or '').strip()
+    match = re.fullmatch(r'gid://shopify/ProductVariant/(\d+)', text)
+    if match:
+        return match.group(1)
+    if re.fullmatch(r'\d+', text):
+        return text
+    # Shopify's Meta channel retailer_id format binds product and variant IDs.
+    match = re.fullmatch(r'shopify_[A-Z]{2}_\d+_(\d+)', text)
+    return match.group(1) if match else None
+
+
+def _catalog_available(item):
+    availability = str(item.get('availability') or '').strip().casefold().replace(' ', '_')
+    review = str(item.get('review_status') or '').strip().casefold()
+    return availability == 'in_stock' and review == 'approved'
+
+
+def _catalog_tracking_tags_valid(value, ref, campaign, ad, end):
+    if not ref or ref.get('channel') != 'meta' or ref.get('campaign') != campaign or ref.get('ad') != ad:
+        return False
+    try:
+        if instant(ref['expires']) < end:
+            return False
+    except (KeyError, ValueError, TypeError):
+        return False
+    tags = parse_qs(str(value or ''), keep_blank_values=True)
+    return (len(tags.get('pilot_ref', [])) == 1
+            and tags.get('utm_source') == ['meta']
+            and tags.get('utm_medium') == ['paid_social']
+            and campaign in tags.get('utm_campaign', [])
+            and ad in tags.get('utm_content', []))
+
+
+def _catalog_link_template_valid(value):
+    """Accept a safe Homestro fallback or Meta's dynamic product URL macro."""
+    text = str(value or '').strip()
+    if not text or len(text) > 2048 or any(ord(char) < 0x21 for char in text):
+        return False
+    if text == '{{product.url}}' or re.fullmatch(r'\{\{product\.url\}\}\?[A-Za-z0-9_=&%.-]{1,512}', text):
+        return True
+    if re.search(r'\{\{[^{}]{1,80}\}\}', text):
+        text = re.sub(r'\{\{(?:product\.(?:url|link|id|name|description)|campaign\.id|ad\.id|adset\.id|site_source_name)\}\}', 'x', text)
+        if '{{' in text or '}}' in text:
+            return False
+    parsed = urlsplit(text)
+    return (parsed.scheme == 'https' and parsed.hostname in {'homestro.de', 'www.homestro.de'}
+            and not parsed.username and not parsed.password and parsed.port in (None, 443))
 
 
 class FirstPurchaseStore:
@@ -571,7 +622,7 @@ class FirstPurchaseController:
                 if Decimal(spends['maximum'])*100 >= frozen_lifetime_cap:
                     return await pause('FROZEN_LIFETIME_TEST_CAP_REACHED', latch=True)
             stage = 'creative'
-            ads = (await get(str(adset['id']) + '/ads', 'id,status,effective_status,creative{id},ad_review_feedback')).get('data', [])
+            ads = (await get(str(adset['id']) + '/ads', 'id,status,effective_status,creative{id},ad_review_feedback,url_tags')).get('data', [])
             if not isinstance(ads, list) or not ads:
                 return await pause('EXISTING_ADS_NOT_FOUND')
             catalog_ads = []
@@ -608,14 +659,19 @@ class FirstPurchaseController:
                 template = story['template_data']
                 name_mapping = '{{product.name}}' in str(template.get('name', ''))
                 description_mapping = '{{product.description}}' in str(template.get('description', ''))
+                link_template_valid = _catalog_link_template_valid(template.get('link'))
                 snapshot['dynamic_template_validation'] = {
                     'template_data_used': True,
                     'product_name_mapped': name_mapping,
                     'product_description_mapped': description_mapping,
                     'description_optional': True,
+                    'dynamic_catalog_link_supported': link_template_valid,
+                    'static_preview_checks_skipped': True,
                 }
                 if not name_mapping:
                     return await pause('CATALOG_PRODUCT_NAME_TEMPLATE_NOT_MAPPED')
+                if not link_template_valid:
+                    return await pause('CATALOG_DYNAMIC_LINK_TEMPLATE_INVALID')
             if not is_catalog_ad and not isinstance(story.get('link_data'), dict):
                 return await pause('EXISTING_CREATIVE_WEBSITE_DESTINATION_UNVERIFIED')
             revision = hashlib.sha256(json.dumps(story, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -646,9 +702,10 @@ class FirstPurchaseController:
             snapshot['creative_review_basis'] = review
             from .website_ads import owner_excluded, product_path
 
-            paths = [product_path(row.get('link', '')) for row in cards]
-            excluded = [i+1 for i, row in enumerate(cards) if owner_excluded(row)]
-            snapshot['owner_policy'] = {'excluded_card_numbers': excluded, 'duplicate_product_cards': len(paths)-len(set(paths))}
+            paths = [product_path(row.get('link', '')) for row in cards] if not is_catalog_ad else []
+            excluded = [i+1 for i, row in enumerate(cards) if owner_excluded(row)] if not is_catalog_ad else []
+            snapshot['owner_policy'] = {'excluded_card_numbers': excluded, 'duplicate_product_cards': len(paths)-len(set(paths)),
+                                        'catalog_items_checked_from_live_feed': is_catalog_ad}
             blockers = []
             if excluded:
                 blockers.append('OWNER_EXCLUDED_CREATIVE_PRODUCT')
@@ -660,8 +717,49 @@ class FirstPurchaseController:
                 blockers.append('EXISTING_SIGNED_TRACKING_CONFIGURATION_REQUIRED')
             stage = 'landing_checkout'
             source_cards = cards + ([data] if data.get('link') and data.get('link') not in {r.get('link') for r in cards} else [])
-            source_blockers = await self.sources(client, source_cards, campaign, str(ad['id']), pixel, now)
+            catalog_url_tags = str(ad.get('url_tags') or '')
+            catalog_ref = None
+            if is_catalog_ad:
+                secret = env.get('PILOT_ATTRIBUTION_SECRET') or env.get('PILOT_ADMIN_KEY', '')
+                tag_values = parse_qs(catalog_url_tags, keep_blank_values=True).get('pilot_ref', [])
+                catalog_ref = (decode_ref(tag_values[0], secret=secret, at=now)
+                               if len(tag_values) == 1 else None)
+                ref_covers_test = _catalog_tracking_tags_valid(
+                    catalog_url_tags, catalog_ref, campaign, str(ad['id']), end)
+                if not ref_covers_test and remote.get('status') == 'PAUSED' and ad.get('effective_status') in {'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED'}:
+                    issued_at = now
+                    expires_at = min(end, now + timedelta(days=7))
+                    experiment = hashlib.sha256(f'{campaign}:{ad["id"]}:{issued_at.isoformat()}'.encode()).hexdigest()
+                    new_ref = tracking_ref(campaign, str(ad['id']), experiment, secret=secret,
+                                           expires_at=expires_at, issued_at=issued_at)
+                    new_tags = urlencode({'utm_source': 'meta', 'utm_medium': 'paid_social',
+                                          'utm_campaign': campaign, 'utm_content': str(ad['id']),
+                                          'pilot_ref': new_ref})
+                    stage = 'paused_catalog_tracking_preparation'
+                    write = await client.post(base + str(ad['id']), headers=headers, data={'url_tags': new_tags})
+                    write.raise_for_status()
+                    if write.json().get('success') is not True:
+                        raise ValueError('CATALOG_TRACKING_WRITE_NOT_ACKNOWLEDGED')
+                    tracking_readback = await get(str(ad['id']), 'id,status,effective_status,url_tags')
+                    catalog_url_tags = str(tracking_readback.get('url_tags') or '')
+                    tag_values = parse_qs(catalog_url_tags, keep_blank_values=True).get('pilot_ref', [])
+                    catalog_ref = (decode_ref(tag_values[0], secret=secret, at=now)
+                                   if len(tag_values) == 1 else None)
+                    ref_covers_test = bool(str(tracking_readback.get('id')) == str(ad['id'])
+                        and _catalog_tracking_tags_valid(catalog_url_tags, catalog_ref,
+                                                         campaign, str(ad['id']), end))
+                    snapshot['catalog_tracking'] = {'url_tags_written_while_paused': True,
+                                                    'url_tags_readback_confirmed': ref_covers_test,
+                                                    'campaign_bound': bool(catalog_ref and catalog_ref.get('campaign') == campaign),
+                                                    'ad_bound': bool(catalog_ref and catalog_ref.get('ad') == str(ad['id'])),
+                                                    'expires_at': catalog_ref.get('expires') if catalog_ref else None}
+                if not ref_covers_test:
+                    blockers.append('SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED')
+            source_blockers = await self.sources(client, source_cards, campaign, str(ad['id']), pixel, now,
+                                                 dynamic_catalog=is_catalog_ad, url_tags=catalog_url_tags)
             blockers.extend(source_blockers)
+            if is_catalog_ad and getattr(self, 'catalog_feed_identity_validation', None):
+                snapshot['catalog_feed_identity_validation'] = self.catalog_feed_identity_validation
             if is_catalog_ad:
                 creative_set_id = str(creative.get('product_set_id', ''))
                 adset_set_id = str(promoted.get('product_set_id', ''))
@@ -690,24 +788,84 @@ class FirstPurchaseController:
                     except (TypeError, ValueError):
                         set_product_count = 0
                     feed_count = getattr(self, 'feed_product_count', None)
+                    feed_variants = getattr(self, 'feed_in_stock_variant_keys', None)
+                    set_members = []
+                    cursor = None
+                    membership_complete = True
+                    seen_cursors = set()
+                    for _ in range(20):
+                        params = {'fields': 'id,retailer_id,availability,review_status', 'limit': '100'}
+                        if cursor:
+                            params['after'] = cursor
+                        page_response = await client.get(base + creative_set_id + '/products', headers=headers, params=params)
+                        page_response.raise_for_status()
+                        page_data = page_response.json()
+                        if page_data.get('error') or not isinstance(page_data.get('data'), list):
+                            membership_complete = False
+                            break
+                        set_members.extend(page_data['data'])
+                        page_info = page_data.get('paging') or {}
+                        if not page_info.get('next'):
+                            break
+                        cursor = ((page_info.get('cursors') or {}).get('after'))
+                        if not cursor or cursor in seen_cursors:
+                            membership_complete = False
+                            break
+                        seen_cursors.add(cursor)
+                    else:
+                        membership_complete = False
+                    if len(set_members) != set_product_count:
+                        membership_complete = False
+                    meta_variant_keys = set()
+                    meta_eligible_records = 0
+                    malformed_meta_records = 0
+                    seen_meta_item_ids = set()
+                    for member in set_members:
+                        if not isinstance(member, dict):
+                            malformed_meta_records += 1
+                            continue
+                        item_id = str(member.get('id') or '')
+                        if not re.fullmatch(r'\d{4,30}', item_id) or item_id in seen_meta_item_ids:
+                            malformed_meta_records += 1
+                        seen_meta_item_ids.add(item_id)
+                        key = _shopify_variant_key(member.get('retailer_id'))
+                        if not key or not member.get('availability') or not member.get('review_status'):
+                            malformed_meta_records += 1
+                            continue
+                        if _catalog_available(member):
+                            if key in meta_variant_keys:
+                                malformed_meta_records += 1
+                            meta_variant_keys.add(key)
+                            meta_eligible_records += 1
+                    shopify_variant_keys = set(feed_variants or [])
+                    membership_matches = (membership_complete and feed_variants is not None
+                                          and meta_variant_keys == shopify_variant_keys and malformed_meta_records == 0)
                     snapshot['catalog_validation'].update({
                         'product_set_name': str(set_readback.get('name', ''))[:80],
                         'product_set_item_count': set_product_count,
                         'shopify_feed_item_count': feed_count,
                         'shopify_in_stock_item_count': getattr(self, 'feed_in_stock_count', None),
                         'unfiltered': raw_filter in (None, '', {}, []),
-                        'item_count_matches_shopify_feed': feed_count is not None and set_product_count == feed_count,
+                        'shopify_in_stock_variant_count': len(shopify_variant_keys),
+                        'meta_approved_in_stock_variant_count': meta_eligible_records,
+                        'product_set_membership_complete': membership_complete,
+                        'variant_membership_matches': membership_matches,
+                        'variant_membership_unmatched_shopify_count': len(shopify_variant_keys - meta_variant_keys),
+                        'variant_membership_unmatched_meta_count': len(meta_variant_keys - shopify_variant_keys),
+                        'malformed_meta_catalog_records': malformed_meta_records,
                     })
                     if (str(set_readback.get('id', '')) != creative_set_id
                             or set_product_count <= 0
                             or raw_filter not in (None, '', {}, [])
-                            or (feed_count is not None and set_product_count != feed_count)):
+                            or not membership_matches):
                         blockers.append('CATALOG_PRODUCT_SET_CONTENTS_NOT_VERIFIED')
             snapshot['site_diagnostics'] = getattr(self, 'site_diagnostics', [])
             snapshot['review_proposals'] = getattr(self, 'review_proposals', [])
             snapshot['technical_gates_passed'] = not any(b != 'EXACT_CREATIVE_PREVIEW_REVIEW_REQUIRED' for b in blockers)
             snapshot['creative_review_passed'] = bool(review)
-            snapshot['tracking_configuration_verified'] = not source_blockers and not any(b == 'EXISTING_SIGNED_TRACKING_CONFIGURATION_REQUIRED' for b in blockers)
+            snapshot['tracking_configuration_verified'] = not source_blockers and not any(
+                b in {'EXISTING_SIGNED_TRACKING_CONFIGURATION_REQUIRED', 'SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED'}
+                for b in blockers)
             if blockers:
                 return {**await pause('READINESS_GATES_NOT_PASSED'), 'blockers': blockers}
             if env.get('PILOT_LAUNCH_POLICY') != POLICY or env.get('PILOT_FIRST_PURCHASE_TEST_AUTHORIZED') != 'true' or env.get('PILOT_FIRST_PURCHASE_ACTIVATION_ENABLED') != 'true' or live_ads_dry_run(env) or env.get('ALLOW_MICRO_BUDGET') != 'true' or configured_daily_budget_limit_eur(env) != 5:
@@ -806,7 +964,7 @@ class FirstPurchaseController:
             if self.client is None:
                 await client.aclose()
 
-    async def sources(self, client, cards, campaign, ad, pixel, now):
+    async def sources(self, client, cards, campaign, ad, pixel, now, *, dynamic_catalog=False, url_tags=None):
         env = self.env
         feed_url = env.get('HOMESTRO_PRODUCT_FEED_URL', '')
         host = urlsplit(feed_url)
@@ -822,6 +980,48 @@ class FirstPurchaseController:
         from .payment_webhooks import PaymentWebhookStore, payment_database
         from .product_selection import read_cost_candidates
         from .website_ads import owner_excluded, product_path
+
+        if dynamic_catalog:
+            all_variant_keys = [_shopify_variant_key(product.id) for product in feed.products]
+            valid_variant_keys = {key for key in all_variant_keys if key}
+            self.feed_variant_count = len(feed.products)
+            self.feed_in_stock_variant_keys = {
+                key for product in feed.products
+                if product.availability == 'in_stock'
+                and (key := _shopify_variant_key(product.id)) is not None
+            }
+            in_stock_rows = [product for product in feed.products if product.availability == 'in_stock']
+            feed_identity_ok = (len(valid_variant_keys) == len(feed.products)
+                                and len(valid_variant_keys) == len(set(all_variant_keys)))
+            self.catalog_feed_identity_validation = {
+                'feed_records': len(feed.products),
+                'unique_shopify_variant_ids': len(valid_variant_keys),
+                'in_stock_variant_ids': len(self.feed_in_stock_variant_keys),
+                'all_records_have_unique_variant_ids': feed_identity_ok,
+                'in_stock_records_missing_image': sum(1 for product in in_stock_rows if not product.image_link),
+            }
+            if not feed_identity_ok:
+                return ['CATALOG_SHOPIFY_VARIANT_IDS_NOT_VERIFIABLE']
+            if any(not product.image_link for product in in_stock_rows):
+                return ['CATALOG_IN_STOCK_ITEM_IMAGE_MISSING']
+            secret = env.get('PILOT_ATTRIBUTION_SECRET') or env.get('PILOT_ADMIN_KEY', '')
+            ref_values = parse_qs(str(url_tags or ''), keep_blank_values=True).get('pilot_ref', [])
+            signed_ref = decode_ref(ref_values[0], secret=secret, at=now) if len(ref_values) == 1 else None
+            if (not signed_ref or signed_ref.get('channel') != 'meta'
+                    or signed_ref.get('campaign') != campaign or signed_ref.get('ad') != ad):
+                return ['SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED']
+            cards = [
+                {'link': tracked_url(
+                    product.link if parse_qs(urlsplit(product.link).query).get('variant')
+                    else product.link + ('&' if '?' in product.link else '?') + 'variant=' + key,
+                    ref_values[0], secret=secret, at=now),
+                 'picture': product.image_link, 'name': product.title}
+                for product in in_stock_rows[:3]
+                for key in [_shopify_variant_key(product.id)]
+            ]
+            if not cards:
+                return ['CATALOG_HAS_NO_CURRENT_IN_STOCK_VARIANTS']
+            self.catalog_feed_identity_validation['static_preview_validation_skipped'] = True
 
         self.review_proposals = []
         try:
@@ -851,7 +1051,10 @@ class FirstPurchaseController:
             if url.scheme != 'https' or url.hostname not in {'homestro.de', 'www.homestro.de'} or url.username or url.password:
                 blockers.append('CREATIVE_DESTINATION_NOT_OWN_STORE')
                 continue
-            matches = [p for p in feed.products if urlsplit(p.link).path.rstrip('/') == url.path.rstrip('/') and p.availability == 'in_stock']
+            requested_variant = parse_qs(url.query).get('variant', [None])[0]
+            matches = [p for p in feed.products if urlsplit(p.link).path.rstrip('/') == url.path.rstrip('/')
+                       and p.availability == 'in_stock'
+                       and (not requested_variant or _shopify_variant_key(p.id) == requested_variant)]
             if matches and any(owner_excluded(p.model_dump(mode='json')) for p in matches):
                 blockers.append('OWNER_EXCLUDED_CREATIVE_PRODUCT')
             if not matches:
@@ -888,7 +1091,8 @@ class FirstPurchaseController:
                         runtime_pixel_verified = configured
                 if not configured:
                     blockers.append('STOREFRONT_PIXEL_ID_MISMATCH' if configured_pixels and pixel not in configured_pixels else 'STOREFRONT_PIXEL_CONFIGURATION_NOT_OBSERVED')
-            variant = next((parse_qs(urlsplit(p.link).query).get('variant', [None])[0] for p in matches if parse_qs(urlsplit(p.link).query).get('variant')), None)
+            variant = requested_variant or next((parse_qs(urlsplit(p.link).query).get('variant', [None])[0]
+                for p in matches if parse_qs(urlsplit(p.link).query).get('variant')), None)
             if not variant or not re.fullmatch(r'\d+', variant):
                 blockers.append('CHECKOUT_VARIANT_NOT_IDENTIFIED')
                 continue

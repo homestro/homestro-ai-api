@@ -161,7 +161,11 @@ def record_paid_order(db, *, topic, payload, order_hash, blocked, env, now):
             if organic and organic['channel'] in {'facebook', 'instagram', 'tiktok', 'pinterest'}:
                 ref = organic
 
-        if not ref or params.get('utm_campaign') != [ref['campaign']] or params.get('utm_content') != [ref['ad']]:
+        # Dynamic Meta catalog URLs keep the product feed's existing UTM values
+        # and Meta appends its ad-level url_tags. Accept duplicates only when the
+        # exact signed campaign/ad pair is present; the HMAC remains authoritative.
+        if (not ref or ref['campaign'] not in params.get('utm_campaign', [])
+                or ref['ad'] not in params.get('utm_content', [])):
             return
         if ref['channel'] != 'meta' and params.get('utm_source') != [ref['channel']]:
             return
