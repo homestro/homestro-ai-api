@@ -1069,7 +1069,7 @@ class MetaPublisher:
             stage = "adsets_read"
             adsets_result = await self._get(
                 client, f"{campaign_id}/adsets", headers,
-                {"fields": "id,status,daily_budget,targeting,start_time,end_time,promoted_object", "limit": "100"},
+                {"fields": "id,status,daily_budget,targeting,start_time,end_time", "limit": "100"},
             )
             adsets = adsets_result.get("data")
             if (
@@ -1091,43 +1091,6 @@ class MetaPublisher:
             ):
                 return {"status": "blocked", "reason": "EXISTING_ADSET_LIMITS_NOT_VERIFIED",
                         "campaign_id": campaign_id, "adset_id": adset_id or None}
-
-            promoted_object = dict(adset.get("promoted_object") or {})
-            if (
-                str(promoted_object.get("pixel_id", "")) != pixel_id
-                or promoted_object.get("custom_event_type") != "PURCHASE"
-            ):
-                return {"status": "blocked", "reason": "EXISTING_ADSET_PURCHASE_PIXEL_NOT_VERIFIED",
-                        "campaign_id": campaign_id, "adset_id": adset_id}
-            desired_product_set_id = str(catalog["product_set_id"])
-            if str(promoted_object.get("product_set_id", "")) != desired_product_set_id:
-                promoted_object["product_set_id"] = desired_product_set_id
-                stage = "catalog_adset_product_set_update"
-                promoted_response = await client.post(
-                    f"{self.ENDPOINT}/{version}/{adset_id}",
-                    headers=headers,
-                    data={"promoted_object": json.dumps(promoted_object), "status": "PAUSED"},
-                )
-                self._json_response(promoted_response, require_object_id=False)
-                stage = "catalog_adset_product_set_readback"
-                adset_readback = await self._get(
-                    client, adset_id, headers,
-                    {"fields": "id,status,daily_budget,targeting,promoted_object"},
-                )
-                readback_promoted = adset_readback.get("promoted_object") or {}
-                if (
-                    str(adset_readback.get("id", "")) != adset_id
-                    or str(adset_readback.get("status", "")).upper() != "PAUSED"
-                    or str(adset_readback.get("daily_budget", "")) != "500"
-                    or str(readback_promoted.get("pixel_id", "")) != pixel_id
-                    or readback_promoted.get("custom_event_type") != "PURCHASE"
-                    or str(readback_promoted.get("product_set_id", "")) != desired_product_set_id
-                ):
-                    return {"status": "write_unconfirmed", "reason": "ADSET_PRODUCT_SET_READBACK_MISMATCH",
-                            "campaign_id": campaign_id, "adset_id": adset_id,
-                            "writes_performed": True, "activation_performed": False}
-                adset = adset_readback
-                targeting = adset.get("targeting") or {}
 
             if targeting.get("publisher_platforms") != ["facebook"]:
                 facebook_targeting = dict(targeting)
