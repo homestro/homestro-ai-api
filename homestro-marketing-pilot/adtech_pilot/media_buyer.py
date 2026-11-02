@@ -1177,6 +1177,7 @@ class MetaPublisher:
                         "adset_id": adset_id,
                         "ad_id": existing_ad_id,
                         "creative_id": existing_creative_id,
+                        "product_description_template_mapped": description_mapped,
                         "product_catalog_id": catalog["catalog_id"],
                         "product_set_id": catalog["product_set_id"],
                         "product_set_name": catalog["product_set_name"],
@@ -1261,12 +1262,13 @@ class MetaPublisher:
             if str(readback_story.get("page_id", "")) != page_id:
                 mismatch_fields.append("page_id")
             if not isinstance(readback_template, dict):
-                mismatch_fields.extend(["template_data.name", "template_data.description"])
+                mismatch_fields.append("template_data")
             else:
                 if "{{product.name}}" not in str(readback_template.get("name", "")):
                     mismatch_fields.append("template_data.name")
-                if "{{product.description}}" not in str(readback_template.get("description", "")):
-                    mismatch_fields.append("template_data.description")
+                description_template_mapped = (
+                    "{{product.description}}" in str(readback_template.get("description", ""))
+                )
             if mismatch_fields:
                 return {"status": "write_unconfirmed", "reason": "CATALOG_CREATIVE_READBACK_MISMATCH",
                         "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
