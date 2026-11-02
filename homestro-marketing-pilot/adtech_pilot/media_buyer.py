@@ -1169,7 +1169,7 @@ class MetaPublisher:
                     actual_creative_id = existing_creative_id
                     name_mapped = "{{product.name}}" in str(existing_template.get("name", ""))
                     description_mapped = "{{product.description}}" in str(existing_template.get("description", ""))
-                    if not (name_mapped and description_mapped):
+                    if not name_mapped:
                         continue
                     return {
                         "status": "catalog_verified",
