@@ -247,7 +247,8 @@ class MetaVideoQueue:
                         stage = "ad_create"
                         response = await client.post(f"{base}/act_{account}/ads", headers=headers,
                             data={"name": f"Homestro Video {job}", "adset_id": adset_id,
-                                  "creative": json.dumps({"creative_id": creative_id}), "status": "ACTIVE"})
+                                  "creative": json.dumps({"creative_id": creative_id}),
+                                  "product_set_id": product_set_id, "status": "ACTIVE"})
                         response.raise_for_status()
                         ad_id = str(response.json().get("id", ""))
                         if not re.fullmatch(r"\d{4,30}", ad_id):
