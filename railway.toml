@@ -1,9 +1,7 @@
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.homestro-fixed"
+builder = "RAILPACK"
 
 [deploy]
-startCommand = "node ./server.js"
-restartPolicyType = "ALWAYS"
-
-# Homestro fixed deployment trigger 2026-09-16
+startCommand = "python redis_check.py && celery -A celery_app:app worker --loglevel=INFO"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
