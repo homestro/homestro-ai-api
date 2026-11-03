@@ -47,13 +47,16 @@ class MetaVideoQueue:
         return {
             "worker_status": "ACTIVE" if active else "STOPPED",
             "phase": "PROCESSING" if counts.get("QUEUED", 0) or counts.get("UPLOADING", 0)
-                     or counts.get("META_VIDEO_PROCESSING", 0) else "IDLE",
+                     or counts.get("META_VIDEO_PROCESSING", 0) or counts.get("META_REVIEW_PENDING", 0) else "IDLE",
             "queued": counts.get("QUEUED", 0),
-            "processing": counts.get("UPLOADING", 0) + counts.get("META_VIDEO_PROCESSING", 0),
-            "ready_paused": counts.get("READY_PAUSED", 0),
+            "processing": counts.get("UPLOADING", 0) + counts.get("META_VIDEO_PROCESSING", 0) + counts.get("META_REVIEW_PENDING", 0),
+            "meta_review_pending": counts.get("META_REVIEW_PENDING", 0),
+            "active": counts.get("ACTIVE", 0),
+            "ads_created_after_video_ready": True,
+            "meta_review_gates_delivery": True,
             "blocked": counts.get("BLOCKED_MAPPING", 0) + counts.get("FAILED", 0),
             "higgsfield_webhook_configured": bool(self.env.get("HIGGSFIELD_WEBHOOK_SECRET")),
-            "ads_created_paused": True,
+            "ads_created_paused": False,
             "campaign_or_adset_creation": False,
             "generation_performed": False,
         }
@@ -177,7 +180,7 @@ class MetaVideoQueue:
             for media, product, row in eligible:
                 job, variant = media["job_id"], str(media["shopify_variant_id"])
                 state, video_id, creative_id, ad_id = row[2], row[3], row[4], row[5]
-                if state in TERMINAL or state == "READY_PAUSED":
+                if state in TERMINAL or state == "OWNER_PAUSED":
                     outcomes.append({"state": state})
                     continue
                 try:
@@ -228,13 +231,25 @@ class MetaVideoQueue:
                     if not ad_id:
                         response = await client.post(f"{base}/{adset_id}/ads", headers=headers,
                             data={"name": f"Homestro Video {job}", "creative": json.dumps({"creative_id": creative_id}),
-                                  "status": "PAUSED"})
+                                  "status": "ACTIVE"})
                         response.raise_for_status()
                         ad_id = str(response.json().get("id", ""))
                         if not re.fullmatch(r"\d{4,30}", ad_id):
                             raise ValueError("META_AD_ID_MISSING")
-                    self._save(job, variant, "READY_PAUSED", video_id, creative_id, ad_id, None)
-                    outcomes.append({"state": "READY_PAUSED"})
+                    readback = await client.get(f"{base}/{ad_id}", headers=headers,
+                                                params={"fields": "id,status,effective_status"})
+                    readback.raise_for_status()
+                    remote = readback.json()
+                    effective = str(remote.get("effective_status") or "").upper()
+                    if effective == "ACTIVE":
+                        final_state = "ACTIVE"
+                    elif effective in {"PAUSED", "ADSET_PAUSED", "CAMPAIGN_PAUSED"}:
+                        final_state = "OWNER_PAUSED"
+                    else:
+                        final_state = "META_REVIEW_PENDING"
+                    self._save(job, variant, final_state, video_id, creative_id, ad_id, None)
+                    outcomes.append({"state": final_state, "meta_status": str(remote.get("status") or "")[:40],
+                                     "meta_effective_status": effective[:40]})
                 except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
                     self._save(job, variant, "FAILED", video_id, creative_id, ad_id, type(exc).__name__)
                     outcomes.append({"state": "FAILED", "reason": type(exc).__name__})
