@@ -7,13 +7,19 @@ settings readback. Raw URLs and tag values are never returned or logged.
 
 from collections import Counter
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from celery_app import app
 
 MAX_FEED_ITEMS = 5000
 MAX_VALUE_LENGTH = 8192
 TRACKING_KEYS = {"fbclid", "gclid", "msclkid", "pilot_ref"}
+META_UTM = {
+    "utm_source": "meta_pilot",
+    "utm_medium": "cpc",
+    "utm_campaign": "homestro_catalog",
+}
+SHOPIFY_PRODUCT_HOST = "homestro.de"
 
 
 def _parse_tag_names(value: Any) -> list[str]:
@@ -50,6 +56,107 @@ def _catalog_setting_names(catalog_settings: Any) -> list[str]:
     # field is guessed or requested by this task.
     value = catalog_settings.get("url_tags")
     return _parse_tag_names(value)
+
+
+def _meta_product_url(value: Any) -> str | None:
+    """Build a Meta-only product URL without mutating the source feed row."""
+    if not isinstance(value, str) or not value or len(value) > MAX_VALUE_LENGTH:
+        return None
+    try:
+        parts = urlsplit(value)
+        if (
+            parts.scheme.casefold() != "https"
+            or (parts.hostname or "").casefold() != SHOPIFY_PRODUCT_HOST
+            or parts.username is not None
+            or parts.password is not None
+            or parts.port is not None
+            or not parts.path.startswith("/products/")
+            or parts.fragment
+        ):
+            return None
+        existing = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return None
+
+    # Strip stale channel attribution and click IDs, but preserve commerce
+    # parameters such as Shopify's `variant` selection.
+    kept = [
+        (key, val)
+        for key, val in existing
+        if not key.casefold().startswith("utm_")
+        and key.casefold() not in TRACKING_KEYS
+    ]
+    kept.extend(META_UTM.items())
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), ""))
+
+
+def _prepare_meta_feed(feed_items: Any) -> dict[str, Any]:
+    """Create a Meta feed projection; the supplied Shopify rows stay untouched."""
+    if not isinstance(feed_items, list) or not feed_items:
+        return {
+            "status": "blocked",
+            "reason": "SHOPIFY_FEED_ITEMS_REQUIRED",
+            "meta_feed_items": [],
+            "feed_items_seen": 0,
+            "feed_items_tagged": 0,
+            "feed_items_rejected": 0,
+        }
+
+    rows = feed_items[:MAX_FEED_ITEMS]
+    output: list[dict[str, Any]] = []
+    rejected = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            rejected += 1
+            continue
+        link_field = next(
+            (field for field in ("link", "url", "product_url") if isinstance(row.get(field), str)),
+            None,
+        )
+        tagged_url = _meta_product_url(row.get(link_field)) if link_field else None
+        if not tagged_url:
+            rejected += 1
+            continue
+        prepared = dict(row)
+        prepared[link_field] = tagged_url
+        output.append(prepared)
+
+    total_rejected = rejected + max(0, len(feed_items) - MAX_FEED_ITEMS)
+    return {
+        "status": "prepared" if output and not total_rejected else "partial" if output else "blocked",
+        "reason": None if output and not total_rejected else "INVALID_OR_NON_PRODUCT_URLS_SKIPPED",
+        "meta_feed_items": output,
+        "feed_items_seen": len(rows),
+        "feed_items_tagged": len(output),
+        "feed_items_rejected": total_rejected,
+        "utm_parameters": META_UTM,
+        "shopify_source_feed_written": False,
+        "meta_api_called": False,
+        "writes_performed": False,
+        "pilot_attribution_verified": False,
+    }
+
+
+@app.task(
+    bind=True,
+    name="media_buyer.prepare_meta_catalog_feed",
+    acks_late=True,
+    max_retries=0,
+)
+def prepare_meta_catalog_feed(
+    self,
+    feed_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Prepare a Meta-specific tagged copy of the current Shopify feed rows.
+
+    The tagged output is for the Meta catalog feed adapter. It is not written
+    back to Shopify or to an ad, and must be read back from the catalog before
+    the pilot can claim that Meta is using these destinations.
+    """
+    return {
+        "task": "media_buyer.prepare_meta_catalog_feed",
+        **_prepare_meta_feed(feed_items),
+    }
 
 
 @app.task(
@@ -116,7 +223,8 @@ def inspect_catalog_url_tags(
         "feed_parameter_occurrences": dict(sorted(feed_counts.items())),
         "catalog_setting_present": bool(setting_names),
         "catalog_setting_parameter_names": sorted(set(setting_names)),
+        "meta_catalog_url_tags_readback_confirmed": bool(setting_names),
         "meta_api_called": False,
         "writes_performed": False,
-        "attribution_verified": False,
+        "pilot_attribution_verified": False,
     }
