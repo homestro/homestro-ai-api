@@ -883,12 +883,25 @@ class FirstPurchaseController:
                             meta_variant_keys.add(key)
                             meta_eligible_records += 1
                             if key not in shopify_variant_keys and len(meta_unmatched_item_samples) < 10:
+                                item_url = str(member.get('url') or '')
+                                item_path = urlsplit(item_url).path.rstrip('/')
+                                same_path_rows = [
+                                    product for product in feed.products
+                                    if urlsplit(product.link).path.rstrip('/') == item_path
+                                ] if item_path else []
                                 meta_unmatched_item_samples.append({
                                     'id': item_id,
                                     'retailer_id': str(member.get('retailer_id') or '')[:160],
                                     'variant_id': key,
                                     'title': str(member.get('name') or '')[:180],
-                                    'url': str(member.get('url') or '')[:500],
+                                    'url': item_url[:500],
+                                    'shopify_feed_same_product_path': bool(same_path_rows),
+                                    'shopify_feed_same_path_variant_ids': [
+                                        _shopify_variant_key(product.id) for product in same_path_rows[:10]
+                                    ],
+                                    'shopify_feed_same_path_availability': [
+                                        str(product.availability)[:30] for product in same_path_rows[:10]
+                                    ],
                                 })
                     membership_matches = (membership_complete and feed_variants is not None
                                           and meta_variant_keys == shopify_variant_keys and malformed_meta_records == 0)
