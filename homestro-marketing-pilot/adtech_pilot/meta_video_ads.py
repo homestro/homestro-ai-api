@@ -248,10 +248,13 @@ class MetaVideoQueue:
                         outcomes.append({"state": "META_VIDEO_PROCESSING"})
                         continue
                     if not ad_id:
+                        saved_creative_id = str(creative_id or "")
+                        if not re.fullmatch(r"\d{4,30}", saved_creative_id):
+                            saved_creative_id = ""
                         batch_marker = str(creative_id or "")
                         batch_handle = batch_marker.removeprefix("CATALOG_BATCH:")
                         if batch_handle.startswith("{"):
-                            parsed_handle = re.search(r"""['"](?:handle|id)['"]\\s*:\\s*['"]([^'"]+)['"]""", batch_handle)
+                            parsed_handle = re.search(r"""['"](?:handle|id)['"]\s*:\s*['"]([^'"]+)['"]""", batch_handle)
                             batch_handle = parsed_handle.group(1) if parsed_handle else ""
                         if not batch_handle:
                             stage = "catalog_video_attach"
@@ -312,12 +315,12 @@ class MetaVideoQueue:
                             outcomes.append({"state": "META_VIDEO_PROCESSING",
                                              "reason": "CATALOG_PRODUCT_VIDEO_INGEST_PENDING"})
                             continue
-                        creative_id = ""
                         if shared_ad[0] and shared_ad[1]:
                             creative_id, ad_id = shared_ad
                         else:
-                            if not re.fullmatch(r"\\d{4,30}", str(creative_id or "")):
-                                    story_spec = {
+                            creative_id = saved_creative_id
+                            if not creative_id:
+                                story_spec = {
                                     "page_id": page,
                                     "template_data": {
                                         "call_to_action": {"type": "SHOP_NOW"},
@@ -386,6 +389,8 @@ class MetaVideoQueue:
                         meta_user_title = ""
                         meta_user_msg = ""
                     safe = f"META_HTTP_{exc.response.status_code}_CODE_{meta_code}_SUBCODE_{meta_subcode}_{stage}"
+                    if stage == "catalog_video_status" and meta_subcode == 1798040:
+                        creative_id = ""
                     self._save(job, variant, "FAILED", video_id, creative_id, ad_id, safe)
                     outcomes.append({"state": "FAILED", "reason": "META_API_REJECTED",
                                      "http_status": exc.response.status_code,
