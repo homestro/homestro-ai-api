@@ -801,7 +801,7 @@ class FirstPurchaseController:
                     membership_complete = True
                     seen_cursors = set()
                     for _ in range(20):
-                        params = {'fields': 'id,retailer_id,availability', 'limit': '100'}
+                        params = {'fields': 'id,retailer_id,availability,name,url', 'limit': '100'}
                         if cursor:
                             params['after'] = cursor
                         page_response = await client.get(base + creative_set_id + '/products', headers=headers, params=params)
@@ -829,6 +829,8 @@ class FirstPurchaseController:
                     seen_meta_item_ids = set()
                     meta_member_samples = []
                     meta_integrity_status_samples = []
+                    meta_unmatched_item_samples = []
+                    shopify_variant_keys = set(feed_variants or [])
                     for member in set_members:
                         if not isinstance(member, dict):
                             malformed_meta_records += 1
@@ -880,7 +882,14 @@ class FirstPurchaseController:
                                 malformed_meta_records += 1
                             meta_variant_keys.add(key)
                             meta_eligible_records += 1
-                    shopify_variant_keys = set(feed_variants or [])
+                            if key not in shopify_variant_keys and len(meta_unmatched_item_samples) < 10:
+                                meta_unmatched_item_samples.append({
+                                    'id': item_id,
+                                    'retailer_id': str(member.get('retailer_id') or '')[:160],
+                                    'variant_id': key,
+                                    'title': str(member.get('name') or '')[:180],
+                                    'url': str(member.get('url') or '')[:500],
+                                })
                     membership_matches = (membership_complete and feed_variants is not None
                                           and meta_variant_keys == shopify_variant_keys and malformed_meta_records == 0)
                     snapshot['catalog_validation'].update({
@@ -900,6 +909,7 @@ class FirstPurchaseController:
                         'malformed_meta_catalog_records': malformed_meta_records,
                         'meta_member_samples': meta_member_samples,
                         'meta_integrity_status_samples': meta_integrity_status_samples,
+                        'meta_unmatched_item_samples': meta_unmatched_item_samples,
                     })
                     if (str(set_readback.get('id', '')) != creative_set_id
                             or set_product_count <= 0
