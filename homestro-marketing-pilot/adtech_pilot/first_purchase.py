@@ -893,12 +893,12 @@ class FirstPurchaseController:
                                     if urlsplit(product.link).path.rstrip('/') == item_path
                                 ] if item_path else []
                                 title_tokens = set(re.findall(
-                                    r'[^\\W_]+', str(member.get('name') or '').casefold(), re.UNICODE
+                                    r'[a-z0-9äöüß]+', str(member.get('name') or '').casefold(), re.UNICODE
                                 ))
                                 title_matches = []
                                 for product in feed_products:
                                     product_tokens = set(re.findall(
-                                        r'[^\\W_]+', str(product.title).casefold(), re.UNICODE
+                                        r'[a-z0-9äöüß]+', str(product.title).casefold(), re.UNICODE
                                     ))
                                     union = title_tokens | product_tokens
                                     score = (len(title_tokens & product_tokens) / len(union)) if union else 0
