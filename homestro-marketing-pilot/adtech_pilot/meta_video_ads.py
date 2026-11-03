@@ -191,7 +191,7 @@ class MetaVideoQueue:
                 catalog_value = catalog_data.get("product_catalog") or {}
                 catalog_id = str(catalog_value.get("id") if isinstance(catalog_value, dict)
                                  else catalog_value or "").strip()
-                if not re.fullmatch(r"\\d{4,30}", catalog_id):
+                if not re.fullmatch(r"\d{4,30}", catalog_id):
                     return {**self.health(), "processed": 0, "reason": "ACTIVE_ADSET_CATALOG_NOT_READ"}
             except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
                 return {**self.health(), "processed": 0, "reason": "META_PREFLIGHT_" + type(exc).__name__}
@@ -330,7 +330,7 @@ class MetaVideoQueue:
                             )
                             creative_response.raise_for_status()
                             creative_id = str(creative_response.json().get("id") or "")
-                            if not re.fullmatch(r"\\d{4,30}", creative_id):
+                            if not re.fullmatch(r"\d{4,30}", creative_id):
                                 raise ValueError("META_CATALOG_CREATIVE_ID_MISSING")
                             stage = "catalog_dynamic_ad_create"
                             ad_response = await client.post(
@@ -344,7 +344,7 @@ class MetaVideoQueue:
                             )
                             ad_response.raise_for_status()
                             ad_id = str(ad_response.json().get("id") or "")
-                            if not re.fullmatch(r"\\d{4,30}", ad_id):
+                            if not re.fullmatch(r"\d{4,30}", ad_id):
                                 raise ValueError("META_CATALOG_AD_ID_MISSING")
                             shared_ad = (creative_id, ad_id)
                     stage = "ad_readback"
