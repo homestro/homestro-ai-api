@@ -114,6 +114,7 @@ class MediaRegistry:
                 if target and previous.get('source_product_url') and canonical(previous['source_product_url']) != canonical(target):
                     raise ValueError('EXISTING_JOB_PRODUCT_MAPPING_CHANGED')
                 previous['source_product_url'] = target or previous.get('source_product_url')
+                previous['source_media_url'] = url
                 previous['shopify_variant_id'] = variant_id
                 previous['matched_product_ids'] = matches
                 previous['state'] = 'review_required' if matches else 'product_mapping_required'
@@ -148,7 +149,8 @@ class MediaRegistry:
             matches = _match_products(products, variant_id=variant_id, product_url=product_url)
             row = {'job_id': job, 'provider': 'higgsfield', 'kind': kind, 'sha256': checksum,
                 'byte_count': len(payload), **facts, 'aspect_ratio': ratio,
-                'matched_product_ids': matches, 'source_product_url': product_url, 'shopify_variant_id': variant_id,
+                'matched_product_ids': matches, 'source_product_url': product_url, 'source_media_url': url,
+                'shopify_variant_id': variant_id,
                 'state': 'review_required' if matches else 'product_mapping_required',
                 'publication_queue': 'media_review', 'publication_confirmed': False,
                 'blockers': ['VISUAL_REVIEW_REQUIRED'] + ([] if matches else ['VERIFIED_PRODUCT_MAPPING_REQUIRED'])
