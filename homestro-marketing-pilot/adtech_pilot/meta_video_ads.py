@@ -210,7 +210,7 @@ class MetaVideoQueue:
                     outcomes.append({"state": "BLOCKED_MAPPING", "reason": "EXACT_SHOPIFY_VARIANT_MISMATCH"})
                     continue
                 retryable_error = str(last_error or "").startswith(
-                    ("META_HTTP_", "META_CATALOG_VIDEO_")
+                    ("META_HTTP_", "META_CATALOG_VIDEO_", "APPROVED_CATALOG_VIDEO_URL_REQUIRED")
                 )
                 if state == "FAILED" and not (
                     video_id and (
@@ -265,7 +265,7 @@ class MetaVideoQueue:
                             batch_handle = parsed_handle.group(1) if parsed_handle else ""
                         if not batch_handle:
                             stage = "catalog_video_attach"
-                            source_url = str(media.get("url") or "")
+                            source_url = str(media.get("source_media_url") or media.get("url") or "")
                             parsed_video = urlsplit(source_url)
                             if (parsed_video.scheme != "https" or parsed_video.hostname != VIDEO_HOST
                                     or parsed_video.query or parsed_video.fragment):
