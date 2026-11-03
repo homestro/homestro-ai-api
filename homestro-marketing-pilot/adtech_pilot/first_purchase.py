@@ -182,6 +182,18 @@ class FirstPurchaseStore:
                        "WHERE singleton=1 AND state='activation_intent'", (at.isoformat(), deadline.isoformat()))
         return self.read()
 
+    def record_owner_activation(self, at, remote_end):
+        """Record an owner-started activation after Meta status and spend gates pass."""
+        deadline = min(at + timedelta(days=7), remote_end)
+        with closing(self.audit._connect()) as db, db:
+            db.execute(
+                "UPDATE pilot_first_purchase_consent "
+                "SET state='active',activation_intent_at=?,activated_at=?,expires_at=? "
+                "WHERE singleton=1 AND state='authorized'",
+                (at.isoformat(), at.isoformat(), deadline.isoformat()),
+            )
+        return self.read()
+
     def stop(self, reason):
         with closing(self.audit._connect()) as db, db:
             db.execute("UPDATE pilot_first_purchase_consent SET state='stopped',stop_reason=? WHERE singleton=1", (reason,))
@@ -873,11 +885,16 @@ class FirstPurchaseController:
             # Account-wide Meta cap is verified above; no campaign spend_cap mutation.
             # Daily EUR5 and seven-day schedule remain independently enforced.
             if remote.get('status') == 'ACTIVE':
+                updated = instant(remote['updated_time'])
                 if consent['state'] == 'activation_intent':
-                    updated = instant(remote['updated_time'])
                     if updated < instant(consent['activation_intent_at']) - timedelta(seconds=60):
                         return await pause('ACTIVATION_TIME_UNCONFIRMED')
                     consent = self.store.activated(updated)
+                elif consent['state'] == 'authorized':
+                    authorized_at = instant(consent['authorized_at'])
+                    if updated < authorized_at - timedelta(seconds=60) or updated >= end or updated > now + timedelta(minutes=1):
+                        return await pause('OWNER_ACTIVATION_TIME_UNCONFIRMED')
+                    consent = self.store.record_owner_activation(updated, end)
                 if consent['state'] != 'active':
                     return await pause('UNRECORDED_PRIOR_ACTIVATION')
                 return {**snapshot, 'status': 'active_confirmed', 'consent': consent}
