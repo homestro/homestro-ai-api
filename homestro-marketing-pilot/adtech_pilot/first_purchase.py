@@ -828,6 +828,7 @@ class FirstPurchaseController:
                     malformed_meta_records = 0
                     seen_meta_item_ids = set()
                     meta_member_samples = []
+                    meta_integrity_status_samples = []
                     for member in set_members:
                         if not isinstance(member, dict):
                             malformed_meta_records += 1
@@ -841,6 +842,32 @@ class FirstPurchaseController:
                                 'availability': str(member.get('availability') or '')[:40],
                             })
                         item_id = str(member.get('id') or '')
+                        if (not meta_integrity_status_samples
+                                and re.fullmatch(r'\\d{4,30}', item_id)):
+                            try:
+                                integrity_response = await client.get(
+                                    base + item_id + '/channels_to_integrity_status',
+                                    headers=headers,
+                                    params={'fields': 'channels,rejection_information', 'limit': '10'},
+                                )
+                                integrity_response.raise_for_status()
+                                integrity_data = integrity_response.json()
+                                records = integrity_data.get('data') if isinstance(integrity_data, dict) else None
+                                meta_integrity_status_samples.append({
+                                    'product_item_id': item_id,
+                                    'records': records[:3] if isinstance(records, list) else None,
+                                    'response_keys': sorted(integrity_data.keys())[:12] if isinstance(integrity_data, dict) else [],
+                                })
+                            except httpx.HTTPStatusError as exc:
+                                meta_integrity_status_samples.append({
+                                    'product_item_id': item_id,
+                                    'http_status': exc.response.status_code,
+                                })
+                            except Exception as exc:
+                                meta_integrity_status_samples.append({
+                                    'product_item_id': item_id,
+                                    'error_type': type(exc).__name__,
+                                })
                         if not re.fullmatch(r'\d{4,30}', item_id) or item_id in seen_meta_item_ids:
                             malformed_meta_records += 1
                         seen_meta_item_ids.add(item_id)
@@ -872,6 +899,7 @@ class FirstPurchaseController:
                         'variant_membership_unmatched_meta_count': len(meta_variant_keys - shopify_variant_keys),
                         'malformed_meta_catalog_records': malformed_meta_records,
                         'meta_member_samples': meta_member_samples,
+                        'meta_integrity_status_samples': meta_integrity_status_samples,
                     })
                     if (str(set_readback.get('id', '')) != creative_set_id
                             or set_product_count <= 0
