@@ -4,12 +4,13 @@ from celery import Celery
 
 redis_url = os.environ.get("REDIS_URL")
 if not redis_url:
-    raise RuntimeError("Missing Railway environment variable REDIS_URL.")
+    raise RuntimeError("Chybí Railway proměnná REDIS_URL.")
 
 app = Celery(
     "homestro_pilot",
     broker=redis_url,
     backend=redis_url,
+    include=["tasks"],
 )
 
 app.conf.update(
