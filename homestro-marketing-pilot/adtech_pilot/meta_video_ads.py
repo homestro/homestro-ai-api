@@ -174,12 +174,31 @@ class MetaVideoQueue:
                 adset_id = str(active_sets[0]["id"])
                 if active_sets[0].get("daily_budget") and int(active_sets[0]["daily_budget"]) > 500:
                     return {**self.health(), "processed": 0, "reason": "EXISTING_ADSET_BUDGET_EXCEEDS_EUR_5"}
+                product_set_id = str(self.env.get("META_PRODUCT_SET_ID", "")).strip()
+                if not re.fullmatch(r"\d{4,30}", product_set_id):
+                    return {**self.health(), "processed": 0, "reason": "META_PRODUCT_SET_ID_REQUIRED"}
+                set_resp = await client.get(f"{base}/{product_set_id}/products", headers=headers,
+                                            params={"fields": "id,retailer_id", "limit": 500})
+                set_resp.raise_for_status()
+                set_data = set_resp.json()
+                if set_data.get("paging", {}).get("next"):
+                    return {**self.health(), "processed": 0, "reason": "META_PRODUCT_SET_READ_INCOMPLETE"}
+                meta_variants = {
+                    str(item.get("retailer_id", "")).rsplit("_", 1)[-1]
+                    for item in set_data.get("data", [])
+                    if isinstance(item, dict) and str(item.get("retailer_id", "")).rsplit("_", 1)[-1].isdigit()
+                }
             except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
                 return {**self.health(), "processed": 0, "reason": "META_PREFLIGHT_" + type(exc).__name__}
 
             for media, product, row in eligible:
                 job, variant = media["job_id"], str(media["shopify_variant_id"])
                 state, video_id, creative_id, ad_id, last_error = row[2], row[3], row[4], row[5], row[6]
+                variant_key = variant.rsplit("/", 1)[-1]
+                if variant_key not in meta_variants:
+                    self._save(job, variant, "BLOCKED_MAPPING", video_id, creative_id, ad_id, "VARIANT_NOT_IN_EXISTING_META_PRODUCT_SET")
+                    outcomes.append({"state": "BLOCKED_MAPPING", "reason": "VARIANT_NOT_IN_EXISTING_META_PRODUCT_SET"})
+                    continue
                 if state == "FAILED" and not (video_id and (last_error == "HTTPStatusError" or str(last_error or "").startswith("META_HTTP_"))):
                     outcomes.append({"state": "FAILED", "reason": "RETRY_REQUIRES_SAVED_META_VIDEO_ID"})
                     continue
@@ -229,7 +248,8 @@ class MetaVideoQueue:
                             "call_to_action": {"type": "SHOP_NOW", "value": {"link": str(product["link"])}}}}
                         stage = "creative_create"
                         response = await client.post(f"{base}/act_{account}/adcreatives", headers=headers,
-                            data={"name": f"Homestro Video {job}", "object_story_spec": json.dumps(story)})
+                            data={"name": f"Homestro Video {job}", "object_story_spec": json.dumps(story),
+                                  "product_set_id": product_set_id})
                         response.raise_for_status()
                         creative_id = str(response.json().get("id", ""))
                         if not re.fullmatch(r"\d{4,30}", creative_id):
