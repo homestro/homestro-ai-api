@@ -222,7 +222,10 @@ async def autonomous_draft_worker(
                         pass
                 result["active_confirmed"] = (
                     result.get("campaign_status") == "ACTIVE"
-                    and result.get("activation_performed") is True
+                    and (
+                        result.get("activation_performed") is True
+                        or result.get("status") == "active_campaign_unchanged"
+                    )
                 )
                 result["ownership_binding"] = (
                     "EXACT_EXISTING_CAMPAIGN" if result.get("campaign_id")
