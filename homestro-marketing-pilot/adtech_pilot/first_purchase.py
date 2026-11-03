@@ -643,7 +643,7 @@ class FirstPurchaseController:
                 if Decimal(spends['maximum'])*100 >= frozen_lifetime_cap:
                     return await pause('FROZEN_LIFETIME_TEST_CAP_REACHED', latch=True)
             stage = 'creative'
-            ads = (await get(str(adset['id']) + '/ads', 'id,status,effective_status,creative{id},ad_review_feedback,url_tags')).get('data', [])
+            ads = (await get(str(adset['id']) + '/ads', 'id,name,status,effective_status,creative{id},ad_review_feedback,url_tags')).get('data', [])
             if not isinstance(ads, list) or not ads:
                 return await pause('EXISTING_ADS_NOT_FOUND')
             catalog_ads = []
@@ -661,9 +661,42 @@ class FirstPurchaseController:
                     catalog_ads.append((candidate, candidate_creative, candidate_story))
                 elif (str(candidate_story.get('page_id')) == page and isinstance(candidate_story.get('link_data'), dict)):
                     reviewed_candidates.append((candidate, candidate_creative, candidate_story))
-            is_catalog_ad = len(catalog_ads) == 1
-            if is_catalog_ad:
+            preferred_catalog_ads = [
+                row for row in catalog_ads
+                if str(row[0].get('name', '')).strip() == 'Homestro All Products Catalog Ad'
+            ]
+            is_catalog_ad = len(catalog_ads) == 1 or len(preferred_catalog_ads) == 1
+            if len(catalog_ads) == 1:
                 ad, creative, story = catalog_ads[0]
+            elif len(preferred_catalog_ads) == 1:
+                # Keep the established all-products catalog ad as the single
+                # delivery identity. Pause other catalog ads in this ad set so
+                # the bounded test cannot split delivery across an unreviewed
+                # duplicate/video ad. Pausing is reversible; never delete ads.
+                ad, creative, story = preferred_catalog_ads[0]
+                duplicate_catalog_ads = [row[0] for row in catalog_ads if row[0] is not ad]
+                for duplicate in duplicate_catalog_ads:
+                    duplicate_id = str(duplicate.get('id', ''))
+                    if not re.fullmatch(r'\d{4,30}', duplicate_id):
+                        return await pause('DUPLICATE_CATALOG_AD_ID_INVALID')
+                    if str(duplicate.get('status', '')).upper() != 'PAUSED':
+                        stage = 'duplicate_catalog_ad_pause'
+                        response = await client.post(
+                            base + duplicate_id, headers=headers, data={'status': 'PAUSED'}
+                        )
+                        response.raise_for_status()
+                        if response.json().get('success') is not True:
+                            return await pause('DUPLICATE_CATALOG_AD_PAUSE_NOT_ACKNOWLEDGED')
+                        duplicate_readback = await get(duplicate_id, 'id,status')
+                        if (str(duplicate_readback.get('id', '')) != duplicate_id
+                                or str(duplicate_readback.get('status', '')).upper() != 'PAUSED'):
+                            return await pause('DUPLICATE_CATALOG_AD_PAUSE_NOT_CONFIRMED')
+                snapshot['ad_eligibility_diagnostic'] = {
+                    'ads_count': len(ads), 'catalog_ads_count': len(catalog_ads),
+                    'selected_ad_id': str(ad.get('id', '')),
+                    'selected_ad_name': str(ad.get('name', '')),
+                    'paused_duplicate_catalog_ad_ids': [str(row.get('id', '')) for row in duplicate_catalog_ads],
+                }
             elif not catalog_ads and len(ads) == 1 and len(reviewed_candidates) == 1:
                 ad, creative, story = reviewed_candidates[0]
             else:
