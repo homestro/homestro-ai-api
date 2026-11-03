@@ -24,6 +24,11 @@ SHOPIFY_PRODUCT_HOST = "homestro.de"
 
 def _parse_tag_names(value: Any) -> list[str]:
     """Return query parameter names only; never retain parameter values."""
+    return [name for name, _ in _parse_tag_pairs(value)]
+
+
+def _parse_tag_pairs(value: Any) -> list[tuple[str, str]]:
+    """Parse a URL or query string into bounded pairs for exact readback checks."""
     if not isinstance(value, str) or not value.strip():
         return []
     value = value.strip()[:MAX_VALUE_LENGTH]
@@ -39,8 +44,11 @@ def _parse_tag_names(value: Any) -> list[str]:
         return []
 
     try:
-        return [name.casefold() for name, _ in parse_qsl(query, keep_blank_values=False)
-                if name and len(name) <= 100]
+        return [
+            (name.casefold(), val[:MAX_VALUE_LENGTH])
+            for name, val in parse_qsl(query, keep_blank_values=False)
+            if name and len(name) <= 100
+        ]
     except ValueError:
         return []
 
@@ -56,6 +64,18 @@ def _catalog_setting_names(catalog_settings: Any) -> list[str]:
     # field is guessed or requested by this task.
     value = catalog_settings.get("url_tags")
     return _parse_tag_names(value)
+
+
+def _catalog_setting_matches_expected(catalog_settings: Any) -> bool:
+    if not isinstance(catalog_settings, dict):
+        return False
+    pairs = _parse_tag_pairs(catalog_settings.get("url_tags"))
+    # Require exactly one of each generated value. Duplicate or conflicting
+    # UTM keys make attribution ambiguous, even if the expected value is present.
+    return all(
+        [value for name, value in pairs if name == expected_name] == [expected_value]
+        for expected_name, expected_value in META_UTM.items()
+    )
 
 
 def _meta_product_url(value: Any) -> str | None:
@@ -196,6 +216,7 @@ def inspect_catalog_url_tags(
             tagged_rows += 1
 
     setting_names = _tracking_names(_catalog_setting_names(catalog_settings))
+    setting_matches = _catalog_setting_matches_expected(catalog_settings)
     source = []
     if rows:
         source.append("product_feed_snapshot")
@@ -205,6 +226,9 @@ def inspect_catalog_url_tags(
     if not source:
         status = "blocked"
         reason = "READ_ONLY_FEED_OR_CATALOG_READBACK_REQUIRED"
+    elif isinstance(catalog_settings, dict) and setting_names and not setting_matches:
+        status = "mismatch"
+        reason = "CATALOG_URL_TAGS_DO_NOT_MATCH_META_UTM_CONFIGURATION"
     elif feed_counts or setting_names:
         status = "readback_confirmed"
         reason = None
@@ -223,7 +247,8 @@ def inspect_catalog_url_tags(
         "feed_parameter_occurrences": dict(sorted(feed_counts.items())),
         "catalog_setting_present": bool(setting_names),
         "catalog_setting_parameter_names": sorted(set(setting_names)),
-        "meta_catalog_url_tags_readback_confirmed": bool(setting_names),
+        "catalog_setting_matches_expected_utm": setting_matches,
+        "meta_catalog_url_tags_readback_confirmed": setting_matches,
         "meta_api_called": False,
         "writes_performed": False,
         "pilot_attribution_verified": False,
