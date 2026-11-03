@@ -1024,11 +1024,6 @@ class MetaPublisher:
             == account_id.removeprefix("act_")
         )
 
-        catalog = await self.check_catalog_access(expected_product_count=feed_record_count)
-        if catalog.get("status") != "checked":
-            return {"status": "blocked", "reason": catalog.get("reason", "META_ALL_PRODUCTS_SET_NOT_VERIFIED"),
-                    "catalog_check": catalog}
-
         own_client = self.client is None
         client = self.client or httpx.AsyncClient(
             timeout=httpx.Timeout(35, connect=8), follow_redirects=False
@@ -1077,6 +1072,11 @@ class MetaPublisher:
             if campaign_status != "PAUSED":
                 return {"status": "blocked", "reason": "OWNED_CAMPAIGN_STATUS_NOT_PAUSED",
                         "campaign_id": campaign_id, "campaign_status": campaign_status}
+
+            catalog = await self.check_catalog_access(expected_product_count=feed_record_count)
+            if catalog.get("status") != "checked":
+                return {"status": "blocked", "reason": catalog.get("reason", "META_ALL_PRODUCTS_SET_NOT_VERIFIED"),
+                        "catalog_check": catalog}
 
             stage = "adsets_read"
             adsets_result = await self._get(
