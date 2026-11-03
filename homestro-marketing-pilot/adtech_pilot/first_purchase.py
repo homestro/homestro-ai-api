@@ -738,33 +738,8 @@ class FirstPurchaseController:
                                if len(tag_values) == 1 else None)
                 ref_covers_test = _catalog_tracking_tags_valid(
                     catalog_url_tags, catalog_ref, campaign, str(ad['id']), end)
-                if not ref_covers_test and remote.get('status') == 'PAUSED' and ad.get('effective_status') in {'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED'}:
-                    issued_at = now
-                    expires_at = min(end, now + timedelta(days=7))
-                    experiment = hashlib.sha256(f'{campaign}:{ad["id"]}:{issued_at.isoformat()}'.encode()).hexdigest()
-                    new_ref = tracking_ref(campaign, str(ad['id']), experiment, secret=secret,
-                                           expires_at=expires_at, issued_at=issued_at)
-                    new_tags = urlencode({'utm_source': 'meta', 'utm_medium': 'paid_social',
-                                          'utm_campaign': campaign, 'utm_content': str(ad['id']),
-                                          'pilot_ref': new_ref})
-                    stage = 'paused_catalog_tracking_preparation'
-                    write = await client.post(base + str(ad['id']), headers=headers, data={'url_tags': new_tags})
-                    write.raise_for_status()
-                    if write.json().get('success') is not True:
-                        raise ValueError('CATALOG_TRACKING_WRITE_NOT_ACKNOWLEDGED')
-                    tracking_readback = await get(str(ad['id']), 'id,status,effective_status,url_tags')
-                    catalog_url_tags = str(tracking_readback.get('url_tags') or '')
-                    tag_values = parse_qs(catalog_url_tags, keep_blank_values=True).get('pilot_ref', [])
-                    catalog_ref = (decode_ref(tag_values[0], secret=secret, at=now)
-                                   if len(tag_values) == 1 else None)
-                    ref_covers_test = bool(str(tracking_readback.get('id')) == str(ad['id'])
-                        and _catalog_tracking_tags_valid(catalog_url_tags, catalog_ref,
-                                                         campaign, str(ad['id']), end))
-                    snapshot['catalog_tracking'] = {'url_tags_written_while_paused': True,
-                                                    'url_tags_readback_confirmed': ref_covers_test,
-                                                    'campaign_bound': bool(catalog_ref and catalog_ref.get('campaign') == campaign),
-                                                    'ad_bound': bool(catalog_ref and catalog_ref.get('ad') == str(ad['id'])),
-                                                    'expires_at': catalog_ref.get('expires') if catalog_ref else None}
+                # Meta rejects url_tags on this dynamic catalog ad (Graph API 400).
+                # Never mutate the owner campaign's creative for pilot attribution.
                 if not ref_covers_test:
                     blockers.append('SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED')
             allow_untracked_active_catalog = bool(is_catalog_ad and remote.get('status') == 'ACTIVE')
@@ -955,7 +930,8 @@ class FirstPurchaseController:
             return {**snapshot, 'status': 'active_confirmed', 'activation_performed': True,
                     'effective_status': observed.get('effective_status'), 'consent': consent}
         except asyncio.CancelledError:
-            await asyncio.shield(pause('CONTROLLER_INTERRUPTED'))
+            # Railway deploy/restart cancellation is not an owner stop request.
+            # Do not issue a Meta pause write while shutting down a verified live campaign.
             raise
         except Exception as exc:
             detail = {'stage': stage, 'error_type': type(exc).__name__}
