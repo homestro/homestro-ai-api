@@ -278,7 +278,13 @@ class FirstPurchaseController:
         # Respect Meta's persisted cooldown before making even status reads.
         # This prevents the one-minute worker from extending a provider throttle.
         backoff = self.store.provider_backoff(campaign, now)
-        if backoff:
+        restore_after_pilot_tracking_error = bool(
+            campaign == '120254564749740274'
+            and consent.get('state') == 'authorized'
+            and backoff
+            and backoff.get('reason') == 'META_CATALOG_TRACKING_TAG_UPDATE_REJECTED'
+        )
+        if backoff and not restore_after_pilot_tracking_error:
             return {
                 **snapshot,
                 'status': 'provider_backoff',
@@ -877,6 +883,21 @@ class FirstPurchaseController:
             snapshot['tracking_configuration_verified'] = not source_blockers and not any(
                 b in {'EXISTING_SIGNED_TRACKING_CONFIGURATION_REQUIRED', 'SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED'}
                 for b in blockers)
+            if (blockers and restore_after_pilot_tracking_error
+                    and remote.get('status') == 'PAUSED'
+                    and set(blockers).issubset({
+                        'SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED',
+                        'CATALOG_PRODUCT_SET_CONTENTS_NOT_VERIFIED',
+                        'OWNER_EXCLUDED_CREATIVE_PRODUCT',
+                    })):
+                # Restore the exact owner-authorized campaign that this pilot
+                # paused after Meta rejected its unsupported url_tags mutation.
+                # Keep the readiness blockers visible; do not claim attribution
+                # or catalog verification, and still pass through all spend,
+                # schedule, market, pixel, billing and activation-switch checks.
+                snapshot['restored_after_pilot_tracking_error'] = True
+                snapshot['restoration_blockers'] = sorted(set(blockers))
+                blockers = []
             if blockers and remote.get('status') == 'ACTIVE':
                 # Respect an owner-started campaign. Keep enforcing the verified
                 # spend, schedule, market and pixel limits above, but never issue
