@@ -145,7 +145,9 @@ def _validate_creative(value: Any) -> dict[str, Any]:
 @app.task(
     bind=True,
     name="creative.generate_product_copy_and_flux_prompt",
-    acks_late=True,
+    # Acknowledge before execution to avoid automatic redelivery after a worker
+    # crash during a paid OpenAI request. Dispatch a replacement deliberately.
+    acks_late=False,
     max_retries=0,
 )
 def generate_creative(self, product: dict[str, Any] | None = None) -> dict[str, Any]:
