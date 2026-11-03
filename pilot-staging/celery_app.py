@@ -10,7 +10,7 @@ app = Celery(
     "homestro_pilot",
     broker=redis_url,
     backend=redis_url,
-    include=["tasks"],
+    include=["tasks", "agents.kreativni_agent"],
 )
 
 app.conf.update(
