@@ -843,7 +843,7 @@ class FirstPurchaseController:
                             })
                         item_id = str(member.get('id') or '')
                         if (not meta_integrity_status_samples
-                                and re.fullmatch(r'\\d{4,30}', item_id)):
+                                and re.fullmatch(r'\d{4,30}', item_id)):
                             try:
                                 integrity_response = await client.get(
                                     base + item_id + '/channels_to_integrity_status',
