@@ -179,8 +179,11 @@ class MetaVideoQueue:
 
             for media, product, row in eligible:
                 job, variant = media["job_id"], str(media["shopify_variant_id"])
-                state, video_id, creative_id, ad_id = row[2], row[3], row[4], row[5]
-                if state in TERMINAL or state == "OWNER_PAUSED":
+                state, video_id, creative_id, ad_id, last_error = row[2], row[3], row[4], row[5], row[6]
+                if state == "FAILED" and not (video_id and (last_error == "HTTPStatusError" or str(last_error or "").startswith("META_HTTP_"))):
+                    outcomes.append({"state": "FAILED", "reason": "RETRY_REQUIRES_SAVED_META_VIDEO_ID"})
+                    continue
+                if state == "BLOCKED_MAPPING" or state == "OWNER_PAUSED":
                     outcomes.append({"state": state})
                     continue
                 try:
@@ -250,6 +253,20 @@ class MetaVideoQueue:
                     self._save(job, variant, final_state, video_id, creative_id, ad_id, None)
                     outcomes.append({"state": final_state, "meta_status": str(remote.get("status") or "")[:40],
                                      "meta_effective_status": effective[:40]})
+                except httpx.HTTPStatusError as exc:
+                    meta_code = None
+                    meta_subcode = None
+                    try:
+                        error = exc.response.json().get("error", {})
+                        meta_code = error.get("code")
+                        meta_subcode = error.get("error_subcode")
+                    except (ValueError, AttributeError):
+                        pass
+                    safe = f"META_HTTP_{exc.response.status_code}_CODE_{meta_code}_SUBCODE_{meta_subcode}"
+                    self._save(job, variant, "FAILED", video_id, creative_id, ad_id, safe)
+                    outcomes.append({"state": "FAILED", "reason": "META_API_REJECTED",
+                                     "http_status": exc.response.status_code,
+                                     "meta_error_code": meta_code, "meta_error_subcode": meta_subcode})
                 except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
                     self._save(job, variant, "FAILED", video_id, creative_id, ad_id, type(exc).__name__)
                     outcomes.append({"state": "FAILED", "reason": type(exc).__name__})
