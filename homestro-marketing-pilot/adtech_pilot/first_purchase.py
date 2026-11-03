@@ -32,7 +32,7 @@ RETIRED_ARCHIVED_CAMPAIGN_ID = '120254444566440274'
 def _shopify_variant_key(value):
     """Return a numeric Shopify variant key from known Shopify feed/API IDs."""
     text = str(value or '').strip()
-    match = re.fullmatch(r'gid://shopify/ProductVariant/(\d+)', text)
+    match = re.fullmatch(r'(?:gid://shopify/ProductVariant/|gid-shopify-ProductVariant-)(\d+)', text)
     if match:
         return match.group(1)
     if re.fullmatch(r'\d+', text):
@@ -845,10 +845,20 @@ class FirstPurchaseController:
                     meta_eligible_records = 0
                     malformed_meta_records = 0
                     seen_meta_item_ids = set()
+                    meta_member_samples = []
                     for member in set_members:
                         if not isinstance(member, dict):
                             malformed_meta_records += 1
                             continue
+                        if len(meta_member_samples) < 5:
+                            raw_retailer_id = str(member.get('retailer_id') or '')
+                            meta_member_samples.append({
+                                'id': str(member.get('id') or ''),
+                                'retailer_id': raw_retailer_id[:160],
+                                'parsed_shopify_variant_id': _shopify_variant_key(raw_retailer_id),
+                                'availability': str(member.get('availability') or '')[:40],
+                                'review_status': str(member.get('review_status') or '')[:40],
+                            })
                         item_id = str(member.get('id') or '')
                         if not re.fullmatch(r'\d{4,30}', item_id) or item_id in seen_meta_item_ids:
                             malformed_meta_records += 1
@@ -878,6 +888,7 @@ class FirstPurchaseController:
                         'variant_membership_unmatched_shopify_count': len(shopify_variant_keys - meta_variant_keys),
                         'variant_membership_unmatched_meta_count': len(meta_variant_keys - shopify_variant_keys),
                         'malformed_meta_catalog_records': malformed_meta_records,
+                        'meta_member_samples': meta_member_samples,
                     })
                     if (str(set_readback.get('id', '')) != creative_set_id
                             or set_product_count <= 0
