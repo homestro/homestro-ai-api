@@ -213,7 +213,9 @@ class MetaVideoQueue:
                     ("META_HTTP_", "META_CATALOG_VIDEO_")
                 )
                 if state == "FAILED" and not (
-                    video_id and (last_error == "HTTPStatusError" or retryable_error)
+                    video_id and (
+                        last_error in {"HTTPStatusError", "ValueError"} or retryable_error
+                    )
                 ):
                     outcomes.append({"state": "FAILED", "reason": "RETRY_REQUIRES_SAVED_META_VIDEO_ID"})
                     continue
