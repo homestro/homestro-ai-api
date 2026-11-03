@@ -328,7 +328,7 @@ class FirstPurchaseController:
             if consent.get('expires_at') and now >= instant(consent['expires_at']):
                 return await pause('TEST_EXPIRED', latch=True)
             backoff = self.store.provider_backoff(campaign, now)
-            if backoff:
+            if backoff and not restore_after_pilot_tracking_error:
                 # Independently read campaign status above on every cycle. A
                 # cooldown must never leave an externally resumed ad spending.
                 if remote.get('status') != 'PAUSED':
