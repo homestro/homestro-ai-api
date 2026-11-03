@@ -925,13 +925,18 @@ class FirstPurchaseController:
                         # Meta rejected the fallback cap. Stop the minute-by-minute
                         # retry loop and retain a sanitized provider explanation.
                         self.store.defer_provider(campaign, 'META_NATIVE_100EUR_CAP_FALLBACK_REJECTED', now, 21600)
-                    if error.get('code') == 100 and stage in {'paused_native_cap_preparation', 'paused_native_lifetime_budget_preparation', 'paused_native_100eur_cap_fallback'}:
-                        # Parameter errors may explain a provider minimum. Keep
-                        # bounded human labels only, never payloads/URLs/credentials.
+                    if error.get('code') == 100:
+                        if stage == 'paused_catalog_tracking_preparation':
+                            # Avoid retrying a rejected tracking mutation every worker cycle.
+                            self.store.defer_provider(
+                                campaign, 'META_CATALOG_TRACKING_TAG_UPDATE_REJECTED', now, 900
+                            )
+                        # Keep the provider's bounded diagnostic, never payloads,
+                        # URLs or credentials. This identifies the rejected field.
                         for key in ('error_user_title', 'error_user_msg', 'message'):
                             value = error.get(key)
                             if isinstance(value, str):
-                                value = re.sub(r'https?://\S+|\b[A-Za-z0-9_-]{40,}\b|\bEA[A-Za-z0-9]{15,}\b|sk-[A-Za-z0-9_-]+', '[redacted]', value)
+                                value = re.sub(r'https?://\\S+|\\b[A-Za-z0-9_-]{40,}\\b|\\bEA[A-Za-z0-9]{15,}\\b|sk-[A-Za-z0-9_-]+', '[redacted]', value)
                                 detail[key] = value[:800]
                 except (ValueError, TypeError, AttributeError):
                     pass
