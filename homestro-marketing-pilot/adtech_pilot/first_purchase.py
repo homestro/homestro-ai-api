@@ -929,8 +929,11 @@ class FirstPurchaseController:
                                         for score, product in title_matches[:3]
                                     ],
                                 })
-                    membership_matches = (membership_complete and feed_variants is not None
-                                          and meta_variant_keys == shopify_variant_keys and malformed_meta_records == 0)
+                    feed_coverage_verified = (membership_complete and feed_variants is not None
+                                               and shopify_variant_keys.issubset(meta_variant_keys)
+                                               and malformed_meta_records == 0)
+                    membership_matches = (feed_coverage_verified
+                                          and meta_variant_keys == shopify_variant_keys)
                     snapshot['catalog_validation'].update({
                         'product_set_name': str(set_readback.get('name', ''))[:80],
                         'product_set_item_count': set_product_count,
@@ -943,8 +946,10 @@ class FirstPurchaseController:
                         'meta_approval_status': 'not_verified_review_status_deprecated',
                         'product_set_membership_complete': membership_complete,
                         'variant_membership_matches': membership_matches,
+                        'shopify_feed_coverage_verified': feed_coverage_verified,
                         'variant_membership_unmatched_shopify_count': len(shopify_variant_keys - meta_variant_keys),
                         'variant_membership_unmatched_meta_count': len(meta_variant_keys - shopify_variant_keys),
+                        'meta_items_outside_curated_feed_count': len(meta_variant_keys - shopify_variant_keys),
                         'malformed_meta_catalog_records': malformed_meta_records,
                         'meta_member_samples': meta_member_samples,
                         'meta_integrity_status_samples': meta_integrity_status_samples,
@@ -953,7 +958,7 @@ class FirstPurchaseController:
                     if (str(set_readback.get('id', '')) != creative_set_id
                             or set_product_count <= 0
                             or raw_filter not in (None, '', {}, [])
-                            or not membership_matches):
+                            or not feed_coverage_verified):
                         blockers.append('CATALOG_PRODUCT_SET_CONTENTS_NOT_VERIFIED')
             snapshot['site_diagnostics'] = getattr(self, 'site_diagnostics', [])
             snapshot['review_proposals'] = getattr(self, 'review_proposals', [])
