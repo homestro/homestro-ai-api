@@ -767,9 +767,22 @@ class FirstPurchaseController:
                                                     'expires_at': catalog_ref.get('expires') if catalog_ref else None}
                 if not ref_covers_test:
                     blockers.append('SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED')
+            allow_untracked_active_catalog = bool(is_catalog_ad and remote.get('status') == 'ACTIVE')
             source_blockers = await self.sources(client, source_cards, campaign, str(ad['id']), pixel, now,
-                                                 dynamic_catalog=is_catalog_ad, url_tags=catalog_url_tags)
+                                                 dynamic_catalog=is_catalog_ad, url_tags=catalog_url_tags,
+                                                 allow_untracked_catalog=allow_untracked_active_catalog)
             blockers.extend(source_blockers)
+            if allow_untracked_active_catalog and 'SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED' in blockers:
+                # The owner already started this exact, bounded campaign in Meta.
+                # Keep validating feed, landing, pixel and checkout, but do not
+                # pause a live catalog solely because Meta rejected url_tags.
+                blockers = [b for b in blockers if b != 'SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED']
+                snapshot['catalog_tracking'] = {
+                    'url_tags_readback_confirmed': False,
+                    'pilot_attribution_verified': False,
+                    'active_owner_campaign_kept_live': True,
+                    'reason': 'META_REJECTED_CATALOG_URL_TAG_WRITE',
+                }
             if is_catalog_ad and getattr(self, 'catalog_feed_identity_validation', None):
                 snapshot['catalog_feed_identity_validation'] = self.catalog_feed_identity_validation
             if is_catalog_ad:
@@ -986,7 +999,7 @@ class FirstPurchaseController:
             if self.client is None:
                 await client.aclose()
 
-    async def sources(self, client, cards, campaign, ad, pixel, now, *, dynamic_catalog=False, url_tags=None):
+    async def sources(self, client, cards, campaign, ad, pixel, now, *, dynamic_catalog=False, url_tags=None, allow_untracked_catalog=False):
         env = self.env
         feed_url = env.get('HOMESTRO_PRODUCT_FEED_URL', '')
         host = urlsplit(feed_url)
@@ -1029,18 +1042,18 @@ class FirstPurchaseController:
             secret = env.get('PILOT_ATTRIBUTION_SECRET') or env.get('PILOT_ADMIN_KEY', '')
             ref_values = parse_qs(str(url_tags or ''), keep_blank_values=True).get('pilot_ref', [])
             signed_ref = decode_ref(ref_values[0], secret=secret, at=now) if len(ref_values) == 1 else None
-            if (not signed_ref or signed_ref.get('channel') != 'meta'
-                    or signed_ref.get('campaign') != campaign or signed_ref.get('ad') != ad):
+            signed_ref_valid = bool(signed_ref and signed_ref.get('channel') == 'meta'
+                and signed_ref.get('campaign') == campaign and signed_ref.get('ad') == ad)
+            if not signed_ref_valid and not allow_untracked_catalog:
                 return ['SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED']
-            cards = [
-                {'link': tracked_url(
-                    product.link if parse_qs(urlsplit(product.link).query).get('variant')
-                    else product.link + ('&' if '?' in product.link else '?') + 'variant=' + key,
-                    ref_values[0], secret=secret, at=now),
-                 'picture': product.image_link, 'name': product.title}
-                for product in in_stock_rows[:3]
-                for key in [_shopify_variant_key(product.id)]
-            ]
+            cards = []
+            for product in in_stock_rows[:3]:
+                key = _shopify_variant_key(product.id)
+                product_url = (product.link if parse_qs(urlsplit(product.link).query).get('variant')
+                    else product.link + ('&' if '?' in product.link else '?') + 'variant=' + key)
+                link = (tracked_url(product_url, ref_values[0], secret=secret, at=now)
+                    if signed_ref_valid else product_url)
+                cards.append({'link': link, 'picture': product.image_link, 'name': product.title})
             if not cards:
                 return ['CATALOG_HAS_NO_CURRENT_IN_STOCK_VARIANTS']
             self.catalog_feed_identity_validation['static_preview_validation_skipped'] = True
@@ -1086,8 +1099,9 @@ class FirstPurchaseController:
                 blockers.append('CREATIVE_IMAGE_NOT_CURRENT_SOURCE')
             tag = parse_qs(url.query).get('pilot_ref', [None])[0]
             ref = decode_ref(tag, secret=env.get('PILOT_ATTRIBUTION_SECRET') or env.get('PILOT_ADMIN_KEY', ''), at=now)
-            if not ref or ref['channel'] != 'meta' or ref['campaign'] != campaign or ref['ad'] != ad:
-                blockers.append('SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED')
+            if (not ref or ref['channel'] != 'meta' or ref['campaign'] != campaign or ref['ad'] != ad):
+                if not (dynamic_catalog and allow_untracked_catalog):
+                    blockers.append('SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED')
             landing = await client.get(card['link'])
             if landing.status_code != 200 or len(landing.content) > 2 * 1024 * 1024 or '<form' not in landing.text or '/cart/add' not in landing.text:
                 blockers.append('LANDING_OR_ADD_TO_CART_NOT_AVAILABLE')
