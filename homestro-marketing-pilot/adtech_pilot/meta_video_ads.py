@@ -209,7 +209,12 @@ class MetaVideoQueue:
                     self._save(job, variant, "BLOCKED_MAPPING", video_id, creative_id, ad_id, "EXACT_SHOPIFY_VARIANT_MISMATCH")
                     outcomes.append({"state": "BLOCKED_MAPPING", "reason": "EXACT_SHOPIFY_VARIANT_MISMATCH"})
                     continue
-                if state == "FAILED" and not (video_id and (last_error == "HTTPStatusError" or str(last_error or "").startswith("META_HTTP_"))):
+                retryable_error = str(last_error or "").startswith(
+                    ("META_HTTP_", "META_CATALOG_VIDEO_")
+                )
+                if state == "FAILED" and not (
+                    video_id and (last_error == "HTTPStatusError" or retryable_error)
+                ):
                     outcomes.append({"state": "FAILED", "reason": "RETRY_REQUIRES_SAVED_META_VIDEO_ID"})
                     continue
                 if state == "BLOCKED_MAPPING" or state == "OWNER_PAUSED":
@@ -397,8 +402,9 @@ class MetaVideoQueue:
                                      "meta_error_code": meta_code, "meta_error_subcode": meta_subcode, "stage": stage,
                                      "meta_user_title": meta_user_title, "meta_user_message": meta_user_msg})
                 except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
-                    self._save(job, variant, "FAILED", video_id, creative_id, ad_id, type(exc).__name__)
-                    outcomes.append({"state": "FAILED", "reason": type(exc).__name__})
+                    safe_error = str(exc)[:120] if isinstance(exc, ValueError) else type(exc).__name__
+                    self._save(job, variant, "FAILED", video_id, creative_id, ad_id, safe_error)
+                    outcomes.append({"state": "FAILED", "reason": safe_error})
         return {**self.health(), "processed": len(outcomes), "results": outcomes}
 
     def _save(self, job, variant, state, video, creative, ad, error):
