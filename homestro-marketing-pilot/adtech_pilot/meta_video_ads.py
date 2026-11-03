@@ -186,6 +186,7 @@ class MetaVideoQueue:
                 if state == "BLOCKED_MAPPING" or state == "OWNER_PAUSED":
                     outcomes.append({"state": state})
                     continue
+                stage = "video_upload"
                 try:
                     if state == "UPLOADING" and not video_id:
                         self._save(job, variant, "FAILED", video_id, creative_id, ad_id, "UPLOAD_OUTCOME_UNKNOWN")
@@ -208,6 +209,7 @@ class MetaVideoQueue:
                             raise ValueError("META_VIDEO_ID_MISSING")
                         state = "META_VIDEO_PROCESSING"
                         self._save(job, variant, state, video_id, creative_id, ad_id, None)
+                    stage = "video_status"
                     status_resp = await client.get(f"{base}/{video_id}", headers=headers, params={"fields": "status"})
                     status_resp.raise_for_status()
                     status = status_resp.json().get("status") or {}
@@ -225,6 +227,7 @@ class MetaVideoQueue:
                             "message": "Entdecke das Produkt bei Homestro.",
                             "title": str(product.get("title") or "Homestro")[:80],
                             "call_to_action": {"type": "SHOP_NOW", "value": {"link": str(product["link"])}}}}
+                        stage = "creative_create"
                         response = await client.post(f"{base}/act_{account}/adcreatives", headers=headers,
                             data={"name": f"Homestro Video {job}", "object_story_spec": json.dumps(story)})
                         response.raise_for_status()
@@ -232,6 +235,7 @@ class MetaVideoQueue:
                         if not re.fullmatch(r"\d{4,30}", creative_id):
                             raise ValueError("META_CREATIVE_ID_MISSING")
                     if not ad_id:
+                        stage = "ad_create"
                         response = await client.post(f"{base}/{adset_id}/ads", headers=headers,
                             data={"name": f"Homestro Video {job}", "creative": json.dumps({"creative_id": creative_id}),
                                   "status": "ACTIVE"})
@@ -239,6 +243,7 @@ class MetaVideoQueue:
                         ad_id = str(response.json().get("id", ""))
                         if not re.fullmatch(r"\d{4,30}", ad_id):
                             raise ValueError("META_AD_ID_MISSING")
+                    stage = "ad_readback"
                     readback = await client.get(f"{base}/{ad_id}", headers=headers,
                                                 params={"fields": "id,status,effective_status"})
                     readback.raise_for_status()
@@ -262,11 +267,11 @@ class MetaVideoQueue:
                         meta_subcode = error.get("error_subcode")
                     except (ValueError, AttributeError):
                         pass
-                    safe = f"META_HTTP_{exc.response.status_code}_CODE_{meta_code}_SUBCODE_{meta_subcode}"
+                    safe = f"META_HTTP_{exc.response.status_code}_CODE_{meta_code}_SUBCODE_{meta_subcode}_{stage}"
                     self._save(job, variant, "FAILED", video_id, creative_id, ad_id, safe)
                     outcomes.append({"state": "FAILED", "reason": "META_API_REJECTED",
                                      "http_status": exc.response.status_code,
-                                     "meta_error_code": meta_code, "meta_error_subcode": meta_subcode})
+                                     "meta_error_code": meta_code, "meta_error_subcode": meta_subcode, "stage": stage})
                 except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
                     self._save(job, variant, "FAILED", video_id, creative_id, ad_id, type(exc).__name__)
                     outcomes.append({"state": "FAILED", "reason": type(exc).__name__})
