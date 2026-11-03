@@ -1061,10 +1061,22 @@ class MetaPublisher:
                 or str(campaign.get("account_id", "")).removeprefix("act_")
                     != account_id.removeprefix("act_")
                 or campaign.get("objective") != "OUTCOME_SALES"
-                or str(campaign.get("status", "")).upper() != "PAUSED"
             ):
-                return {"status": "blocked", "reason": "OWNED_PAUSED_CAMPAIGN_READBACK_FAILED",
+                return {"status": "blocked", "reason": "OWNED_CAMPAIGN_IDENTITY_READBACK_FAILED",
                         "campaign_id": campaign_id}
+            campaign_status = str(campaign.get("status", "")).upper()
+            if campaign_status == "ACTIVE":
+                return {
+                    "status": "active_campaign_unchanged",
+                    "reason": "PILOT_CATALOG_PREPARATION_NOT_NEEDED_WHILE_LIVE",
+                    "campaign_id": campaign_id,
+                    "campaign_status": campaign_status,
+                    "writes_performed": False,
+                    "activation_performed": False,
+                }
+            if campaign_status != "PAUSED":
+                return {"status": "blocked", "reason": "OWNED_CAMPAIGN_STATUS_NOT_PAUSED",
+                        "campaign_id": campaign_id, "campaign_status": campaign_status}
 
             stage = "adsets_read"
             adsets_result = await self._get(
