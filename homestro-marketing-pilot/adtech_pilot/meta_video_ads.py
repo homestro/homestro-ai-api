@@ -164,7 +164,7 @@ class MetaVideoQueue:
                 if str(camp_resp.json().get("status", "")).upper() != "ACTIVE":
                     return {**self.health(), "processed": 0, "reason": "EXISTING_CAMPAIGN_NOT_ACTIVE"}
                 set_resp = await client.get(f"{base}/{campaign}/adsets", headers=headers,
-                                            params={"fields": "id,status,effective_status,daily_budget", "limit": 50})
+                                            params={"fields": "id,status,effective_status,daily_budget,promoted_object", "limit": 50})
                 set_resp.raise_for_status()
                 sets = set_resp.json().get("data", [])
                 active_sets = [x for x in sets if x.get("status") == "ACTIVE" and
@@ -174,9 +174,13 @@ class MetaVideoQueue:
                 adset_id = str(active_sets[0]["id"])
                 if active_sets[0].get("daily_budget") and int(active_sets[0]["daily_budget"]) > 500:
                     return {**self.health(), "processed": 0, "reason": "EXISTING_ADSET_BUDGET_EXCEEDS_EUR_5"}
-                product_set_id = str(self.env.get("META_PRODUCT_SET_ID", "")).strip()
+                adset_promoted = active_sets[0].get("promoted_object") or {}
+                product_set_id = str(adset_promoted.get("product_set_id") or "").strip()
+                configured_set = str(self.env.get("META_PRODUCT_SET_ID", "")).strip()
                 if not re.fullmatch(r"\d{4,30}", product_set_id):
-                    return {**self.health(), "processed": 0, "reason": "META_PRODUCT_SET_ID_REQUIRED"}
+                    return {**self.health(), "processed": 0, "reason": "ACTIVE_ADSET_PRODUCT_SET_NOT_READ"}
+                if configured_set and configured_set != product_set_id:
+                    return {**self.health(), "processed": 0, "reason": "CONFIGURED_PRODUCT_SET_DIFFERS_FROM_ACTIVE_ADSET"}
             except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
                 return {**self.health(), "processed": 0, "reason": "META_PREFLIGHT_" + type(exc).__name__}
 
