@@ -1,3 +1,4 @@
 celery[redis]>=5.6,<6
 redis>=5.0.0,<6
 openai>=1.68,<3
+google-auth[requests]>=2.30,<3

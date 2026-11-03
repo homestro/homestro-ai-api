@@ -15,6 +15,8 @@ app = Celery(
         "tasks",
         "agents.kreativni_agent",
         "agents.product_hunter_agent",
+        "agents.seo_geo_agent",
+        "agents.media_buying_agent.tasks",
     ],
 )
 

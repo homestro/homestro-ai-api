@@ -38,6 +38,8 @@ query ProductHunterProducts($first: Int!, $after: String) {
     nodes {
       id
       title
+      handle
+      onlineStoreUrl
       description
       status
       tags
@@ -175,6 +177,9 @@ def _normalise_product(raw: Any, bestseller_tags: set[str]) -> dict[str, Any] | 
     return {
         "product_id": product_id,
         "title": title.strip()[:300],
+        "handle": str(raw.get("handle") or "").strip(),
+        "product_url": str(raw.get("onlineStoreUrl") or "").strip(),
+        "image_url": str(image.get("url") or "").strip(),
         "description": description,
         "features": [],
         "audience": "",
@@ -263,6 +268,30 @@ def scan_shopify_catalog(self) -> dict[str, Any]:
             "run_at": run_at,
         }
 
+    seo_chain_enabled = os.getenv("SEO_WORKFLOW_ENABLED", "false").casefold() in {
+        "1", "true", "yes", "on"
+    }
+    if queue_enabled and seo_chain_enabled and os.getenv("SEO_PUBLISHER_READY", "false").casefold() not in {
+        "1", "true", "yes", "on"
+    }:
+        return {
+            "task": "product_hunter.scan_shopify_catalog",
+            "status": "blocked",
+            "reason": "SEO_PUBLISHER_READY must be true before paid creative-to-page dispatch",
+            "shopify_read": False,
+            "creative_tasks_queued": 0,
+            "run_at": run_at,
+        }
+    if queue_enabled and seo_chain_enabled and not os.getenv("SEO_PUBLIC_BASE_URL", "").strip():
+        return {
+            "task": "product_hunter.scan_shopify_catalog",
+            "status": "blocked",
+            "reason": "SEO_PUBLIC_BASE_URL is required before creative-to-page dispatch",
+            "shopify_read": False,
+            "creative_tasks_queued": 0,
+            "run_at": run_at,
+        }
+
     cache = _redis_client()
     day_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     scan_lock = f"pilot_staging:product_hunter:daily_scan:{day_key}"
@@ -324,16 +353,30 @@ def scan_shopify_catalog(self) -> dict[str, Any]:
                     selected = None
                     continue
                 try:
-                    from agents.kreativni_agent import generate_creative
-
                     payload = {
                         "product_id": candidate["product_id"],
                         "title": candidate["title"],
                         "description": candidate["description"],
+                        "handle": candidate["handle"],
+                        "product_url": candidate["product_url"],
+                        "image_url": candidate["image_url"],
+                        "price": candidate["price"],
+                        "currency": candidate["currency"],
                         "features": candidate["features"],
                         "audience": candidate["audience"],
                     }
-                    queued = generate_creative.delay(payload)
+                    if seo_chain_enabled:
+                        if not candidate["handle"] or not candidate["product_url"]:
+                            cache.delete(dedupe_key)
+                            selected = None
+                            continue
+                        from agents.seo_geo_agent import enqueue_creative_to_page_chain
+
+                        queued = enqueue_creative_to_page_chain.delay(payload)
+                    else:
+                        from agents.kreativni_agent import generate_creative
+
+                        queued = generate_creative.delay(payload)
                     queue_task_id = queued.id
                     cache.set(dedupe_key, queue_task_id or "queued", ex=180 * 24 * 60 * 60)
                 except Exception:
