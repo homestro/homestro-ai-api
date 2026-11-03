@@ -1,6 +1,7 @@
 """Durable Higgsfield-to-Meta video handoff; no generation and no campaign creation."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -181,9 +182,25 @@ class MetaVideoQueue:
                     return {**self.health(), "processed": 0, "reason": "ACTIVE_ADSET_PRODUCT_SET_NOT_READ"}
                 if configured_set and configured_set != product_set_id:
                     return {**self.health(), "processed": 0, "reason": "CONFIGURED_PRODUCT_SET_DIFFERS_FROM_ACTIVE_ADSET"}
+                catalog_resp = await client.get(
+                    f"{base}/{product_set_id}", headers=headers,
+                    params={"fields": "id,product_catalog{id}"},
+                )
+                catalog_resp.raise_for_status()
+                catalog_data = catalog_resp.json()
+                catalog_value = catalog_data.get("product_catalog") or {}
+                catalog_id = str(catalog_value.get("id") if isinstance(catalog_value, dict)
+                                 else catalog_value or "").strip()
+                if not re.fullmatch(r"\\d{4,30}", catalog_id):
+                    return {**self.health(), "processed": 0, "reason": "ACTIVE_ADSET_CATALOG_NOT_READ"}
             except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
                 return {**self.health(), "processed": 0, "reason": "META_PREFLIGHT_" + type(exc).__name__}
 
+            shared_ad = next(
+                ((str(r[4]), str(r[5])) for _, _, r in eligible
+                 if r[2] in {"ACTIVE", "META_REVIEW_PENDING"} and r[4] and r[5]),
+                (None, None),
+            )
             for media, product, row in eligible:
                 job, variant = media["job_id"], str(media["shopify_variant_id"])
                 state, video_id, creative_id, ad_id, last_error = row[2], row[3], row[4], row[5], row[6]
@@ -230,43 +247,106 @@ class MetaVideoQueue:
                         self._save(job, variant, "META_VIDEO_PROCESSING", video_id, creative_id, ad_id, None)
                         outcomes.append({"state": "META_VIDEO_PROCESSING"})
                         continue
-                    if not product.get("image_link"):
-                        raise ValueError("PRODUCT_IMAGE_REQUIRED_FOR_VIDEO_STORY")
-                    if not creative_id:
-                        if not product.get("image_link"):
-                            raise ValueError("PRODUCT_IMAGE_REQUIRED_FOR_VIDEO_STORY")
-                        story_spec = {"page_id": page, "video_data": {
-                            "video_id": video_id,
-                            "image_url": str(product.get("image_link") or ""),
-                            "message": "Entdecke das Produkt bei Homestro.",
-                            "title": str(product.get("title") or "Homestro")[:80],
-                            "call_to_action": {"type": "SHOP_NOW", "value": {"link": str(product["link"])}}}}
-                        stage = "creative_create"
-                        response = await client.post(f"{base}/act_{account}/adcreatives", headers=headers,
-                            data={"name": f"Homestro Video {job}", "object_story_spec": json.dumps(story_spec),
-                                  "product_set_id": product_set_id})
-                        response.raise_for_status()
-                        creative_id = str(response.json().get("id", ""))
-                        if not re.fullmatch(r"\d{4,30}", creative_id):
-                            raise ValueError("META_CREATIVE_ID_MISSING")
-                    stage = "story_readback"
-                    story_response = await client.get(f"{base}/{creative_id}", headers=headers,
-                        params={"fields": "id,effective_object_story_id,object_story_id,product_set_id"})
-                    story_response.raise_for_status()
-                    story_data = story_response.json()
-                    story_id = str(story_data.get("effective_object_story_id") or story_data.get("object_story_id") or "")
-                    if not re.fullmatch(r"\d{4,30}_\d{4,30}", story_id):
-                        raise ValueError("META_VIDEO_SHARED_STORY_ID_MISSING")
                     if not ad_id:
-                        stage = "ad_create"
-                        inline_creative = {"product_set_id": product_set_id, "object_story_id": story_id}
-                        response = await client.post(f"{base}/act_{account}/ads", headers=headers,
-                            data={"name": f"Homestro Video {job}", "adset_id": adset_id,
-                                  "creative": json.dumps(inline_creative), "status": "ACTIVE"})
-                        response.raise_for_status()
-                        ad_id = str(response.json().get("id", ""))
-                        if not re.fullmatch(r"\d{4,30}", ad_id):
-                            raise ValueError("META_AD_ID_MISSING")
+                        batch_marker = str(creative_id or "")
+                        batch_handle = batch_marker.removeprefix("CATALOG_BATCH:")
+                        if not batch_handle:
+                            stage = "catalog_video_attach"
+                            source_url = str(media.get("url") or "")
+                            parsed_video = urlsplit(source_url)
+                            if (parsed_video.scheme != "https" or parsed_video.hostname != VIDEO_HOST
+                                    or parsed_video.query or parsed_video.fragment):
+                                raise ValueError("APPROVED_CATALOG_VIDEO_URL_REQUIRED")
+                            batch_response = await client.post(
+                                f"{base}/{catalog_id}/items_batch", headers=headers,
+                                data={
+                                    "item_type": "PRODUCT_ITEM",
+                                    "allow_upsert": "false",
+                                    "requests": json.dumps([{
+                                        "method": "UPDATE",
+                                        "data": {
+                                            "id": variant_key,
+                                            "video": [{"url": source_url}],
+                                        },
+                                    }]),
+                                },
+                            )
+                            batch_response.raise_for_status()
+                            batch_payload = batch_response.json()
+                            handles = batch_payload.get("handles") or []
+                            batch_handle = str(handles[0]) if handles else ""
+                            if not batch_handle:
+                                raise ValueError("META_CATALOG_VIDEO_BATCH_HANDLE_MISSING")
+                            creative_id = "CATALOG_BATCH:" + batch_handle
+                            self._save(job, variant, "META_VIDEO_PROCESSING", video_id,
+                                       creative_id, ad_id, None)
+                        stage = "catalog_video_status"
+                        catalog_ready = False
+                        for attempt in range(8):
+                            batch_status_response = await client.get(
+                                f"{base}/{catalog_id}/check_batch_request_status",
+                                headers=headers, params={"handle": batch_handle},
+                            )
+                            batch_status_response.raise_for_status()
+                            batch_status_payload = batch_status_response.json()
+                            batch_rows = batch_status_payload.get("data") or []
+                            batch_row = batch_rows[0] if batch_rows and isinstance(batch_rows[0], dict) else {}
+                            batch_state = str(batch_row.get("status") or batch_status_payload.get("status") or "").lower()
+                            batch_errors = batch_row.get("errors") or batch_status_payload.get("errors") or []
+                            if batch_errors or batch_state in {"failed", "error", "failure"}:
+                                raise ValueError("META_CATALOG_VIDEO_BATCH_REJECTED")
+                            if batch_state in {"finished", "complete", "completed", "success", "successful"}:
+                                catalog_ready = True
+                                break
+                            await asyncio.sleep(2)
+                        if not catalog_ready:
+                            self._save(job, variant, "META_VIDEO_PROCESSING", video_id,
+                                       "CATALOG_BATCH:" + batch_handle, ad_id, None)
+                            outcomes.append({"state": "META_VIDEO_PROCESSING",
+                                             "reason": "CATALOG_PRODUCT_VIDEO_INGEST_PENDING"})
+                            continue
+                        creative_id = ""
+                        if shared_ad[0] and shared_ad[1]:
+                            creative_id, ad_id = shared_ad
+                        else:
+                            story_spec = {
+                                "page_id": page,
+                                "template_data": {
+                                    "call_to_action": {"type": "SHOP_NOW"},
+                                    "link": str(product["link"]),
+                                    "message": "Entdecke ausgewählte Produkte bei Homestro.",
+                                    "name": "{{product.name}}",
+                                    "description": "{{product.description}}",
+                                },
+                            }
+                            stage = "catalog_dynamic_creative_create"
+                            creative_response = await client.post(
+                                f"{base}/act_{account}/adcreatives", headers=headers,
+                                data={
+                                    "name": "Homestro Dynamic Catalog Video",
+                                    "object_story_spec": json.dumps(story_spec),
+                                    "product_set_id": product_set_id,
+                                },
+                            )
+                            creative_response.raise_for_status()
+                            creative_id = str(creative_response.json().get("id") or "")
+                            if not re.fullmatch(r"\\d{4,30}", creative_id):
+                                raise ValueError("META_CATALOG_CREATIVE_ID_MISSING")
+                            stage = "catalog_dynamic_ad_create"
+                            ad_response = await client.post(
+                                f"{base}/act_{account}/ads", headers=headers,
+                                data={
+                                    "name": "Homestro Dynamic Catalog Video",
+                                    "adset_id": adset_id,
+                                    "creative": json.dumps({"creative_id": creative_id}),
+                                    "status": "ACTIVE",
+                                },
+                            )
+                            ad_response.raise_for_status()
+                            ad_id = str(ad_response.json().get("id") or "")
+                            if not re.fullmatch(r"\\d{4,30}", ad_id):
+                                raise ValueError("META_CATALOG_AD_ID_MISSING")
+                            shared_ad = (creative_id, ad_id)
                     stage = "ad_readback"
                     readback = await client.get(f"{base}/{ad_id}", headers=headers,
                                                 params={"fields": "id,status,effective_status,creative{id}"})
