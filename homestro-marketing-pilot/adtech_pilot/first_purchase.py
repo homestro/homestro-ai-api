@@ -280,7 +280,7 @@ class FirstPurchaseController:
         backoff = self.store.provider_backoff(campaign, now)
         restore_after_pilot_tracking_error = bool(
             campaign == '120254564749740274'
-            and consent.get('state') == 'authorized'
+            and consent.get('state') in {'authorized', 'active'}
             and backoff
             and backoff.get('reason') == 'META_CATALOG_TRACKING_TAG_UPDATE_REJECTED'
         )
