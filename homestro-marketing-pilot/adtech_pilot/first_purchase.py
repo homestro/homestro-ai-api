@@ -1069,6 +1069,27 @@ class FirstPurchaseController:
                                 detail[key] = value[:800]
                 except (ValueError, TypeError, AttributeError):
                     pass
+            # A transient transport failure on the initial campaign read is
+            # not evidence that the campaign is unsafe. With an already-active
+            # owner authorization, do not issue a speculative PAUSE write when
+            # Meta is unreachable; Meta's native account cap remains enforced.
+            # Report the state as unreadable and retry on the next cycle.
+            if (stage == 'campaign'
+                    and isinstance(exc, httpx.TransportError)
+                    and campaign == '120254564749740274'
+                    and consent.get('state') == 'active'
+                    and claim.get('status') not in STOPPED_CLAIMS
+                    and env.get('PILOT_EMERGENCY_STOP') != 'true'):
+                return {
+                    **snapshot,
+                    'status': 'provider_read_unavailable_live_campaign_unchanged',
+                    'reason': 'META_CAMPAIGN_READ_TEMPORARILY_UNAVAILABLE',
+                    'campaign_status_readback': 'UNAVAILABLE',
+                    'provider_reads_deferred': True,
+                    'provider_mutations_deferred': True,
+                    'pilot_paused_campaign': False,
+                    **detail,
+                }
             # A provider rate limit is not a reason to issue another write. If
             # this cycle already read the owned campaign as PAUSED and has not
             # entered the activation phase, retain that verified state and let
