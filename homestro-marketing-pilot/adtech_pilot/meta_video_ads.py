@@ -232,36 +232,32 @@ class MetaVideoQueue:
                         continue
                     if not product.get("image_link"):
                         raise ValueError("PRODUCT_IMAGE_REQUIRED_FOR_VIDEO_STORY")
-                    if not creative_id:
+                    if not ad_id:
+                        if not product.get("image_link"):
+                            raise ValueError("PRODUCT_IMAGE_REQUIRED_FOR_VIDEO_STORY")
                         story = {"page_id": page, "video_data": {
                             "video_id": video_id,
                             "image_url": str(product.get("image_link") or ""),
                             "message": "Entdecke das Produkt bei Homestro.",
                             "title": str(product.get("title") or "Homestro")[:80],
                             "call_to_action": {"type": "SHOP_NOW", "value": {"link": str(product["link"])}}}}
-                        stage = "creative_create"
-                        response = await client.post(f"{base}/act_{account}/adcreatives", headers=headers,
-                            data={"name": f"Homestro Video {job}", "object_story_spec": json.dumps(story),
-                                  "product_set_id": product_set_id})
-                        response.raise_for_status()
-                        creative_id = str(response.json().get("id", ""))
-                        if not re.fullmatch(r"\d{4,30}", creative_id):
-                            raise ValueError("META_CREATIVE_ID_MISSING")
-                    if not ad_id:
                         stage = "ad_create"
+                        inline_creative = {"product_set_id": product_set_id, "object_story_spec": story}
                         response = await client.post(f"{base}/act_{account}/ads", headers=headers,
                             data={"name": f"Homestro Video {job}", "adset_id": adset_id,
-                                  "creative": json.dumps({"creative_id": creative_id, "product_set_id": product_set_id}),
-                                  "product_set_id": product_set_id, "status": "ACTIVE"})
+                                  "creative": json.dumps(inline_creative), "status": "ACTIVE"})
                         response.raise_for_status()
                         ad_id = str(response.json().get("id", ""))
                         if not re.fullmatch(r"\d{4,30}", ad_id):
                             raise ValueError("META_AD_ID_MISSING")
                     stage = "ad_readback"
                     readback = await client.get(f"{base}/{ad_id}", headers=headers,
-                                                params={"fields": "id,status,effective_status"})
+                                                params={"fields": "id,status,effective_status,creative{id}"})
                     readback.raise_for_status()
                     remote = readback.json()
+                    creative_ref = remote.get("creative") or {}
+                    if re.fullmatch(r"\d{4,30}", str(creative_ref.get("id", ""))):
+                        creative_id = str(creative_ref["id"])
                     effective = str(remote.get("effective_status") or "").upper()
                     if effective == "ACTIVE":
                         final_state = "ACTIVE"
