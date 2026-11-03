@@ -1152,13 +1152,17 @@ class FirstPurchaseController:
             if not signed_ref_valid and not allow_untracked_catalog:
                 return ['SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED']
             cards = []
-            for product in in_stock_rows[:3]:
+            for product in in_stock_rows:
+                if owner_excluded(product.model_dump(mode='json')):
+                    continue
                 key = _shopify_variant_key(product.id)
                 product_url = (product.link if parse_qs(urlsplit(product.link).query).get('variant')
                     else product.link + ('&' if '?' in product.link else '?') + 'variant=' + key)
                 link = (tracked_url(product_url, ref_values[0], secret=secret, at=now)
                     if signed_ref_valid else product_url)
                 cards.append({'link': link, 'picture': product.image_link, 'name': product.title})
+                if len(cards) == 3:
+                    break
             if not cards:
                 return ['CATALOG_HAS_NO_CURRENT_IN_STOCK_VARIANTS']
             self.catalog_feed_identity_validation['static_preview_validation_skipped'] = True
