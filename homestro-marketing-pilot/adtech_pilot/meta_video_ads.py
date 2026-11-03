@@ -247,7 +247,7 @@ class MetaVideoQueue:
                         stage = "ad_create"
                         response = await client.post(f"{base}/act_{account}/ads", headers=headers,
                             data={"name": f"Homestro Video {job}", "adset_id": adset_id,
-                                  "creative": json.dumps({"creative_id": creative_id}),
+                                  "creative": json.dumps({"creative_id": creative_id, "product_set_id": product_set_id}),
                                   "product_set_id": product_set_id, "status": "ACTIVE"})
                         response.raise_for_status()
                         ad_id = str(response.json().get("id", ""))
@@ -275,13 +275,17 @@ class MetaVideoQueue:
                         error = exc.response.json().get("error", {})
                         meta_code = error.get("code")
                         meta_subcode = error.get("error_subcode")
+                        meta_user_title = str(error.get("error_user_title") or "")[:120]
+                        meta_user_msg = str(error.get("error_user_msg") or "")[:240]
                     except (ValueError, AttributeError):
-                        pass
+                        meta_user_title = ""
+                        meta_user_msg = ""
                     safe = f"META_HTTP_{exc.response.status_code}_CODE_{meta_code}_SUBCODE_{meta_subcode}_{stage}"
                     self._save(job, variant, "FAILED", video_id, creative_id, ad_id, safe)
                     outcomes.append({"state": "FAILED", "reason": "META_API_REJECTED",
                                      "http_status": exc.response.status_code,
-                                     "meta_error_code": meta_code, "meta_error_subcode": meta_subcode, "stage": stage})
+                                     "meta_error_code": meta_code, "meta_error_subcode": meta_subcode, "stage": stage,
+                                     "meta_user_title": meta_user_title, "meta_user_message": meta_user_msg})
                 except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
                     self._save(job, variant, "FAILED", video_id, creative_id, ad_id, type(exc).__name__)
                     outcomes.append({"state": "FAILED", "reason": type(exc).__name__})
