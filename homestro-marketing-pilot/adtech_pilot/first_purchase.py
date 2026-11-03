@@ -887,10 +887,24 @@ class FirstPurchaseController:
                             if key not in shopify_variant_keys and len(meta_unmatched_item_samples) < 10:
                                 item_url = str(member.get('url') or '')
                                 item_path = urlsplit(item_url).path.rstrip('/')
+                                feed_products = getattr(self, 'feed_products', [])
                                 same_path_rows = [
-                                    product for product in getattr(self, 'feed_products', [])
+                                    product for product in feed_products
                                     if urlsplit(product.link).path.rstrip('/') == item_path
                                 ] if item_path else []
+                                title_tokens = set(re.findall(
+                                    r'[^\\W_]+', str(member.get('name') or '').casefold(), re.UNICODE
+                                ))
+                                title_matches = []
+                                for product in feed_products:
+                                    product_tokens = set(re.findall(
+                                        r'[^\\W_]+', str(product.title).casefold(), re.UNICODE
+                                    ))
+                                    union = title_tokens | product_tokens
+                                    score = (len(title_tokens & product_tokens) / len(union)) if union else 0
+                                    if score >= 0.25:
+                                        title_matches.append((score, product))
+                                title_matches.sort(key=lambda row: row[0], reverse=True)
                                 meta_unmatched_item_samples.append({
                                     'id': item_id,
                                     'retailer_id': str(member.get('retailer_id') or '')[:160],
@@ -903,6 +917,16 @@ class FirstPurchaseController:
                                     ],
                                     'shopify_feed_same_path_availability': [
                                         str(product.availability)[:30] for product in same_path_rows[:10]
+                                    ],
+                                    'shopify_feed_title_matches': [
+                                        {
+                                            'score': round(score, 3),
+                                            'title': str(product.title)[:160],
+                                            'variant_id': _shopify_variant_key(product.id),
+                                            'url': str(product.link)[:400],
+                                            'availability': str(product.availability)[:30],
+                                        }
+                                        for score, product in title_matches[:3]
                                     ],
                                 })
                     membership_matches = (membership_complete and feed_variants is not None
