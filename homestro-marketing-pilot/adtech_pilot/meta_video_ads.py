@@ -232,17 +232,34 @@ class MetaVideoQueue:
                         continue
                     if not product.get("image_link"):
                         raise ValueError("PRODUCT_IMAGE_REQUIRED_FOR_VIDEO_STORY")
-                    if not ad_id:
+                    if not creative_id:
                         if not product.get("image_link"):
                             raise ValueError("PRODUCT_IMAGE_REQUIRED_FOR_VIDEO_STORY")
-                        story = {"page_id": page, "video_data": {
+                        story_spec = {"page_id": page, "video_data": {
                             "video_id": video_id,
                             "image_url": str(product.get("image_link") or ""),
                             "message": "Entdecke das Produkt bei Homestro.",
                             "title": str(product.get("title") or "Homestro")[:80],
                             "call_to_action": {"type": "SHOP_NOW", "value": {"link": str(product["link"])}}}}
+                        stage = "creative_create"
+                        response = await client.post(f"{base}/act_{account}/adcreatives", headers=headers,
+                            data={"name": f"Homestro Video {job}", "object_story_spec": json.dumps(story_spec),
+                                  "product_set_id": product_set_id})
+                        response.raise_for_status()
+                        creative_id = str(response.json().get("id", ""))
+                        if not re.fullmatch(r"\d{4,30}", creative_id):
+                            raise ValueError("META_CREATIVE_ID_MISSING")
+                    stage = "story_readback"
+                    story_response = await client.get(f"{base}/{creative_id}", headers=headers,
+                        params={"fields": "id,effective_object_story_id,object_story_id,product_set_id"})
+                    story_response.raise_for_status()
+                    story_data = story_response.json()
+                    story_id = str(story_data.get("effective_object_story_id") or story_data.get("object_story_id") or "")
+                    if not re.fullmatch(r"\d{4,30}_\d{4,30}", story_id):
+                        raise ValueError("META_VIDEO_SHARED_STORY_ID_MISSING")
+                    if not ad_id:
                         stage = "ad_create"
-                        inline_creative = {"product_set_id": product_set_id, "object_story_spec": story}
+                        inline_creative = {"product_set_id": product_set_id, "object_story_id": story_id}
                         response = await client.post(f"{base}/act_{account}/ads", headers=headers,
                             data={"name": f"Homestro Video {job}", "adset_id": adset_id,
                                   "creative": json.dumps(inline_creative), "status": "ACTIVE"})
