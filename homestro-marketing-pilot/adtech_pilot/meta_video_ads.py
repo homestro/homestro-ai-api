@@ -236,9 +236,9 @@ class MetaVideoQueue:
                             raise ValueError("META_CREATIVE_ID_MISSING")
                     if not ad_id:
                         stage = "ad_create"
-                        response = await client.post(f"{base}/{adset_id}/ads", headers=headers,
-                            data={"name": f"Homestro Video {job}", "creative": json.dumps({"creative_id": creative_id}),
-                                  "status": "ACTIVE"})
+                        response = await client.post(f"{base}/act_{account}/ads", headers=headers,
+                            data={"name": f"Homestro Video {job}", "adset_id": adset_id,
+                                  "creative": json.dumps({"creative_id": creative_id}), "status": "ACTIVE"})
                         response.raise_for_status()
                         ad_id = str(response.json().get("id", ""))
                         if not re.fullmatch(r"\d{4,30}", ad_id):
