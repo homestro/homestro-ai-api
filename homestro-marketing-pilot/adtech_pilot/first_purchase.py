@@ -43,9 +43,10 @@ def _shopify_variant_key(value):
 
 
 def _catalog_available(item):
+    # ProductItem.review_status is deprecated by Meta and is returned empty.
+    # Use availability for catalog-set membership; approval is tracked separately.
     availability = str(item.get('availability') or '').strip().casefold().replace(' ', '_')
-    review = str(item.get('review_status') or '').strip().casefold()
-    return availability == 'in_stock' and review == 'approved'
+    return availability == 'in_stock'
 
 
 def _catalog_tracking_tags_valid(value, ref, campaign, ad, end):
@@ -800,7 +801,7 @@ class FirstPurchaseController:
                     membership_complete = True
                     seen_cursors = set()
                     for _ in range(20):
-                        params = {'fields': 'id,retailer_id,availability,review_status', 'limit': '100'}
+                        params = {'fields': 'id,retailer_id,availability', 'limit': '100'}
                         if cursor:
                             params['after'] = cursor
                         page_response = await client.get(base + creative_set_id + '/products', headers=headers, params=params)
@@ -838,14 +839,13 @@ class FirstPurchaseController:
                                 'retailer_id': raw_retailer_id[:160],
                                 'parsed_shopify_variant_id': _shopify_variant_key(raw_retailer_id),
                                 'availability': str(member.get('availability') or '')[:40],
-                                'review_status': str(member.get('review_status') or '')[:40],
                             })
                         item_id = str(member.get('id') or '')
                         if not re.fullmatch(r'\d{4,30}', item_id) or item_id in seen_meta_item_ids:
                             malformed_meta_records += 1
                         seen_meta_item_ids.add(item_id)
                         key = _shopify_variant_key(member.get('retailer_id'))
-                        if not key or not member.get('availability') or not member.get('review_status'):
+                        if not key or not member.get('availability'):
                             malformed_meta_records += 1
                             continue
                         if _catalog_available(member):
@@ -863,7 +863,9 @@ class FirstPurchaseController:
                         'shopify_in_stock_item_count': getattr(self, 'feed_in_stock_count', None),
                         'unfiltered': raw_filter in (None, '', {}, []),
                         'shopify_in_stock_variant_count': len(shopify_variant_keys),
-                        'meta_approved_in_stock_variant_count': meta_eligible_records,
+                        'meta_in_stock_variant_count': meta_eligible_records,
+                        'meta_approved_in_stock_variant_count': None,
+                        'meta_approval_status': 'not_verified_review_status_deprecated',
                         'product_set_membership_complete': membership_complete,
                         'variant_membership_matches': membership_matches,
                         'variant_membership_unmatched_shopify_count': len(shopify_variant_keys - meta_variant_keys),
