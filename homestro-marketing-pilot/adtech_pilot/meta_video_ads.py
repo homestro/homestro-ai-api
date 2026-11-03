@@ -250,6 +250,9 @@ class MetaVideoQueue:
                     if not ad_id:
                         batch_marker = str(creative_id or "")
                         batch_handle = batch_marker.removeprefix("CATALOG_BATCH:")
+                        if batch_handle.startswith("{"):
+                            parsed_handle = re.search(r"""['"](?:handle|id)['"]\\s*:\\s*['"]([^'"]+)['"]""", batch_handle)
+                            batch_handle = parsed_handle.group(1) if parsed_handle else ""
                         if not batch_handle:
                             stage = "catalog_video_attach"
                             source_url = str(media.get("url") or "")
@@ -274,7 +277,11 @@ class MetaVideoQueue:
                             batch_response.raise_for_status()
                             batch_payload = batch_response.json()
                             handles = batch_payload.get("handles") or []
-                            batch_handle = str(handles[0]) if handles else ""
+                            handle_value = handles[0] if handles else ""
+                            if isinstance(handle_value, dict):
+                                batch_handle = str(handle_value.get("handle") or handle_value.get("id") or "")
+                            else:
+                                batch_handle = str(handle_value or "")
                             if not batch_handle:
                                 raise ValueError("META_CATALOG_VIDEO_BATCH_HANDLE_MISSING")
                             creative_id = "CATALOG_BATCH:" + batch_handle
@@ -309,29 +316,30 @@ class MetaVideoQueue:
                         if shared_ad[0] and shared_ad[1]:
                             creative_id, ad_id = shared_ad
                         else:
-                            story_spec = {
-                                "page_id": page,
-                                "template_data": {
-                                    "call_to_action": {"type": "SHOP_NOW"},
-                                    "link": str(product["link"]),
-                                    "message": "Entdecke ausgewählte Produkte bei Homestro.",
-                                    "name": "{{product.name}}",
-                                    "description": "{{product.description}}",
-                                },
-                            }
-                            stage = "catalog_dynamic_creative_create"
-                            creative_response = await client.post(
-                                f"{base}/act_{account}/adcreatives", headers=headers,
-                                data={
-                                    "name": "Homestro Dynamic Catalog Video",
-                                    "object_story_spec": json.dumps(story_spec),
-                                    "product_set_id": product_set_id,
-                                },
-                            )
-                            creative_response.raise_for_status()
-                            creative_id = str(creative_response.json().get("id") or "")
-                            if not re.fullmatch(r"\d{4,30}", creative_id):
-                                raise ValueError("META_CATALOG_CREATIVE_ID_MISSING")
+                            if not re.fullmatch(r"\\d{4,30}", str(creative_id or "")):
+                                    story_spec = {
+                                    "page_id": page,
+                                    "template_data": {
+                                        "call_to_action": {"type": "SHOP_NOW"},
+                                        "link": str(product["link"]),
+                                        "message": "Entdecke ausgewählte Produkte bei Homestro.",
+                                        "name": "{{product.name}}",
+                                        "description": "{{product.description}}",
+                                    },
+                                }
+                                stage = "catalog_dynamic_creative_create"
+                                creative_response = await client.post(
+                                    f"{base}/act_{account}/adcreatives", headers=headers,
+                                    data={
+                                        "name": "Homestro Dynamic Catalog Video",
+                                        "object_story_spec": json.dumps(story_spec),
+                                        "product_set_id": product_set_id,
+                                    },
+                                )
+                                creative_response.raise_for_status()
+                                creative_id = str(creative_response.json().get("id") or "")
+                                if not re.fullmatch(r"\d{4,30}", creative_id):
+                                    raise ValueError("META_CATALOG_CREATIVE_ID_MISSING")
                             stage = "catalog_dynamic_ad_create"
                             ad_response = await client.post(
                                 f"{base}/act_{account}/ads", headers=headers,
