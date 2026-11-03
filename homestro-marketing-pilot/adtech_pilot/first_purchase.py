@@ -282,8 +282,10 @@ class FirstPurchaseController:
         restore_after_pilot_tracking_error = bool(
             campaign == '120254564749740274'
             and consent.get('state') in {'authorized', 'active'}
-            and backoff
-            and backoff.get('reason') == 'META_CATALOG_TRACKING_TAG_UPDATE_REJECTED'
+            and (
+                (backoff and backoff.get('reason') == 'META_CATALOG_TRACKING_TAG_UPDATE_REJECTED')
+                or (consent.get('state') == 'active' and not backoff)
+            )
         )
         if backoff and not restore_after_pilot_tracking_error:
             return {
@@ -886,7 +888,7 @@ class FirstPurchaseController:
                                 item_url = str(member.get('url') or '')
                                 item_path = urlsplit(item_url).path.rstrip('/')
                                 same_path_rows = [
-                                    product for product in feed.products
+                                    product for product in getattr(self, 'feed_products', [])
                                     if urlsplit(product.link).path.rstrip('/') == item_path
                                 ] if item_path else []
                                 meta_unmatched_item_samples.append({
@@ -1049,6 +1051,11 @@ class FirstPurchaseController:
                         'reason': 'META_API_RATE_LIMIT_BACKOFF',
                         'provider_mutations_deferred': True,
                         'pause_write_skipped': True, **detail}
+            if snapshot.get('campaign_status') == 'ACTIVE' and stage == 'landing_checkout':
+                # A read-only landing/catalog diagnostic failure must not pause
+                # an owner-started campaign after spend and account limits pass.
+                return {**snapshot, 'status': 'owner_active_readiness_blocked',
+                        'pilot_paused_campaign': False, **detail}
             try:
                 return {**await pause('ACQUISITION_READINESS_OR_CONTROL_FAILED'), **detail}
             except Exception:
@@ -1078,6 +1085,7 @@ class FirstPurchaseController:
         if len(response.content) > 12 * 1024 * 1024:
             return ['CURRENT_FEED_SIZE_LIMIT']
         feed = ProductFeedManager().parse(response.content, response.headers.get('content-type'))
+        self.feed_products = feed.products
         self.feed_product_count = len(feed.products)
         self.feed_in_stock_count = sum(1 for product in feed.products if product.availability == 'in_stock')
         from .payment_webhooks import PaymentWebhookStore, payment_database
