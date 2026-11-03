@@ -891,6 +891,13 @@ class FirstPurchaseController:
             snapshot['tracking_configuration_verified'] = not source_blockers and not any(
                 b in {'EXISTING_SIGNED_TRACKING_CONFIGURATION_REQUIRED', 'SIGNED_AD_ATTRIBUTION_NOT_ATTACHED_OR_EXPIRED'}
                 for b in blockers)
+            if blockers and remote.get('status') == 'ACTIVE':
+                # Respect an owner-started campaign. Keep enforcing the verified
+                # spend, schedule, market and pixel limits above, but never issue
+                # a pause solely because a later diagnostic gate is incomplete.
+                return {**snapshot, 'status': 'owner_active_readiness_blocked',
+                        'blockers': sorted(set(blockers)), 'pilot_paused_campaign': False,
+                        'consent': consent}
             if blockers:
                 return {**await pause('READINESS_GATES_NOT_PASSED'), 'blockers': blockers}
             if env.get('PILOT_LAUNCH_POLICY') != POLICY or env.get('PILOT_FIRST_PURCHASE_TEST_AUTHORIZED') != 'true' or env.get('PILOT_FIRST_PURCHASE_ACTIVATION_ENABLED') != 'true' or live_ads_dry_run(env) or env.get('ALLOW_MICRO_BUDGET') != 'true' or configured_daily_budget_limit_eur(env) != 5:
