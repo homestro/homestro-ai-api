@@ -263,6 +263,50 @@ def create_app(
                 "routes": {topic: origin + "/webhooks/shopify/orders" for topic in TOPICS.values()},
                 "paid_generation_performed": False}
 
+    @app.post("/webhooks/higgsfield/video")
+    async def higgsfield_video_webhook(request: Request):
+        secret = os.getenv("HIGGSFIELD_WEBHOOK_SECRET", "")
+        if not secret:
+            raise HTTPException(503, "HIGGSFIELD_WEBHOOK_SECRET_NOT_CONFIGURED")
+        raw = await request.body()
+        if len(raw) > 1024 * 1024:
+            raise HTTPException(413, "WEBHOOK_TOO_LARGE")
+        webhook_id = request.headers.get("webhook-id", "")
+        timestamp = request.headers.get("webhook-timestamp", "")
+        signatures = request.headers.get("webhook-signature", "")
+        if not webhook_id or not timestamp or len(webhook_id) > 200:
+            raise HTTPException(401, "INVALID_HIGGSFIELD_SIGNATURE")
+        try:
+            if abs(datetime.now(UTC).timestamp() - int(timestamp)) > 300:
+                raise ValueError("STALE")
+            key = secret.removeprefix("whsec_")
+            key_bytes = base64.b64decode(key, validate=True)
+            signed = webhook_id.encode() + b"." + timestamp.encode() + b"." + raw
+            expected = base64.b64encode(hmac.new(key_bytes, signed, __import__("hashlib").sha256).digest()).decode()
+        except Exception as exc:
+            raise HTTPException(401, "INVALID_HIGGSFIELD_SIGNATURE") from exc
+        valid = any(
+            hmac.compare_digest(part.removeprefix("v1,"), expected)
+            for part in signatures.split()
+            if part.startswith("v1,")
+        )
+        if not valid:
+            raise HTTPException(401, "INVALID_HIGGSFIELD_SIGNATURE")
+        try:
+            payload = __import__("json").loads(raw)
+        except Exception as exc:
+            raise HTTPException(400, "INVALID_HIGGSFIELD_EVENT") from exc
+        if not isinstance(payload, dict) or payload.get("status") not in {"completed", "failed", "nsfw"}:
+            raise HTTPException(400, "INVALID_HIGGSFIELD_EVENT")
+        from .meta_video_ads import MetaVideoQueue
+
+        variant_id = request.query_params.get("variant_id")
+        try:
+            result = MetaVideoQueue(audit).record_webhook(webhook_id, variant_id, payload)
+        except ValueError as exc:
+            raise HTTPException(422, "INVALID_SHOPIFY_VARIANT_ID") from exc
+        return JSONResponse(status_code=202, content={**result, "queued_for_import": True})
+
     @app.post("/webhooks/shopify/{event}")
     async def shopify_payment(event: str, request: Request):
         if event == "orders":
@@ -599,6 +643,8 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz():
+        from .meta_video_ads import MetaVideoQueue
+
         return {
             "ok": True,
             "service": "homestro-adtech-pilot",
@@ -616,6 +662,7 @@ def create_app(
             "micro_budget_daily_budget_eur": 5.0,
             "micro_budget_window_days": 7,
             "micro_budget_planned_total_eur": 35.0,
+            "video_queue": MetaVideoQueue(audit).health(),
         }
 
     @app.post("/feed/validate", dependencies=[Depends(require_admin)])

@@ -88,4 +88,20 @@ EXISTING_ASSETS = [
     "url": "https://d8j0ntlcm91z4.cloudfront.net/user_3KiPMgWe8Md9uO8ZIQxwGYEpHmh/hf_20261023_192050_e8c726da-8ac9-43df-826c-547f79803651.png",
     "product_url": "https://homestro.de/products/silicone-cream-spatula-non-stick-butter-spatula-heat-resistant-kitchen-baking-tools-diy-cake-baking-tools"
   }
+  {
+    "provider": "higgsfield",
+    "job_id": "a46af350-b6f8-4320-985f-9884c085c6e2",
+    "status": "completed",
+    "kind": "video",
+    "url": "https://d8j0ntlcm91z4.cloudfront.net/user_3KiPMgWe8Md9uO8ZIQxwGYEpHmh/hf_20261101_222955_a46af350-b6f8-4320-985f-9884c085c6e2.mp4",
+    "shopify_variant_id": "gid://shopify/ProductVariant/58112039158142"
+  },
+  {
+    "provider": "higgsfield",
+    "job_id": "d5b4f7e6-be1e-4a14-bc6d-863d65563adc",
+    "status": "completed",
+    "kind": "video",
+    "url": "https://d8j0ntlcm91z4.cloudfront.net/user_3KiPMgWe8Md9uO8ZIQxwGYEpHmh/hf_20261022_154340_d5b4f7e6-be1e-4a14-bc6d-863d65563adc.mp4",
+    "shopify_variant_id": "gid://shopify/ProductVariant/58018942583166"
+  }
 ]

@@ -586,7 +586,8 @@ class PilotDaemon:
         logger.info("marketing_director %s", json.dumps(strategy, separators=(",", ":")))
         try:
             async with asyncio.timeout(90):
-                media_imports = await MediaRegistry(self.audit).seed_existing(candidates, limit=11)
+                media_registry = MediaRegistry(self.audit)
+                media_imports = await media_registry.seed_existing(candidates, limit=13)
         except TimeoutError:
             media_imports = {"status": "partial", "reason": "MEDIA_IMPORT_CYCLE_TIMEOUT", "publication_confirmed": False}
         from .publisher_handoff import PublisherHandoff
@@ -600,6 +601,16 @@ class PilotDaemon:
         logger.info("publisher_media_handoff %s", json.dumps(handoff, separators=(",", ":")))
         await self.audit.record("existing_media_import", media_imports)
         logger.info("existing_media_import %s", json.dumps(media_imports, separators=(",", ":")))
+        from .meta_video_ads import MetaVideoQueue
+
+        video_queue = MetaVideoQueue(self.audit)
+        try:
+            await video_queue.process_webhooks(candidates, media_registry)
+            video_result = await video_queue.cycle(media_registry.list(), candidates)
+        except Exception as exc:
+            video_result = {**video_queue.health(), "reason": "VIDEO_WORKER_" + type(exc).__name__}
+        await self.audit.record("meta_video_ads", video_result)
+        logger.info("meta_video_ads %s", json.dumps(video_result, separators=(",", ":")))
         from .search_campaigns import SearchCampaignDrafts
 
         search_drafts = await asyncio.to_thread(SearchCampaignDrafts(self.audit).reconcile, ranked_candidates)
