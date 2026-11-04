@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -88,34 +89,41 @@ class Ledger:
             prior = db.execute(
                 "SELECT product_id,state,updated_at FROM product_runs ORDER BY updated_at DESC"
             ).fetchall()
-        if prior:
-            by_id = {p["id"]: p for p in candidates}
-            now = datetime.now(UTC)
-            for product_id, state, updated_at in prior:
-                try:
-                    age = (now - datetime.fromisoformat(updated_at)).total_seconds()
-                except (TypeError, ValueError):
-                    age = 0
-                retryable = state == "retryable" or (state == "reserved" and age >= 60)
-                if not retryable or (requested_id and product_id != requested_id):
-                    continue
-                if product_id in by_id:
-                    return by_id[product_id]
-            return None
-        available = list(candidates)
-        if requested_id:
-            available = [p for p in available if p["id"] == requested_id]
+        by_id = {p["id"]: p for p in candidates}
+        now = datetime.now(UTC)
+        completed = set()
+        for product_id, state, updated_at in prior:
+            try:
+                age = (now - datetime.fromisoformat(updated_at)).total_seconds()
+            except (TypeError, ValueError):
+                age = 0
+            retryable = state == "retryable" or (state == "reserved" and age >= 60)
+            if retryable and product_id in by_id and (not requested_id or product_id == requested_id):
+                return by_id[product_id]
+            if not retryable:
+                completed.add(product_id)
+
+        available = [p for p in candidates
+                     if p["id"] not in completed and (not requested_id or p["id"] == requested_id)]
         if not available:
             return None
-        # Prefer explicit best-seller tags when supplied by the Shopify feed;
-        # otherwise use a stable order. This is a discovery heuristic, not a
-        # claim that product sales or profit have been verified.
         def rank(product: dict[str, Any]) -> tuple[int, str]:
             tags = product.get("tags") or []
             normalized = {str(tag).casefold().replace("-", "_") for tag in tags}
             bestseller = int(bool(normalized & {"bestseller", "best_seller", "top seller"}))
             return (-bestseller, product["id"])
         return sorted(available, key=rank)[0]
+
+    def has_completed_today(self) -> bool:
+        local_now = datetime.now(UTC).astimezone(ZoneInfo("Europe/Berlin"))
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_utc = local_start.astimezone(UTC).isoformat()
+        with closing(self.connect()) as db:
+            row = db.execute(
+                "SELECT 1 FROM product_runs WHERE state IN ('meta_active','meta_paused','meta_blocked') "
+                "AND updated_at>=? LIMIT 1", (start_utc,)
+            ).fetchone()
+        return row is not None
 
     def reserve_product(self, product_id: str) -> bool:
         now = datetime.now(UTC)
@@ -502,6 +510,71 @@ class MetaBuyer:
             raise RuntimeError("META_ACCOUNT_SPEND_CAP_OUTSIDE_35_EUR_LIMIT")
         return max(0.0, (cap_cents - spent_cents) / 100.0)
 
+    async def existing_adset_readiness(self, campaign_id: str, adset_id: str) -> dict[str, Any]:
+        if not campaign_id.isdigit() or not adset_id.isdigit():
+            raise RuntimeError("FRANKENSTEIN_EXISTING_META_IDS_INVALID")
+        campaign = await self._get_object(campaign_id, "id,name,status,effective_status")
+        adset = await self._get_object(adset_id,
+            "id,campaign_id,status,effective_status,daily_budget,start_time,end_time")
+        if str(adset.get("campaign_id", "")) != campaign_id:
+            raise RuntimeError("FRANKENSTEIN_ADSET_CAMPAIGN_MISMATCH")
+        if "frankenstein" not in str(campaign.get("name", "")).casefold():
+            raise RuntimeError("FRANKENSTEIN_CAMPAIGN_NAME_MISMATCH")
+        if (str(campaign.get("status", "")).upper() != "ACTIVE"
+                or str(campaign.get("effective_status", "")).upper() != "ACTIVE"
+                or str(adset.get("status", "")).upper() != "ACTIVE"
+                or str(adset.get("effective_status", "")).upper() != "ACTIVE"):
+            return {"ready": False, "reason": "EXISTING_FRANKENSTEIN_CAMPAIGN_NOT_ACTIVE"}
+        try:
+            daily_cents = int(adset["daily_budget"])
+            end_at = datetime.fromisoformat(str(adset["end_time"]).replace("Z", "+00:00")).astimezone(UTC)
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError("FRANKENSTEIN_ADSET_BUDGET_OR_END_UNVERIFIED") from None
+        if not 0 < daily_cents <= int(HARD_META_DAILY_EUR * 100):
+            raise RuntimeError("FRANKENSTEIN_ADSET_BUDGET_OUT_OF_POLICY")
+        if end_at <= datetime.now(UTC) + timedelta(hours=24):
+            return {"ready": False, "reason": "EXISTING_CAMPAIGN_WINDOW_CLOSING"}
+        remaining = await self._remaining_account_cap_eur()
+        if remaining <= 0:
+            return {"ready": False, "reason": "META_ACCOUNT_SPEND_CAP_EXHAUSTED"}
+        return {"ready": True, "campaign_id": campaign_id, "adset_id": adset_id,
+                "daily_budget_eur": daily_cents / 100,
+                "account_remaining_cap_eur": round(remaining, 2), "end_at": end_at.isoformat()}
+
+    async def create_ad_in_existing_campaign(self, product: dict[str, Any], copy: dict[str, Any],
+                                             run_key: str, campaign_id: str, adset_id: str,
+                                             activate: bool) -> dict[str, Any]:
+        ready = await self.existing_adset_readiness(campaign_id, adset_id)
+        if not ready.get("ready"):
+            return {"status": "blocked", "reason": ready.get("reason"),
+                    "writes_performed": False, "campaign_id": campaign_id,
+                    "adset_id": adset_id, "new_campaign_created": False,
+                    "new_adset_created": False}
+        creative = await self._post(f"{self.account}/adcreatives", {
+            "name": f"Frankenstein Static {run_key[:10]}",
+            "object_story_spec": json.dumps({"page_id": self.page, "link_data": {
+                "link": meta_destination(product["link"]), "picture": product["image_link"],
+                "message": copy["primary_text"], "name": copy["headline"],
+                "description": copy["golden_nugget"],
+                "call_to_action": {"type": "SHOP_NOW"}}}, ensure_ascii=False)})
+        ad = await self._post(f"{self.account}/ads", {
+            "name": f"Frankenstein Ad {run_key[:10]}", "adset_id": adset_id,
+            "creative": json.dumps({"creative_id": creative["id"]}),
+            "status": "ACTIVE" if activate else "PAUSED"})
+        if activate:
+            observed = await self._get_object(ad["id"], "id,adset_id,status,effective_status")
+            if (str(observed.get("adset_id", "")) != adset_id
+                    or str(observed.get("status", "")).upper() != "ACTIVE"):
+                raise RuntimeError("FRANKENSTEIN_NEW_AD_ACTIVE_STATUS_NOT_VERIFIED")
+        return {"status": "active_existing_campaign" if activate else "created_paused_existing_campaign",
+                "campaign_id": campaign_id, "adset_id": adset_id,
+                "creative_id": creative["id"], "ad_id": ad["id"],
+                "writes_performed": True, "old_campaign_touched": False,
+                "new_campaign_created": False, "new_adset_created": False,
+                "daily_budget_eur": ready["daily_budget_eur"],
+                "account_remaining_cap_eur": ready["account_remaining_cap_eur"],
+                "product_id": product["id"]}
+
     async def create_paused_ad(self, product: dict[str, Any], copy: dict[str, Any],
                                run_key: str, daily_eur: float, total_eur: float,
                                activate: bool) -> dict[str, Any]:
@@ -575,12 +648,33 @@ async def run_once() -> dict[str, Any]:
             _required("FRANKENSTEIN_ADSET_ID"),
             _required("FRANKENSTEIN_AD_ID"),
         )
+
     ledger = Ledger(os.getenv("FRANKENSTEIN_DB_PATH", "/data/frankenstein/ledger.sqlite3"))
+    if ledger.has_completed_today():
+        return {"status": "complete", "reason": "DAILY_PRODUCT_RUN_ALREADY_COMPLETED",
+                "openai_called": False, "meta_called": False}
+
+    reuse_existing = os.getenv("FRANKENSTEIN_REUSE_EXISTING_ADSET", "false").strip().lower() == "true"
+    live = os.getenv("FRANKENSTEIN_META_LIVE_ENABLED", "false").strip().lower() == "true"
+    buyer = None
+    if reuse_existing:
+        if not live:
+            return {"status": "blocked", "reason": "META_LIVE_WRITES_DISABLED",
+                    "openai_called": False, "meta_called": False}
+        buyer = MetaBuyer()
+        campaign_id = _required("FRANKENSTEIN_CAMPAIGN_ID")
+        adset_id = _required("FRANKENSTEIN_ADSET_ID")
+        readiness = await buyer.existing_adset_readiness(campaign_id, adset_id)
+        if not readiness.get("ready"):
+            return {"status": "blocked", "reason": readiness.get("reason"),
+                    "openai_called": False, "meta_called": False,
+                    "campaign_id": campaign_id, "adset_id": adset_id}
+
     feed = await hunt_one()
     product = ledger.choose_product(feed["products"], os.getenv("FRANKENSTEIN_PRODUCT_ID", "").strip())
     if product is None:
         return {"status": "complete", "reason": "NO_UNPROCESSED_ELIGIBLE_PRODUCT",
-                "hunter": feed, "openai_called": False, "meta_called": False}
+                "products_checked": feed["products_checked"], "openai_called": False, "meta_called": False}
     if not ledger.reserve_product(product["id"]):
         return {"status": "blocked", "reason": "PRODUCT_ALREADY_RESERVED", "product_id": product["id"]}
     log.info("frankenstein_hunter_selected product_id=%s", product["id"])
@@ -605,17 +699,25 @@ async def run_once() -> dict[str, Any]:
     log.info("frankenstein_seo_artifact_ready product_id=%s bytes=%s published=false",
              product["id"], len(document.encode("utf-8")))
 
-    live = os.getenv("FRANKENSTEIN_META_LIVE_ENABLED", "false").strip().lower() == "true"
     daily = Decimal(os.getenv("FRANKENSTEIN_META_DAILY_BUDGET_EUR", "5.00"))
     total = Decimal(os.getenv("FRANKENSTEIN_META_TOTAL_BUDGET_EUR", "35.00"))
     if daily <= 0 or total <= 0:
         result = {"status": "blocked", "reason": "META_SPEND_BUDGET_REQUIRED",
                   "campaign_created": False, "writes_performed": False}
+    elif reuse_existing:
+        result = await buyer.create_ad_in_existing_campaign(
+            product, copy_data, hashlib.sha256(str(product["id"]).encode()).hexdigest(),
+            _required("FRANKENSTEIN_CAMPAIGN_ID"), _required("FRANKENSTEIN_ADSET_ID"), live)
     else:
-        result = await MetaBuyer().create_paused_ad(product, copy_data,
+        buyer = buyer or MetaBuyer()
+        result = await buyer.create_paused_ad(product, copy_data,
             hashlib.sha256(str(product["id"]).encode()).hexdigest(), float(daily), float(total), live)
-        ledger.save(product["id"], state="meta_active" if live else "meta_paused",
-                    campaign_id=result.get("campaign_id"))
+    state = ("meta_active" if result.get("status") == "active_existing_campaign"
+             else "meta_paused" if result.get("status") == "created_paused_existing_campaign"
+             else "meta_blocked" if result.get("status") == "blocked"
+             else "meta_active" if result.get("status") == "active"
+             else "meta_paused")
+    ledger.save(product["id"], state=state, campaign_id=result.get("campaign_id"))
     result.update({"product_id": product["id"], "old_campaign_touched": False})
     log.info("frankenstein_media_buyer %s", json.dumps(result, separators=(",", ":")))
     return {"status": "completed" if result.get("writes_performed") else "prepared",
