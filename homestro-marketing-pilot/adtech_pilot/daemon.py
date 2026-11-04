@@ -578,7 +578,7 @@ class PilotDaemon:
         )
         if (
             meta_source.get('status') == 'collected'
-            and re.fullmatch(r'[1-9]\\d{0,29}', owned_campaign_id)
+            and re.fullmatch(r'[1-9]\d{0,29}', owned_campaign_id)
             and configured_campaign_id == owned_campaign_id
             and len(meta_rows) == 1
             and meta_row_ids == [owned_campaign_id]
