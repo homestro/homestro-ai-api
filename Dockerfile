@@ -1,20 +1,13 @@
-FROM node:20-bookworm-slim
+FROM python:3.12-slim
 
-# Railway healthchecks + system Chromium for Playwright.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates chromium ffmpeg fonts-dejavu-core \
-  && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
+COPY homestro-marketing-pilot/adtech_pilot/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY homestro-marketing-pilot/adtech_pilot/ /app/adtech_pilot/
 
-# Prevent Playwright from downloading its bundled Chromium during npm install.
-ENV NODE_ENV=production
-ENV PORT=8080
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV CHROMIUM_PATH=/usr/bin/chromium
-
-COPY package.json ./
-RUN npm install --omit=dev
-COPY . .
-
-CMD ["sh", "-c", "node ./patch-autopilot.js && node ./patch-cost-rules.js && node ./patch-shopify-auth.js && node ./patch-json-output.js && node ./server.js"]
+CMD ["python", "-m", "adtech_pilot.frankenstein_core", "--once"]
