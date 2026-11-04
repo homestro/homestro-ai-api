@@ -8,11 +8,17 @@ adapter are configured explicitly.
 from __future__ import annotations
 
 import os
+import logging
+import re
 from typing import Any
 
 from celery import chain
+from celery.signals import worker_ready
+import redis
 
 from celery_app import app
+
+logger = logging.getLogger(__name__)
 
 
 def _is_true(name: str, default: str = "false") -> bool:
@@ -236,3 +242,41 @@ def run_mock_end_to_end(self) -> dict[str, Any]:
         "meta_graph_api_called": False,
         "writes_performed": False,
     }
+
+
+@worker_ready.connect(weak=False, dispatch_uid="homestro_pilot_staging_mock_bootstrap")
+def enqueue_staging_mock_once(sender: Any = None, **_: Any) -> None:
+    """Optionally enqueue one synthetic run at worker startup, behind a flag.
+
+    This gives the staging worker a phone-friendly trigger: enable
+    RUN_STAGING_MOCK_ON_START for a deployment, then turn it off. Redis keeps
+    the run ID idempotent across worker restarts. Production is never targeted.
+    """
+    if not _is_true("RUN_STAGING_MOCK_ON_START"):
+        return
+
+    run_id = os.getenv("STAGING_MOCK_RUN_ID", "phase5-mock")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", run_id):
+        logger.error("Staging mock not queued: STAGING_MOCK_RUN_ID has invalid format")
+        return
+
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        logger.error("Staging mock not queued: REDIS_URL is missing")
+        return
+
+    cache = redis.Redis.from_url(redis_url, decode_responses=True, socket_timeout=5)
+    lock_key = f"pilot_staging:mock_bootstrap:{run_id}"
+    if not cache.set(lock_key, "dispatching", nx=True, ex=10 * 60):
+        logger.info("Staging mock already queued for run_id=%s", run_id)
+        return
+
+    try:
+        task_result = app.send_task("media_buyer.run_mock_end_to_end")
+    except Exception as exc:
+        cache.delete(lock_key)
+        logger.error("Staging mock enqueue failed (%s)", type(exc).__name__)
+        return
+
+    cache.set(lock_key, task_result.id, ex=30 * 24 * 60 * 60)
+    logger.info("Staging mock queued run_id=%s task_id=%s", run_id, task_result.id)
