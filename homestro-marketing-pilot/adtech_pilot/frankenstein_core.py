@@ -357,6 +357,98 @@ class MetaBuyer:
             raise RuntimeError("META_WRITE_ID_MISSING")
         return payload
 
+    async def _get_object(self, object_id: str, fields: str) -> dict[str, Any]:
+        if not object_id.isdigit():
+            raise RuntimeError("META_OBJECT_ID_INVALID")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=8)) as client:
+            response = await client.get(f"{self.base}/{object_id}",
+                headers={"Authorization": f"Bearer {self.token}"},
+                params={"fields": fields})
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict) or str(payload.get("id", "")) != object_id:
+            raise RuntimeError("META_OBJECT_READBACK_INVALID")
+        return payload
+
+    async def activate_existing_objects(self, old_campaign_id: str, campaign_id: str,
+                                        adset_id: str, ad_id: str) -> dict[str, Any]:
+        ids = (old_campaign_id.strip(), campaign_id.strip(), adset_id.strip(), ad_id.strip())
+        if any(not value.isdigit() for value in ids):
+            raise RuntimeError("FRANKENSTEIN_ACTIVATION_ID_INVALID")
+        if len(set(ids)) != 4:
+            raise RuntimeError("FRANKENSTEIN_ACTIVATION_IDS_NOT_UNIQUE")
+
+        remaining = await self._remaining_account_cap_eur()
+        if remaining <= 0:
+            raise RuntimeError("META_ACCOUNT_SPEND_CAP_EXHAUSTED")
+
+        old = await self._get_object(old_campaign_id, "id,name,status,effective_status")
+        if "autopilot" not in str(old.get("name", "")).casefold():
+            raise RuntimeError("OLD_CAMPAIGN_NAME_MISMATCH")
+
+        campaign = await self._get_object(campaign_id, "id,name,status,effective_status")
+        adset = await self._get_object(adset_id, "id,campaign_id,status,daily_budget")
+        ad = await self._get_object(ad_id, "id,adset_id,status")
+        if str(adset.get("campaign_id", "")) != campaign_id:
+            raise RuntimeError("FRANKENSTEIN_ADSET_CAMPAIGN_MISMATCH")
+        if str(ad.get("adset_id", "")) != adset_id:
+            raise RuntimeError("FRANKENSTEIN_AD_ADSET_MISMATCH")
+        try:
+            daily_cents = int(adset["daily_budget"])
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError("FRANKENSTEIN_ADSET_BUDGET_UNVERIFIED") from None
+        if not 0 < daily_cents <= int(HARD_META_DAILY_EUR * 100):
+            raise RuntimeError("FRANKENSTEIN_ADSET_BUDGET_OUT_OF_POLICY")
+
+        old_was_active = any(str(old.get(k, "")).upper() == "ACTIVE"
+                             for k in ("status", "effective_status"))
+        if old_was_active:
+            await self._post(old_campaign_id, {"status": "PAUSED"}, require_id=False)
+            old = await self._get_object(old_campaign_id, "id,name,status,effective_status")
+            if str(old.get("status", "")).upper() != "PAUSED":
+                raise RuntimeError("AUTOPILOT_PAUSE_NOT_VERIFIED")
+
+        if await self._active_campaign_exists():
+            return {"status": "blocked", "reason": "ANOTHER_ACTIVE_CAMPAIGN_REMAINS",
+                    "old_campaign_id": old_campaign_id,
+                    "old_campaign_status": old.get("status"),
+                    "old_campaign_touched": old_was_active,
+                    "frankenstein_campaign_id": campaign_id,
+                    "frankenstein_remains_paused": True}
+
+        try:
+            for object_id in (adset_id, ad_id, campaign_id):
+                await self._post(object_id, {"status": "ACTIVE"}, require_id=False)
+            checks = [
+                await self._get_object(adset_id, "id,status"),
+                await self._get_object(ad_id, "id,status"),
+                await self._get_object(campaign_id, "id,status"),
+            ]
+            if any(str(obj.get("status", "")).upper() != "ACTIVE" for obj in checks):
+                raise RuntimeError("FRANKENSTEIN_ACTIVE_STATUS_NOT_VERIFIED")
+        except Exception:
+            for object_id in (ad_id, adset_id, campaign_id):
+                try:
+                    await self._post(object_id, {"status": "PAUSED"}, require_id=False)
+                except Exception:
+                    log.exception("frankenstein_activation_rollback_pause_failed object_id=%s", object_id)
+            if old_was_active:
+                try:
+                    await self._post(old_campaign_id, {"status": "ACTIVE"}, require_id=False)
+                except Exception:
+                    log.exception("frankenstein_activation_rollback_autopilot_restore_failed")
+            raise
+
+        result = {"status": "active", "campaign_id": campaign_id, "adset_id": adset_id,
+                  "ad_id": ad_id, "daily_budget_eur": daily_cents / 100,
+                  "account_remaining_cap_eur": round(remaining, 2),
+                  "autopilot_campaign_id": old_campaign_id,
+                  "autopilot_status": old.get("status"),
+                  "old_campaign_touched": old_was_active,
+                  "verified_active": True}
+        log.info("frankenstein_activation %s", json.dumps(result, separators=(",", ":")))
+        return result
+
     async def _active_campaign_exists(self) -> bool:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=8)) as client:
             response = await client.get(f"{self.base}/{self.account}/campaigns",
@@ -445,6 +537,14 @@ class MetaBuyer:
 
 
 async def run_once() -> dict[str, Any]:
+    if os.getenv("FRANKENSTEIN_ACTIVATE_EXISTING", "false").strip().lower() == "true":
+        buyer = MetaBuyer()
+        return await buyer.activate_existing_objects(
+            _required("FRANKENSTEIN_OLD_CAMPAIGN_ID"),
+            _required("FRANKENSTEIN_CAMPAIGN_ID"),
+            _required("FRANKENSTEIN_ADSET_ID"),
+            _required("FRANKENSTEIN_AD_ID"),
+        )
     ledger = Ledger(os.getenv("FRANKENSTEIN_DB_PATH", "/data/frankenstein/ledger.sqlite3"))
     feed = await hunt_one()
     product = ledger.choose_product(feed["products"], os.getenv("FRANKENSTEIN_PRODUCT_ID", "").strip())
