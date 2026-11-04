@@ -563,7 +563,32 @@ class PilotDaemon:
 
         latest = await self.audit.latest_brain_evidence()
         meta_record = latest.get('meta_performance_snapshot') or {}
-        meta_source = {**meta_record.get('payload', {}), 'observed_at': meta_record.get('created_at')}
+        meta_payload = meta_record.get('payload', {})
+        meta_source = {**meta_payload, 'observed_at': meta_record.get('created_at')}
+
+        # Bind accounting to the exact persisted campaign claim and a complete,
+        # successful Insights response. This verifies campaign scope only; it
+        # does not invent a common reporting window or authorize any writes.
+        owned_campaign_id = str((claim or {}).get('campaign_id') or '')
+        configured_campaign_id = os.getenv('PILOT_FIRST_PURCHASE_CAMPAIGN_ID', '').strip()
+        meta_rows = meta_source.get('metrics')
+        meta_row_ids = (
+            [str(row.get('campaign_id') or '') for row in meta_rows if isinstance(row, dict)]
+            if isinstance(meta_rows, list) else []
+        )
+        if (
+            meta_source.get('status') == 'collected'
+            and re.fullmatch(r'[1-9]\\d{0,29}', owned_campaign_id)
+            and configured_campaign_id == owned_campaign_id
+            and len(meta_rows) == 1
+            and meta_row_ids == [owned_campaign_id]
+        ):
+            meta_source.update(
+                owned_campaign_ids=[owned_campaign_id],
+                campaign_scope_verified=True,
+                report_complete=True,
+            )
+
         provider_sources = {'meta': meta_source,
             'google': {**search_channels['google'], 'observed_at': datetime.now(UTC).isoformat()},
             'microsoft': microsoft_performance}
