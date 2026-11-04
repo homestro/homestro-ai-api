@@ -297,12 +297,20 @@ class FirstPurchaseController:
             }
 
         async def get(path, fields=None, params=None):
-            response = await client.get(base + path, headers=headers, params=params or {'fields': fields, 'limit': '100'})
-            response.raise_for_status()
-            data = response.json()
-            if data.get('error') or (data.get('paging') or {}).get('next'):
-                raise ValueError('PROVIDER_SCOPE_INCOMPLETE')
-            return data
+            request_params = params or {'fields': fields, 'limit': '100'}
+            for attempt in range(3):
+                try:
+                    response = await client.get(base + path, headers=headers, params=request_params)
+                    response.raise_for_status()
+                    data = response.json()
+                    if data.get('error') or (data.get('paging') or {}).get('next'):
+                        raise ValueError('PROVIDER_SCOPE_INCOMPLETE')
+                    return data
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                        httpx.RemoteProtocolError):
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(0.5 * (2 ** attempt))
 
         async def pause(reason, *, latch=False):
             response = await client.post(base + campaign, headers=headers, data={'status': 'PAUSED'})
