@@ -1,8 +1,6 @@
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.adtech-pilot"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-healthcheckPath = "/healthz"
-healthcheckTimeout = 60
-restartPolicyType = "ALWAYS"
+restartPolicyType = "NEVER"
