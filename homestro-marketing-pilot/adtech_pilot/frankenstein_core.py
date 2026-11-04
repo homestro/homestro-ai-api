@@ -85,11 +85,24 @@ class Ledger:
 
     def choose_product(self, candidates: list[dict[str, Any]], requested_id: str) -> dict[str, Any] | None:
         with closing(self.connect()) as db:
-            prior_runs = db.execute("SELECT COUNT(*) FROM product_runs").fetchone()[0]
-            done = {row[0] for row in db.execute("SELECT product_id FROM product_runs")}
-        if prior_runs:
+            prior = db.execute(
+                "SELECT product_id,state,updated_at FROM product_runs ORDER BY updated_at DESC"
+            ).fetchall()
+        if prior:
+            by_id = {p["id"]: p for p in candidates}
+            now = datetime.now(UTC)
+            for product_id, state, updated_at in prior:
+                try:
+                    age = (now - datetime.fromisoformat(updated_at)).total_seconds()
+                except (TypeError, ValueError):
+                    age = 0
+                retryable = state == "retryable" or (state == "reserved" and age >= 60)
+                if not retryable or (requested_id and product_id != requested_id):
+                    continue
+                if product_id in by_id:
+                    return by_id[product_id]
             return None
-        available = [p for p in candidates if p["id"] not in done]
+        available = list(candidates)
         if requested_id:
             available = [p for p in available if p["id"] == requested_id]
         if not available:
@@ -105,13 +118,28 @@ class Ledger:
         return sorted(available, key=rank)[0]
 
     def reserve_product(self, product_id: str) -> bool:
+        now = datetime.now(UTC)
         with closing(self.connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
             cursor = db.execute(
                 "INSERT OR IGNORE INTO product_runs(product_id,state,updated_at) "
-                "VALUES (?, 'reserved', ?)",
-                (product_id, datetime.now(UTC).isoformat()),
-            )
-            return cursor.rowcount == 1
+                "VALUES (?, 'reserved', ?)", (product_id, now.isoformat()))
+            if cursor.rowcount == 1:
+                return True
+            row = db.execute(
+                "SELECT state,updated_at FROM product_runs WHERE product_id=?", (product_id,)
+            ).fetchone()
+            if not row or row[0] not in {"retryable", "reserved"}:
+                return False
+            try:
+                age = (now - datetime.fromisoformat(row[1])).total_seconds()
+            except (TypeError, ValueError):
+                age = 0
+            if row[0] == "reserved" and age < 60:
+                return False
+            db.execute("UPDATE product_runs SET state='reserved',updated_at=? WHERE product_id=?",
+                       (now.isoformat(), product_id))
+            return True
 
     def save(self, product_id: str, **values: Any) -> None:
         allowed = {"state", "copy_json", "html_path", "campaign_id", "openai_cost_usd"}
@@ -137,15 +165,27 @@ class Ledger:
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             spent = float(db.execute("SELECT COALESCE(SUM(openai_cost_usd),0) FROM product_runs").fetchone()[0])
+            existing = db.execute(
+                "SELECT state FROM openai_reservations WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if existing and existing[0] == "settled":
+                return False
             reserved = float(db.execute(
-                "SELECT COALESCE(SUM(amount_usd),0) FROM openai_reservations WHERE state='reserved'").fetchone()[0])
+                "SELECT COALESCE(SUM(amount_usd),0) FROM openai_reservations "
+                "WHERE state='reserved' AND run_id<>?", (run_id,)).fetchone()[0])
             if cap <= 0 or spent + reserved + cap > budget:
                 return False
-            cursor = db.execute(
-                "INSERT OR IGNORE INTO openai_reservations VALUES (?,?,'reserved')",
+            db.execute(
+                "INSERT INTO openai_reservations VALUES (?,?,'reserved') "
+                "ON CONFLICT(run_id) DO UPDATE SET amount_usd=excluded.amount_usd,state='reserved'",
                 (run_id, cap),
             )
-            return cursor.rowcount == 1
+            return True
+
+    def release_openai(self, run_id: str) -> None:
+        with closing(self.connect()) as db, db:
+            db.execute("UPDATE openai_reservations SET state='released' "
+                       "WHERE run_id=? AND state='reserved'", (run_id,))
 
     def settle_openai(self, run_id: str, product_id: str, cost: float) -> None:
         with closing(self.connect()) as db, db:
@@ -225,26 +265,30 @@ async def write_copy(product: dict[str, Any], ledger: Ledger) -> dict[str, Any]:
     encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     if len(encoded) > OPENAI_REQUEST_BYTE_LIMIT:
         raise RuntimeError("OPENAI_REQUEST_BYTE_LIMIT")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
-        response = await client.post("https://api.openai.com/v1/responses",
-            headers={"Authorization": f"Bearer {key}"}, json=payload)
-        response.raise_for_status()
-        result = response.json()
-    text = "".join(part.get("text", "") for output in result.get("output", [])
-                   for part in output.get("content", []) if part.get("type") == "output_text")
-    copy = Copy.model_validate_json(text)
-    if len(copy.bullets) != 3 or len(copy.faq) != 3:
-        raise RuntimeError("OPENAI_COPY_SHAPE_INVALID")
-    usage = result.get("usage") or {}
-    input_tokens, output_tokens = int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
-    cost = (input_tokens * OPENAI_INPUT_USD_PER_MILLION
-            + output_tokens * OPENAI_OUTPUT_USD_PER_MILLION) / 1_000_000
-    if cost > OPENAI_MAX_CALL_USD or cost > HARD_OPENAI_BUDGET_USD:
-        raise RuntimeError("OPENAI_SINGLE_CALL_COST_CAP_EXCEEDED")
-    ledger.settle_openai(run_id, product["id"], cost)
-    return {"copy": copy.model_dump(mode="json"), "model": MODEL,
-            "input_tokens": input_tokens, "output_tokens": output_tokens,
-            "estimated_cost_usd": round(cost, 8), "lifetime_budget_usd": HARD_OPENAI_BUDGET_USD}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
+            response = await client.post("https://api.openai.com/v1/responses",
+                headers={"Authorization": f"Bearer {key}"}, json=payload)
+            response.raise_for_status()
+            result = response.json()
+        text = "".join(part.get("text", "") for output in result.get("output", [])
+                       for part in output.get("content", []) if part.get("type") == "output_text")
+        copy = Copy.model_validate_json(text)
+        if len(copy.bullets) != 3 or len(copy.faq) != 3:
+            raise RuntimeError("OPENAI_COPY_SHAPE_INVALID")
+        usage = result.get("usage") or {}
+        input_tokens, output_tokens = int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
+        cost = (input_tokens * OPENAI_INPUT_USD_PER_MILLION
+                + output_tokens * OPENAI_OUTPUT_USD_PER_MILLION) / 1_000_000
+        if cost > OPENAI_MAX_CALL_USD or cost > HARD_OPENAI_BUDGET_USD:
+            raise RuntimeError("OPENAI_SINGLE_CALL_COST_CAP_EXCEEDED")
+        ledger.settle_openai(run_id, product["id"], cost)
+        return {"copy": copy.model_dump(mode="json"), "model": MODEL,
+                "input_tokens": input_tokens, "output_tokens": output_tokens,
+                "estimated_cost_usd": round(cost, 8), "lifetime_budget_usd": HARD_OPENAI_BUDGET_USD}
+    except Exception:
+        ledger.release_openai(run_id)
+        raise
 
 
 def render_seo_html(product: dict[str, Any], copy: dict[str, Any]) -> str:
@@ -404,7 +448,11 @@ async def run_once() -> dict[str, Any]:
     if not ledger.reserve_product(product["id"]):
         return {"status": "blocked", "reason": "PRODUCT_ALREADY_RESERVED", "product_id": product["id"]}
     log.info("frankenstein_hunter_selected product_id=%s", product["id"])
-    generated = await write_copy(product, ledger)
+    try:
+        generated = await write_copy(product, ledger)
+    except Exception:
+        ledger.save(product["id"], state="retryable")
+        raise
     copy_data = generated["copy"]
     ledger.save(product["id"], state="copy_generated", copy_json=json.dumps(copy_data, ensure_ascii=False),
                 openai_cost_usd=generated["estimated_cost_usd"])
