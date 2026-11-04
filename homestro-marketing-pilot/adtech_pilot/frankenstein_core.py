@@ -370,6 +370,29 @@ class MetaBuyer:
             raise RuntimeError("META_OBJECT_READBACK_INVALID")
         return payload
 
+    async def inspect_existing_objects(self, campaign_id: str, adset_id: str,
+                                       ad_id: str) -> dict[str, Any]:
+        campaign = await self._get_object(campaign_id, "id,name,status,effective_status")
+        adset = await self._get_object(adset_id,
+                                       "id,campaign_id,status,effective_status,daily_budget,start_time,end_time")
+        ad = await self._get_object(ad_id,
+                                    "id,name,adset_id,status,effective_status,ad_review_feedback")
+        if str(adset.get("campaign_id", "")) != campaign_id:
+            raise RuntimeError("FRANKENSTEIN_ADSET_CAMPAIGN_MISMATCH")
+        if str(ad.get("adset_id", "")) != adset_id:
+            raise RuntimeError("FRANKENSTEIN_AD_ADSET_MISMATCH")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=8)) as client:
+            response = await client.get(f"{self.base}/{ad_id}/insights",
+                headers={"Authorization": f"Bearer {self.token}"},
+                params={"fields": "impressions,spend,clicks", "date_preset": "today"})
+            response.raise_for_status()
+            insights = response.json()
+        result = {"status": "inspected", "campaign": campaign, "adset": adset,
+                  "ad": ad, "insights_today": (insights.get("data") or [{}])[0],
+                  "old_campaign_touched": False}
+        log.info("frankenstein_live_status %s", json.dumps(result, separators=(",", ":")))
+        return result
+
     async def activate_existing_objects(self, old_campaign_id: str, campaign_id: str,
                                         adset_id: str, ad_id: str) -> dict[str, Any]:
         ids = (old_campaign_id.strip(), campaign_id.strip(), adset_id.strip(), ad_id.strip())
@@ -537,6 +560,13 @@ class MetaBuyer:
 
 
 async def run_once() -> dict[str, Any]:
+    if os.getenv("FRANKENSTEIN_INSPECT_EXISTING", "false").strip().lower() == "true":
+        buyer = MetaBuyer()
+        return await buyer.inspect_existing_objects(
+            _required("FRANKENSTEIN_CAMPAIGN_ID"),
+            _required("FRANKENSTEIN_ADSET_ID"),
+            _required("FRANKENSTEIN_AD_ID"),
+        )
     if os.getenv("FRANKENSTEIN_ACTIVATE_EXISTING", "false").strip().lower() == "true":
         buyer = MetaBuyer()
         return await buyer.activate_existing_objects(
