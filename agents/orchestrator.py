@@ -15,7 +15,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from agents import creative_seo, media_buyer, product_hunter  # noqa: E402
+from agents import creative_seo, media_buyer, product_hunter, tiktok_publisher  # noqa: E402
 
 logger = logging.getLogger("homestro.agents.orchestrator")
 
@@ -46,6 +46,20 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
         }
 
     try:
+        stages["tiktok_publisher"] = await tiktok_publisher.run_once(candidates, env=env)
+    except Exception as exc:
+        stages["tiktok_publisher"] = {
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "prepared_count": 0,
+            "ready_count": 0,
+            "review_count": 0,
+            "drafts": [],
+            "publication_performed": False,
+            "ad_mutations_performed": False,
+        }
+
+    try:
         stages["media_buyer"] = await media_buyer.run_once(env=env)
     except Exception as exc:
         stages["media_buyer"] = {
@@ -67,8 +81,10 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
                     "no_eligible_products",
                     "drafted",
                     "no_drafts",
+                    "prepared",
                     "collected",
                     "no_managed_campaign",
+                    "no_candidates",
                 }
                 for status in statuses
             )
@@ -89,6 +105,14 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
                     for draft in stages["creative_seo"].get("drafts", [])
                 ],
             },
+            "tiktok_publisher": {
+                "status": stages["tiktok_publisher"].get("status"),
+                "candidate_count": stages["tiktok_publisher"].get("candidate_count", 0),
+                "prepared_count": stages["tiktok_publisher"].get("prepared_count", 0),
+                "ready_count": stages["tiktok_publisher"].get("ready_count", 0),
+                "review_count": stages["tiktok_publisher"].get("review_count", 0),
+                "reason": stages["tiktok_publisher"].get("reason"),
+            },
             "media_buyer": {
                 "status": stages["media_buyer"].get("status"),
                 "metrics": stages["media_buyer"].get("metrics", []),
@@ -98,6 +122,8 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
         "paid_generation_performed": False,
         "publication_performed": False,
         "ad_mutations_performed": False,
+        "tiktok_upload_performed": False,
+        "tiktok_ad_spend_eur": 0,
     }
     logger.info("agent_chain %s", json.dumps(result, separators=(",", ":")))
     return {"status": result["status"], "stages": stages, "log_record": result}
