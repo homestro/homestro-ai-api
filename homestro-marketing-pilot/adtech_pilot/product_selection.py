@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from .order_economics import instant, money
-from .website_ads import product_path, website_story
+from .website_ads import product_variant_identity, website_story
 
 
 def select_cost_candidates(products, costs, *, now=None):
@@ -34,10 +34,11 @@ def select_cost_candidates(products, costs, *, now=None):
             if not (standard or extended) or headroom < 10:
                 rejected['OUTSIDE_OWNER_PRODUCT_PRICE_LIMITS'] += 1
                 continue
-            if product_path(raw['link']) in seen:
+            identity = product_variant_identity(raw, variant)
+            if identity in seen:
                 rejected['DUPLICATE_PRODUCT_URL'] += 1
                 continue
-            seen.add(product_path(raw['link']))
+            seen.add(identity)
             accepted.append({**raw, 'pilot_gross_headroom_eur': str(headroom),
                              'pilot_unit_cost_eur': str(purchase),
                              'pilot_cost_observed_at': cost['observed_at']})

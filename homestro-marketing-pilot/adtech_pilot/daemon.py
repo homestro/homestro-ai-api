@@ -85,6 +85,7 @@ class PilotDaemon:
         creative_job: Job | None = None,
         metrics_job: Job | None = None,
         catalog_job: Job | None = None,
+        agent_chain_job: Job | None = None,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
     ):
@@ -125,6 +126,7 @@ class PilotDaemon:
                 feed_interval_hours * 3600,
                 catalog_job or self._catalog_access_job,
             ),
+            "agent_chain": (3600, agent_chain_job or self._agent_chain_job),
         }
         self._next_run = {name: 0.0 for name in self.jobs}
         self._retry_at = {name: 0.0 for name in self.jobs}
@@ -144,7 +146,8 @@ class PilotDaemon:
             if creative_due and metrics_age > 900:
                 self._next_run["media_buying_plan"] = 0
             order = ("feed_diagnostics", "merchant_center_diagnostics", "competitor_scan",
-                     "media_buying_plan", "meta_catalog_access", "creative_candidates")
+                     "media_buying_plan", "meta_catalog_access", "creative_candidates",
+                     "agent_chain")
             for name in order:
                 interval, job = self.jobs[name]
                 now = time.monotonic()
@@ -620,6 +623,17 @@ class PilotDaemon:
                 'generated_at': daily['generated_at'], 'net_profit_verified': False,
                 'budget_increase_authorized': False}, separators=(',', ':')))
         return {"ranked_candidates": ranked_candidates, "selection": selection}
+
+    async def _agent_chain_job(self) -> dict[str, Any]:
+        """Run the repository's read-only product, copy and metrics agents."""
+        from agents.orchestrator import run_once
+
+        result = await run_once()
+        record = result.get("log_record")
+        if isinstance(record, dict):
+            return record
+        return {"status": result.get("status", "completed_with_blockers"),
+                "stages": result.get("stages", {})}
 
     async def _creative_job(self) -> dict[str, Any]:
         """Submit the catalog-based pilot without paid AI creative generation.
