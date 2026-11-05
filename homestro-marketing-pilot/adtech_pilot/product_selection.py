@@ -10,7 +10,6 @@ from urllib.parse import parse_qsl, urlsplit
 from .order_economics import instant, money
 from .website_ads import product_path, website_story
 
-
 _IGNORED_TRACKING_KEYS = {"fbclid", "gclid", "msclkid", "pilot_ref", "ref", "source", "campaign", "ad"}
 
 
