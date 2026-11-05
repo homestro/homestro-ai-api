@@ -18,7 +18,7 @@ _VARIANT_QUERY_KEYS = {
     'variant', 'variant_id', 'selected_variant', 'option', 'size', 'color',
     'colour', 'sku', 'option1', 'option2', 'option3',
 }
-_TRACKING_QUERY_KEYS = {'fbclid', 'gclid', 'msclkid', 'ref', 'source', 'campaign', 'ad'}
+_TRACKING_QUERY_KEYS = {'fbclid', 'gclid', 'msclkid', 'pilot_ref', 'ref', 'source', 'campaign', 'ad'}
 
 
 def product_variant_identity(product, fallback_id=None):
@@ -32,8 +32,12 @@ def product_variant_identity(product, fallback_id=None):
         and key.casefold() not in _TRACKING_QUERY_KEYS
         and not key.casefold().startswith('utm_')
     ))
+    if parameters:
+        return (path, 'parameters', parameters)
     identity = str(fallback_id or product.get('id') or '').strip()
-    return (path, parameters, identity)
+    if identity:
+        return (path, 'id', identity)
+    return (path, 'url')
 
 
 def owner_excluded(product):

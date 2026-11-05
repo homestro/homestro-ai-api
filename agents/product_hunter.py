@@ -39,7 +39,7 @@ async def _read_feed(env: dict[str, str]) -> bytes:
     if (parsed.scheme != "https" or parsed.hostname not in {
         "homestro.de", "www.homestro.de",
         "homestro-ai-api-fixed-current-production.up.railway.app",
-    } or parsed.username or parsed.password):
+    } or parsed.username or parsed.password or parsed.port not in {None, 443}):
         raise ValueError("PRODUCT_FEED_SOURCE_NOT_CONFIGURED")
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(20, connect=5), follow_redirects=False
