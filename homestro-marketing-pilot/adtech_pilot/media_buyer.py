@@ -19,6 +19,22 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
+
+def _meta_error_fields(error: Any) -> dict[str, Any]:
+    """Keep Meta's exact error fields; never include auth headers or request bodies."""
+    if not isinstance(error, dict):
+        return {}
+    fields: dict[str, Any] = {}
+    for key in ('code', 'error_subcode'):
+        value = error.get(key)
+        if type(value) is int:
+            fields[key] = value
+    for key in ('message', 'error_user_msg', 'fbtrace_id'):
+        value = error.get(key)
+        if isinstance(value, str):
+            fields[key] = value
+    return fields
+
 from .creative_factory import GeneratedCreative
 from .micro_budget import (
     MetaAccountReadiness,
@@ -815,6 +831,7 @@ class MetaPublisher:
                 "http_status": response.status_code,
                 "stage": stage,
             }
+            details.update(_meta_error_fields(error))
             for source, target in (
                 ("code", "meta_error_code"),
                 ("error_subcode", "meta_error_subcode"),
@@ -1332,6 +1349,7 @@ class MetaPublisher:
                 "writes_performed": writes_performed,
                 "activation_performed": False,
             }
+            result.update(_meta_error_fields(error))
             if isinstance(error.get("code"), int):
                 result["meta_error_code"] = error["code"]
             if isinstance(error.get("error_subcode"), int):
@@ -2154,7 +2172,7 @@ class MetaSaaSPublisher:
                     )
                 else:
                     stage = "meta_api_request"
-                safe_details: dict[str, str] = {}
+                safe_details: dict[str, Any] = _meta_error_fields(error)
                 for source, target in (
                     ("type", "meta_error_type"),
                     ("error_user_title", "meta_error_title"),

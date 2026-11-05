@@ -29,6 +29,22 @@ STOPPED_CLAIMS = {'STOPPED_TEST_BUDGET', 'STOPPED_PERFORMANCE', 'STOPPED_OWNER',
 RETIRED_ARCHIVED_CAMPAIGN_ID = '120254444566440274'
 
 
+def _meta_error_fields(error):
+    """Preserve Meta's actionable error fields without logging request secrets."""
+    if not isinstance(error, dict):
+        return {}
+    fields = {}
+    for key in ('code', 'error_subcode'):
+        value = error.get(key)
+        if type(value) is int:
+            fields[key] = value
+    for key in ('message', 'error_user_msg', 'fbtrace_id'):
+        value = error.get(key)
+        if isinstance(value, str):
+            fields[key] = value
+    return fields
+
+
 def _shopify_variant_key(value):
     """Return a numeric Shopify variant key from known Shopify feed/API IDs."""
     text = str(value or '').strip()
@@ -806,7 +822,7 @@ class FirstPurchaseController:
                     'url_tags_readback_confirmed': False,
                     'pilot_attribution_verified': False,
                     'active_owner_campaign_kept_live': True,
-                    'reason': 'META_REJECTED_CATALOG_URL_TAG_WRITE',
+                    'reason': 'URL_TAGS_WRITE_DISABLED_DYNAMIC_CATALOG',
                 }
             if is_catalog_ad and getattr(self, 'catalog_feed_identity_validation', None):
                 snapshot['catalog_feed_identity_validation'] = self.catalog_feed_identity_validation
@@ -1099,7 +1115,7 @@ class FirstPurchaseController:
                 detail['http_status'] = exc.response.status_code
                 try:
                     error = exc.response.json().get('error', {})
-                    detail.update({k: error[k] for k in ('code', 'error_subcode') if type(error.get(k)) is int})
+                    detail.update(_meta_error_fields(error))
                     if error.get('code') in {4, 17, 32, 613, 80004}:
                         self.store.defer_provider(campaign, 'META_API_RATE_LIMIT_BACKOFF', now, 900)
                     elif error.get('code') == 100 and error.get('error_subcode') == 2446307:
@@ -1115,13 +1131,8 @@ class FirstPurchaseController:
                             self.store.defer_provider(
                                 campaign, 'META_CATALOG_TRACKING_TAG_UPDATE_REJECTED', now, 900
                             )
-                        # Keep the provider's bounded diagnostic, never payloads,
-                        # URLs or credentials. This identifies the rejected field.
-                        for key in ('error_user_title', 'error_user_msg', 'message'):
-                            value = error.get(key)
-                            if isinstance(value, str):
-                                value = re.sub(r'https?://\\S+|\\b[A-Za-z0-9_-]{40,}\\b|\\bEA[A-Za-z0-9]{15,}\\b|sk-[A-Za-z0-9_-]+', '[redacted]', value)
-                                detail[key] = value[:800]
+                        # Exact Meta fields are retained by _meta_error_fields above.
+
                 except (ValueError, TypeError, AttributeError):
                     pass
             # A transient transport failure on the initial campaign read is

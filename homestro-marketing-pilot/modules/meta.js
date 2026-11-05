@@ -22,8 +22,7 @@ export class MetaOrganic {
       body:body?new URLSearchParams(body):undefined,signal:AbortSignal.timeout(30000),redirect:'error'});
     let b;try{b=await r.json();}catch{fail('META_INVALID_RESPONSE');}
     if(!r.ok || b.error) {
-      const message=String(b.error?.message||'').replace(/https?:\/\/\S+/g,'[URL]').replace(/[A-Za-z0-9_-]{40,}/g,'[REDACTED]').slice(0,240);
-      log('META_API_ERROR',{httpStatus:r.status,apiCode:b.error?.code||null,apiSubcode:b.error?.error_subcode||null,message});
+      log('META_API_ERROR',{httpStatus:r.status,code:b.error?.code??null,error_subcode:b.error?.error_subcode??null,message:typeof b.error?.message==='string'?b.error.message:null,error_user_msg:typeof b.error?.error_user_msg==='string'?b.error.error_user_msg:null,fbtrace_id:typeof b.error?.fbtrace_id==='string'?b.error.fbtrace_id:null});
       if(b.error?.code===190)await this.cfg.onCredentialError?.({metaCode:190},credentials);
       fail(b.error?.code===190?'META_REAUTH_REQUIRED':'META_REQUEST_FAILED');
     }
