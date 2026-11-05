@@ -35,10 +35,11 @@ class ContentEngineTests(unittest.TestCase):
         self.assertFalse(draft['unsupported_claims_added'])
         self.assertFalse(draft['paid_generation_performed'])
 
-    def test_canonical_dedup_prevents_recreating_each_variant_as_content(self):
+    def test_variant_identity_keeps_distinct_variants_and_collapses_tracking_duplicates(self):
         result = content_batch([self.product(), self.product(id='124',
-            link='https://homestro.de/products/box?variant=124')])
-        self.assertEqual(result['draft_count'], 1)
+            link='https://homestro.de/products/box?variant=124'), self.product(
+            link='https://homestro.de/products/box?variant=123&utm_source=feed')])
+        self.assertEqual(result['draft_count'], 2)
 
     def test_batch_skips_invalid_and_limits_preview(self):
         result = content_batch([self.product(availability='out_of_stock')] + [self.product(
