@@ -33,9 +33,13 @@ async def _read_feed(env: dict[str, str]) -> bytes:
     feed_url = (
         env.get("PILOT_PRODUCT_FEED_URL", "").strip()
         or env.get("PILOT_FEED_URL", "").strip()
+        or env.get("HOMESTRO_PRODUCT_FEED_URL", "").strip()
     )
     parsed = urlsplit(feed_url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (parsed.scheme != "https" or parsed.hostname not in {
+        "homestro.de", "www.homestro.de",
+        "homestro-ai-api-fixed-current-production.up.railway.app",
+    } or parsed.username or parsed.password):
         raise ValueError("PRODUCT_FEED_SOURCE_NOT_CONFIGURED")
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(20, connect=5), follow_redirects=False

@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 
 from .feed_manager import FeedProduct
-from .website_ads import website_story
+from .website_ads import product_variant_identity, website_story
 
 BRIEF = {
     'brand': 'Homestro', 'language': 'de', 'markets': ['DE', 'AT'],
@@ -62,10 +62,10 @@ def content_batch(products, *, limit=3):
         except (ValueError, TypeError, KeyError):
             rejected += 1
             continue
-        canonical = draft['seo']['canonical_suggestion']
-        if canonical in seen:
+        identity = product_variant_identity(raw, draft['product_id'])
+        if identity in seen:
             continue
-        seen.add(canonical)
+        seen.add(identity)
         drafts.append(draft)
         if len(drafts) >= limit:
             break
