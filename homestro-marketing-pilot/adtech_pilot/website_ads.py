@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from .feed_manager import FeedProduct
 
@@ -12,6 +12,32 @@ OWNER_EXCLUDED_HANDLES = {'pet-combs-knot-opening-combs-massage-combs-electric-s
 
 def product_path(value):
     return unquote(urlsplit(str(value)).path).rstrip('/').casefold()
+
+
+_VARIANT_QUERY_KEYS = {
+    'variant', 'variant_id', 'selected_variant', 'option', 'size', 'color',
+    'colour', 'sku', 'option1', 'option2', 'option3',
+}
+_TRACKING_QUERY_KEYS = {'fbclid', 'gclid', 'msclkid', 'pilot_ref', 'ref', 'source', 'campaign', 'ad'}
+
+
+def product_variant_identity(product, fallback_id=None):
+    """Identify a feed variant without treating tracking tags as distinct items."""
+    link = str(product.get('link') or '')
+    path = product_path(link)
+    parameters = tuple(sorted(
+        (key.casefold(), value)
+        for key, value in parse_qsl(urlsplit(link).query, keep_blank_values=False)
+        if (key.casefold() in _VARIANT_QUERY_KEYS or key.casefold().startswith('option_'))
+        and key.casefold() not in _TRACKING_QUERY_KEYS
+        and not key.casefold().startswith('utm_')
+    ))
+    if parameters:
+        return (path, 'parameters', parameters)
+    identity = str(fallback_id or product.get('id') or '').strip()
+    if identity:
+        return (path, 'id', identity)
+    return (path, 'url')
 
 
 def owner_excluded(product):
@@ -23,7 +49,7 @@ def owner_excluded(product):
 
 def website_story(products: list[dict[str, Any]], page_id: str) -> tuple[dict[str, Any], list[str]]:
     selected: list[FeedProduct] = []
-    seen: set[str] = set()
+    seen = set()
     for raw in products:
         try:
             product = FeedProduct.model_validate(raw)
@@ -31,10 +57,10 @@ def website_story(products: list[dict[str, Any]], page_id: str) -> tuple[dict[st
             continue
         if (product.availability != "in_stock" or product.currency != "EUR" or not product.image_link
                 or urlsplit(product.image_link).hostname not in {"cdn.shopify.com", "homestro.de", "www.homestro.de"}
-                or product_path(product.link) in seen or owner_excluded(raw) or raw.get("status", "ACTIVE") != "ACTIVE"
+                or product_variant_identity(raw, product.id) in seen or owner_excluded(raw) or raw.get("status", "ACTIVE") != "ACTIVE"
                 or any(tag.lower() in {"homestro-ai-rejected", "homestro-qa-rejected"} for tag in product.tags)):
             continue
-        seen.add(product_path(product.link))
+        seen.add(product_variant_identity(raw, product.id))
         selected.append(product)
         if len(selected) == 10:
             break

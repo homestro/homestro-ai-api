@@ -10,8 +10,7 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 
 from .feed_manager import FeedProduct
-from .product_selection import product_variant_identity
-from .website_ads import website_story
+from .website_ads import product_variant_identity, website_story
 
 BRIEF = {
     'brand': 'Homestro', 'language': 'de', 'markets': ['DE', 'AT'],

@@ -5,36 +5,9 @@ from collections import Counter
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from urllib.parse import parse_qsl, urlsplit
 
 from .order_economics import instant, money
-from .website_ads import product_path, website_story
-
-_IGNORED_TRACKING_KEYS = {"fbclid", "gclid", "msclkid", "pilot_ref", "ref", "source", "campaign", "ad"}
-
-
-def product_variant_identity(raw, variant_id=None):
-    """Keep distinct feed variants while collapsing repeated copies of the same offer.
-
-    Tracking parameters do not create a new product. Shopify variant IDs or meaningful
-    selection parameters (for example variant, color, or size) do.
-    """
-    link = str(raw.get("link") or "")
-    path = product_path(link)
-    variant_parameters = tuple(sorted(
-        (key.casefold(), value)
-        for key, value in parse_qsl(urlsplit(link).query, keep_blank_values=False)
-        if (key.casefold() in {"variant", "variant_id", "selected_variant", "option", "size", "color", "colour", "sku"}
-            or key.casefold().startswith("option_"))
-        and key.casefold() not in _IGNORED_TRACKING_KEYS
-        and not key.casefold().startswith("utm_")
-    ))
-    if variant_parameters:
-        return (path, "parameters", variant_parameters)
-    identity = str(variant_id or raw.get("id") or "").strip()
-    if identity:
-        return (path, "id", identity)
-    return (path, "url")
+from .website_ads import product_variant_identity, website_story
 
 
 def select_cost_candidates(products, costs, *, now=None):
@@ -61,7 +34,7 @@ def select_cost_candidates(products, costs, *, now=None):
             if not (standard or extended) or headroom < 10:
                 rejected['OUTSIDE_OWNER_PRODUCT_PRICE_LIMITS'] += 1
                 continue
-            identity = product_variant_identity(raw, ids[0])
+            identity = product_variant_identity(raw, variant)
             if identity in seen:
                 rejected['DUPLICATE_PRODUCT_URL'] += 1
                 continue

@@ -35,7 +35,7 @@ class ContentEngineTests(unittest.TestCase):
         self.assertFalse(draft['unsupported_claims_added'])
         self.assertFalse(draft['paid_generation_performed'])
 
-    def test_variant_identity_keeps_distinct_variants_and_collapses_tracking_duplicates(self):
+    def test_variant_identity_keeps_unique_variants_but_collapses_same_variant_tracking_urls(self):
         result = content_batch([self.product(), self.product(id='124',
             link='https://homestro.de/products/box?variant=124'), self.product(
             link='https://homestro.de/products/box?variant=123&utm_source=feed')])

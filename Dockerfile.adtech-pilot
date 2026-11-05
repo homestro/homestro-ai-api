@@ -23,8 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
 COPY --from=builder /opt/venv /opt/venv
 RUN mkdir -p /app/adtech_pilot
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/*.py /app/adtech_pilot/
-COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/entrypoint.py /app/entrypoint.py
 COPY --chown=pilot:pilot agents/*.py /app/agents/
+COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/entrypoint.py /app/entrypoint.py
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"

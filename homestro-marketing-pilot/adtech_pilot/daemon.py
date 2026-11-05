@@ -146,7 +146,8 @@ class PilotDaemon:
             if creative_due and metrics_age > 900:
                 self._next_run["media_buying_plan"] = 0
             order = ("feed_diagnostics", "merchant_center_diagnostics", "competitor_scan",
-                     "media_buying_plan", "meta_catalog_access", "creative_candidates", "agent_chain")
+                     "media_buying_plan", "meta_catalog_access", "creative_candidates",
+                     "agent_chain")
             for name in order:
                 interval, job = self.jobs[name]
                 now = time.monotonic()
@@ -246,13 +247,6 @@ class PilotDaemon:
                 )
             except TimeoutError:
                 continue
-
-    async def _agent_chain_job(self) -> dict[str, Any]:
-        """Run Product Hunter → Creative/SEO → Media Buyer once per scheduled hour."""
-        from agents.orchestrator import run_once
-
-        result = await run_once()
-        return result.get("log_record", {"status": result.get("status", "unknown")})
 
     async def _feed_job(self) -> dict[str, Any]:
         feed_url = os.getenv("HOMESTRO_PRODUCT_FEED_URL", "").strip()
@@ -629,6 +623,17 @@ class PilotDaemon:
                 'generated_at': daily['generated_at'], 'net_profit_verified': False,
                 'budget_increase_authorized': False}, separators=(',', ':')))
         return {"ranked_candidates": ranked_candidates, "selection": selection}
+
+    async def _agent_chain_job(self) -> dict[str, Any]:
+        """Run the repository's read-only product, copy and metrics agents."""
+        from agents.orchestrator import run_once
+
+        result = await run_once()
+        record = result.get("log_record")
+        if isinstance(record, dict):
+            return record
+        return {"status": result.get("status", "completed_with_blockers"),
+                "stages": result.get("stages", {})}
 
     async def _creative_job(self) -> dict[str, Any]:
         """Submit the catalog-based pilot without paid AI creative generation.
