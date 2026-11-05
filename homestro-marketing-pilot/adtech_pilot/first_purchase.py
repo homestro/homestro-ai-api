@@ -925,7 +925,7 @@ class FirstPurchaseController:
                                 malformed_meta_records += 1
                             meta_variant_keys.add(key)
                             meta_eligible_records += 1
-                            if key not in shopify_variant_keys and len(meta_unmatched_item_samples) < 10:
+                            if key not in shopify_variant_keys and len(meta_unmatched_item_samples) < 50:
                                 item_url = str(member.get('url') or '')
                                 item_path = urlsplit(item_url).path.rstrip('/')
                                 feed_products = getattr(self, 'feed_products', [])
@@ -970,6 +970,18 @@ class FirstPurchaseController:
                                         for score, product in title_matches[:3]
                                     ],
                                 })
+                    unmatched_shopify_variant_ids = sorted(shopify_variant_keys - meta_variant_keys)
+                    unmatched_shopify_item_samples = []
+                    if feed_variants is not None:
+                        for product in getattr(self, 'feed_products', []):
+                            key = _shopify_variant_key(product.id)
+                            if product.availability == 'in_stock' and key in unmatched_shopify_variant_ids:
+                                unmatched_shopify_item_samples.append({
+                                    'variant_id': key,
+                                    'title': str(product.title)[:180],
+                                    'product_path': urlsplit(str(product.link)).path[:300],
+                                    'availability': str(product.availability)[:30],
+                                })
                     feed_coverage_verified = (membership_complete and feed_variants is not None
                                                and shopify_variant_keys.issubset(meta_variant_keys)
                                                and malformed_meta_records == 0)
@@ -988,7 +1000,9 @@ class FirstPurchaseController:
                         'product_set_membership_complete': membership_complete,
                         'variant_membership_matches': membership_matches,
                         'shopify_feed_coverage_verified': feed_coverage_verified,
-                        'variant_membership_unmatched_shopify_count': len(shopify_variant_keys - meta_variant_keys),
+                        'variant_membership_unmatched_shopify_count': len(unmatched_shopify_variant_ids),
+                        'variant_membership_unmatched_shopify_ids': unmatched_shopify_variant_ids,
+                        'unmatched_shopify_item_samples': unmatched_shopify_item_samples,
                         'variant_membership_unmatched_meta_count': len(meta_variant_keys - shopify_variant_keys),
                         'meta_items_outside_curated_feed_count': len(meta_variant_keys - shopify_variant_keys),
                         'malformed_meta_catalog_records': malformed_meta_records,

@@ -694,3 +694,8 @@ Runtime switches select first_purchase_acquisition_test and pin the exact campai
 - The intended A1 account is `322742110630620`; the storefront Pixel selected for this concept is `774286518060183`. Pixel access from A1 and purchase tracking were not independently verified by this run because the account read failed first.
 - The previous campaign ID `120254444566440274` remains archived. No new preview URL or sales figures are available from this run.
 - Required owner action: grant the system user behind the Pilot's Railway `META_ACCESS_TOKEN` access to A1 with `ads_read` and `ads_management`, then replace the sealed Railway token through the authorized secret workflow. Do not share the token in chat.
+
+
+## Catalog mismatch diagnostics — 5 November 2026
+
+The live first-purchase diagnostic reported 4 in-stock Shopify variants missing from the Meta product set and 24 in-stock Meta variants outside the current Shopify feed (feed coverage 388 records; 383 in stock, Meta set 408 items; 403 in stock). The prior runtime output contained only counts for missing Shopify variants and sampled at most 10 Meta extras, preventing a complete identity comparison. A narrow diagnostics-only change now logs all unmatched Shopify variant IDs with product title/path and allows the Meta-extra sample to include up to 50 records. It does not mutate the catalog, campaign, ads, posts or video jobs. The campaign remains under its existing EUR 5/day and EUR 35 account cap. Exact provider rejection text for the earlier catalog URL-tag write and live Pixel event evidence are not present in the captured logs; those remain unverified.
