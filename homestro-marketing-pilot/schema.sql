@@ -33,11 +33,14 @@ WHERE s.status='published' AND s.published_at IS NULL;
 CREATE TABLE IF NOT EXISTS marketing_seo_articles (
   handle text PRIMARY KEY,
   content_hash text NOT NULL,
-  status text NOT NULL CHECK(status IN ('creating','draft_created','failed','recovery_required')),
+  status text NOT NULL CHECK(status IN ('creating','draft_created','published','failed','recovery_required','external_exists')),
   shopify_id text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE marketing_seo_articles DROP CONSTRAINT IF EXISTS marketing_seo_articles_status_check;
+ALTER TABLE marketing_seo_articles ADD CONSTRAINT marketing_seo_articles_status_check
+  CHECK(status IN ('creating','draft_created','published','failed','recovery_required','external_exists'));
 
 CREATE TABLE IF NOT EXISTS marketing_clicks (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -58,9 +61,25 @@ CREATE TABLE IF NOT EXISTS marketing_seo_pages (
 CREATE TABLE IF NOT EXISTS marketing_performance (
   window_days integer PRIMARY KEY,payload jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS marketing_pilot_state (
+  key text PRIMARY KEY,value text NOT NULL,updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS marketing_seo_attempts (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   handle text NOT NULL REFERENCES marketing_seo_pages(handle),attempted_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS marketing_seo_attempts_time ON marketing_seo_attempts(attempted_at);
 
+
+-- Immutable first send time: reconciliation must not renew daily quota.
+ALTER TABLE marketing_posts ADD COLUMN IF NOT EXISTS attempted_at timestamptz;
+UPDATE marketing_posts s SET attempted_at=COALESCE(
+  (SELECT min(e.created_at) FROM marketing_events e WHERE e.post_id=s.id AND e.code='publishing'),
+  s.published_at,s.updated_at)
+WHERE s.status IN ('publishing','published','recovery_required') AND s.attempted_at IS NULL;
+
+-- Earliest eligible times; existing workers still enforce fresh sources, consent and quotas.
+CREATE TABLE IF NOT EXISTS marketing_publication_schedule(
+  queue text NOT NULL CHECK(queue IN ('marketing_posts','marketing_social_posts')),post_id uuid NOT NULL,
+  product_revision text NOT NULL,channel text NOT NULL,scheduled_for timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(queue,post_id));

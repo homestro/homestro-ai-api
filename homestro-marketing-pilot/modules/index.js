@@ -1,9 +1,16 @@
+import {checkStorefrontTracking} from './site-tracking-check.js';
+import {MarketingOperations} from './operations.js';
+import {openAiHealth,checkOpenAiAccess} from './openai-health.js';
+import {CatalogBrain} from './catalog-brain.js';
+import {createSourceLocalizer} from './source-localizer.js';
+import {ImportedMediaCoordinator,importMetadata} from './imported-media.js';
 import {GeneratedVideoDrafts} from './generative-video.js';
 import {checkMetaOrganicAudience} from './meta-audience-check.js';
 import express from 'express';
 import {join} from 'node:path';
 import {randomBytes} from 'node:crypto';
-import {secureEqual,codeOf,log,fail,config} from './core.js';
+import {secureEqual,codeOf,log,fail,config,hash} from './core.js';
+import {compilePost} from './localization.js';
 import {Store} from './store.js';
 import {fetchProduct,syncCatalog} from './shopify.js';
 import {MediaRenderer} from './media.js';
@@ -13,7 +20,7 @@ import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
 import {createFeedRefresh} from './feed-refresh.js';
-import {publishProductSeo} from './seo-publication.js';
+import {publishProductSeo,syncSeoCatalogBatch} from './seo-publication.js';
 import {queueEditorial} from './editorial.js';
 import {registerReview} from './review.js';
 import {approveReviewed,verifyHistory} from './autonomy.js';
@@ -24,12 +31,13 @@ import {socialReviewPage} from './social-review.js';
 import {inspectSocialConnection} from './social-connection.js';
 import {channelPolicy} from './publishing-policy.js';
 import {buildGrowthReport,reportWindow} from './growth-report.js';
-import {createSeoArticleDraft} from './seo-articles.js';
+import {createSeoArticleDraft,publishNextSeoArticle} from './seo-articles.js';
 import {buildSeoContentPlan} from './content-plan.js';
 import {parseTrackedLink,trackedDestination} from './tracking.js';
 import {syncSeoGuides} from './seo-guides.js';
 import {refreshPerformance,readPerformance} from './performance.js';
 import {buildAdsReadiness} from './ads-readiness.js';
+import {buildSalesPlan,refreshProductSales} from './ads-sales-plan.js';
 
 export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,apiKeyMiddleware,cfg=config()}) {
   log('ORGANIC_PUBLISH_POLICY',{policy:cfg.organicPolicy||'legacy',
@@ -43,18 +51,22 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
   try {
     if(!apiKeyMiddleware && (!cfg.adminKey || cfg.adminKey.length<32))fail('PILOT_ADMIN_KEY_REQUIRED');
     const store=new Store(pool);await store.migrate();
+    if(process.env.PILOT_OPENAI_DIAGNOSTIC_ONCE==='true')try{log('OPENAI_ACCESS_DIAGNOSTIC',await checkOpenAiAccess(cfg));}
+    catch(e){log('OPENAI_ACCESS_DIAGNOSTIC',{status:'unavailable',reason:codeOf(e),generationPerformed:false});}
     const renderer=new MediaRenderer(cfg), meta=new MetaOrganic(cfg);
     const ingestion=new Ingestion({store,renderer,localizer,feeRate:cfg.feeRate,cfg});
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
-    const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
+    const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,dataDir:cfg.dataDir,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
     await generated.migrate();
-    let social=null;
+    let social=null,importedMedia=null;
     try{
       const providerCfg=cfg.social===undefined?socialConfig(process.env,cfg):cfg.social;
       if(providerCfg){
-        social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh,ensureAssets:(job,source)=>ensureApprovedAssets({job,source,cfg,renderer})});
+        social=new SocialCoordinator({pool,cfg,providerCfg,freshSnapshot:fresh,ensureAssets:(job,source)=>job.payload.importedMedia
+          ? importedMedia?importedMedia.ensure(job,source):Promise.reject(new Error('IMPORTED_ASSET_VERIFIER_UNAVAILABLE'))
+          : ensureApprovedAssets({job,source,cfg,renderer})});
         await social.migrate();
         if(String(process.env.PILOT_SOCIAL_CHECK_CONNECTION).toLowerCase()==='true') {
           social.checkTikTokPreflight()
@@ -64,11 +76,29 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         await social.emitReport(true).catch(e=>log('SOCIAL_REPORT_PENDING',{reason:codeOf(e)}));
       }
     }catch(e){social=null;log('SOCIAL_DISABLED',{reason:codeOf(e)});}
-    const processProduct=async id=>{
+    try{importedMedia=new ImportedMediaCoordinator({pool,cfg,fresh,social});await importedMedia.migrate();}
+    catch(e){importedMedia=null;log('MEDIA_IMPORT_DISABLED',{reason:codeOf(e)});}
+    const freeRenderer=new MediaRenderer({...cfg,aiVideoEnabled:false,openaiApiKey:''});
+    const freeIngestion=new Ingestion({store,renderer:freeRenderer,localizer:createSourceLocalizer(),feeRate:cfg.feeRate,cfg});
+    const processProduct=async (id,{freeOnly=false}={})=>{
       try{
         if(cfg.excludedProductIds?.includes(id))return {processed:1,status:'excluded'};
         const raw=await fetchProduct(graphql,id),inputs=await extras(id,raw);
-        const result=await ingestion.process(raw,inputs);
+        if(freeOnly){
+          const previous=await store.product(id),source=snapshot(raw,inputs,cfg.feeRate);
+          if(previous?.status==='ready'&&previous.document.revision===source.revision&&previous.document.localized&&previous.document.localizationPrepared===true&&previous.document.asset&&!previous.document.asset.previewOnly){
+            await ensureApprovedAssets({job:{id:'catalog-brain',payload:{...previous.document.asset,productRevision:source.revision}},source,cfg,renderer:freeRenderer});
+            let queued=0;
+            const prepared={...source,localized:previous.document.localized,asset:previous.document.asset};
+            for(const channel of ['facebook','instagram']){
+              if(prepared.previouslyPublished?.[channel])continue;
+              const payload=compilePost(prepared,channel,prepared.asset,cfg);
+              if(await store.queue(id,channel,hash(payload),payload))queued++;
+            }
+            return {processed:1,status:'draft_queued',queued,assetFormat:prepared.asset.format,existingAssetReused:true};
+          }
+        }
+        const result=await (freeOnly?freeIngestion:ingestion).process(raw,inputs);
         if(result.status==='draft_queued' && result.processed) {
           const prepared=await store.product(id);
           try {
@@ -90,7 +120,18 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         log(codeOf(e),{productId:id});return {processed:0,status:'pending_marketing'};
       }
     };
-    const worker=new Worker({store,meta,cfg,freshSnapshot:fresh});
+    const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,ensureImportedAssets:(job,source)=>{
+      if(!importedMedia)fail('IMPORTED_ASSET_VERIFIER_UNAVAILABLE');return importedMedia.ensure(job,source);
+    }});
+    let catalogBrain=null,brainTimer;
+    try{
+      catalogBrain=new CatalogBrain({pool,processProduct:id=>processProduct(id,{freeOnly:true}),enabled:cfg.workerEnabled,
+        autoApprovalEnabled:cfg.autonomyEnabled,excludedProductIds:cfg.excludedProductIds||[],afterPrepare:async()=>{await approveReviewed(store,cfg);if(social)await social.prepare();}});
+      await catalogBrain.migrate();
+    }catch(e){catalogBrain=null;log('CATALOG_BRAIN_DISABLED',{reason:codeOf(e)});}
+    let operations=null;
+    try{operations=new MarketingOperations({pool,cfg,socialEnabled:Boolean(social)});await operations.migrate();}
+    catch(e){operations=null;log('MARKETING_OPERATIONS_DISABLED',{reason:codeOf(e)});}
     let syncBusy=false,syncTimer;
     const sync=async()=>{
       if(syncBusy)return {busy:true};syncBusy=true;
@@ -102,18 +143,35 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         await queueEditorial(store,cfg);
         await approveReviewed(store,cfg);
         // Refresh previously ready items too: active catalog omits archived/deleted products.
-        for(const p of await store.feedRows())await processProduct(p.id,cfg.autonomyEnabled);
-        const r=await syncCatalog(graphql,id=>processProduct(id,cfg.autonomyEnabled));
+        for(const p of await store.feedRows())await processProduct(p.id);
+        const r=await syncCatalog(graphql,id=>processProduct(id));
         await approveReviewed(store,cfg);
+        try {
+          const seoBatch=await syncSeoCatalogBatch({pool,graphql,fetchProduct,batchSize:cfg.seoCatalogBatchSize});
+          log('SEO_CATALOG_BATCH',seoBatch);
+        } catch(e) { log('SEO_CATALOG_BATCH_FAILED',{reason:codeOf(e)}); }
+        if(cfg.seoBlogAutopublishEnabled) {
+          try {
+            const article=await publishNextSeoArticle({pool,graphql,products:await store.seoRows(),
+              blogId:cfg.seoBlogId,author:cfg.seoAuthor,maxDaily:cfg.seoBlogMaxDailyArticles});
+            log('SEO_BLOG_AUTOPUBLISH',article);
+          } catch(e) { log('SEO_BLOG_AUTOPUBLISH_FAILED',{reason:codeOf(e)}); }
+        }
         if(social)await social.prepare().catch(e=>log('SOCIAL_PREPARATION_FAILED',{reason:codeOf(e)}));
         const pendingReasons=(await pool.query(`SELECT reason,count(*)::int AS count FROM marketing_products p
           CROSS JOIN LATERAL jsonb_array_elements_text(p.reasons) reason
           WHERE p.status='pending_marketing' GROUP BY reason ORDER BY count DESC,reason`)).rows;
         log('CATALOG_SYNC',{...r,pendingReasons});
+        if(catalogBrain)try{log('CATALOG_BRAIN_COVERAGE',await catalogBrain.reconcile());}
+        catch(e){log('CATALOG_BRAIN_RECONCILE_FAILED',{reason:codeOf(e)});}
         try {await syncSeoGuides({pool,graphql,products:await store.seoRows(),cfg,freshSnapshot:fresh});}
         catch(e){log('SEO_PIPELINE_PENDING',{reason:codeOf(e)});}
         try {await refreshPerformance({pool,graphql,enabled:cfg.analyticsEnabled});}
         catch(e){log('PERFORMANCE_PIPELINE_PENDING',{reason:codeOf(e)});}
+        try {const r=await refreshProductSales({pool,graphql,enabled:cfg.analyticsEnabled});
+          log('PRODUCT_DEMAND_REFRESHED',{status:r.status,days:r.days,productsWithOrders:Object.keys(r.byTitle||{}).length,
+            productsWithTraffic:Object.keys(r.byPath||{}).length,missingScopes:r.missingScopes||[]});}
+        catch(e){log('PRODUCT_DEMAND_REFRESH_FAILED',{reason:codeOf(e)});}
         return {...r,pendingReasons};
       }catch(e){log(codeOf(e));return {error:codeOf(e)};}
       finally{if(locked)await client.query('SELECT pg_advisory_unlock(73341002)').catch(()=>{});client?.release();syncBusy=false;}
@@ -124,12 +182,20 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       next();
     };
     const route=handler=>async(req,res)=>{try{await handler(req,res);}catch(e){res.status(400).json({error:codeOf(e)});}};
+    app.get('/api/marketing/v2/catalog-brain',apiKeyMiddleware||auth,route(async(req,res)=>{
+      if(!catalogBrain)return res.status(503).json({error:'CATALOG_BRAIN_NOT_CONFIGURED'});
+      res.json(await catalogBrain.report({after:req.query.after??null}));
+    }));
+    app.post('/api/marketing/v2/catalog-brain/run',apiKeyMiddleware||auth,route(async(req,res)=>{
+      if(!catalogBrain)return res.status(503).json({error:'CATALOG_BRAIN_NOT_CONFIGURED'});
+      res.json(await catalogBrain.tick());
+    }));
     app.get('/marketing-click/:payload/:signature',async(req,res)=>{
       try {
         const source=parseTrackedLink(req.params.payload,req.params.signature,cfg.adminKey);
         const row=(await pool.query('SELECT document FROM marketing_products WHERE id=$1',[source.productId])).rows[0];
         if(!row)return res.status(404).send('Link nicht verfügbar.');
-        const destination=trackedDestination(row.document,source.channel,source.format);
+        const destination=trackedDestination(row.document,source.channel,source.format,{secret:cfg.adminKey});
         try {
           await pool.query('INSERT INTO marketing_clicks(product_id,channel,format) VALUES($1,$2,$3)',
             [source.productId,source.channel,source.format]);
@@ -187,6 +253,17 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         channelPolicies:Object.fromEntries(['facebook','instagram','tiktok','pinterest'].map(c=>[c,channelPolicy(cfg,c)])),
         tiktokRequiresPreviewConsent:true,adSpendEUR:0});
     }));
+    router.post('/media/import',express.raw({type:['image/png','image/jpeg','video/mp4'],limit:'100mb'}),route(async(req,res)=>{
+      if(!importedMedia)fail('MEDIA_IMPORT_NOT_CONFIGURED');
+      const metadata=importMetadata(req.get('X-Pilot-Asset-Meta'),req.body);
+      const receipt=await importedMedia.receive(metadata,req.body);
+      log('IMPORTED_MEDIA_QUEUED',{jobId:receipt.job_id,productId:receipt.product_id,
+        queueRows:receipt.posts.length,requiresVisualReview:true,publicationConfirmed:false});
+      res.json(receipt);
+    }));
+    router.get('/media/imports/:job',route(async(req,res)=>{
+      if(!importedMedia)fail('MEDIA_IMPORT_NOT_CONFIGURED');res.json(await importedMedia.status(req.params.job));
+    }));
     router.get('/social/posts',route(async(req,res)=>res.json(await socialRequired().list(req.query.status||'draft_queued'))));
     router.post('/social/prepare',route(async(req,res)=>res.json(await socialRequired().prepare())));
     router.get('/social/tiktok-settings',route(async(req,res)=>{
@@ -199,13 +276,19 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.json({ok:true,channels:Object.keys(s.providerCfg.accounts),adSpendEUR:0});
     }));
     router.post('/social/posts/:id/approve',route(async(req,res)=>res.json(await socialRequired().approve(req.params.id,req.body))));
+    router.post('/generated-videos/quote',route(async(req,res)=>res.json(await generated.quote(req.body))));
     router.post('/generated-videos',route(async(req,res)=>res.json(await generated.start(req.body))));
     router.get('/generated-videos/:key',route(async(req,res)=>res.json(await generated.poll(req.params.key))));
+    router.post('/generated-videos/:key/handoff',route(async(req,res)=>{
+      if(!importedMedia)fail('MEDIA_IMPORT_NOT_CONFIGURED');
+      res.json(await generated.handoff(req.params.key,req.body,importedMedia));
+    }));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
     router.get('/seo/articles/drafts',route(async(req,res)=>{
       const rows=(await pool.query('SELECT handle,status,shopify_id,created_at,updated_at FROM marketing_seo_articles ORDER BY created_at DESC LIMIT 100')).rows;
-      res.json({blogConfigured:Boolean(cfg.seoBlogId),writeContentScopeRequired:true,articles:rows});
+      res.json({blogConfigured:Boolean(cfg.seoBlogId),writeContentScopeRequired:true,
+        autopublishEnabled:cfg.seoBlogAutopublishEnabled,maximumDailyArticles:cfg.seoBlogMaxDailyArticles,articles:rows});
     }));
     router.get('/seo/content-plan/:id',route(async(req,res)=>{
       const id=decodeURIComponent(String(req.params.id||''));
@@ -225,6 +308,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.json(buildAdsReadiness({products,feedEnabled:cfg.feedEnabled,
         // Current operating brief records all Homestro Merchant Center items rejected.
         merchantApprovalConfirmed:false}));
+    }));
+    router.get('/ads/sales-plan',route(async(req,res)=>{
+      const products=(await pool.query('SELECT document,status FROM marketing_products ORDER BY id LIMIT 5000')).rows;
+      const productSales=await refreshProductSales({pool,graphql,enabled:cfg.analyticsEnabled});
+      const configuredMargin=Number(process.env.MIN_NET_PROFIT_EUR||10);
+      const minimumNetMarginEUR=Number.isFinite(configuredMargin)?Math.max(10,configuredMargin):10;
+      res.json(buildSalesPlan({products,productSales,minimumNetMarginEUR}));
     }));
     router.get('/growth/report',route(async(req,res)=>{
       const days=reportWindow(req.query.days);
@@ -255,10 +345,25 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       res.json({enabled:true,workerEnabled:cfg.workerEnabled,publishingEnabled:cfg.publishingEnabled,
         feedEnabled:cfg.feedEnabled,products,posts,pendingReasons,publications,adSpendEUR:0});
     }));
+    router.get('/operations',route(async(req,res)=>{
+      if(!operations)return res.status(503).json({error:'MARKETING_OPERATIONS_NOT_CONFIGURED'});
+      res.json(await operations.report(req.query.day));
+    }));
+    router.post('/operations/run',route(async(req,res)=>{
+      if(!operations)return res.status(503).json({error:'MARKETING_OPERATIONS_NOT_CONFIGURED'});
+      res.json(await operations.tick());
+    }));
+    router.post('/tracking/site-check',route(async(req,res)=>{
+      let target;try{target=new URL(req.body.url);}catch{fail('TRACKING_CHECK_SOURCE_INVALID');}
+      const rows=(await pool.query("SELECT document FROM marketing_products WHERE document->>'status'='ACTIVE' AND COALESCE(document->>'rejected','false')<>'true'")).rows;
+      if(!rows.some(r=>{try{return new URL(r.document.url).pathname===target.pathname;}catch{return false;}}))fail('TRACKING_CHECK_CURRENT_PRODUCT_REQUIRED');
+      res.json(await checkStorefrontTracking({url:target.href,expectedPixelId:req.body.expectedPixelId}));
+    }));
+    router.get('/providers/openai',route(async(req,res)=>res.json(await openAiHealth(cfg))));
     router.get('/connection',route(async(req,res)=>{await meta.verifyConnection();res.json({ok:true,publishingEnabled:cfg.publishingEnabled,adSpendEUR:0});}));
     router.post('/posts/:id/approve',route(async(req,res)=>{
       const reviewer=String(req.body.reviewer||'').trim();if(!reviewer || reviewer.length>100)fail('REVIEWER_REQUIRED');
-      res.json(await store.approve(req.params.id,reviewer));
+      res.json(await store.approve(req.params.id,reviewer,req.body));
     }));
     // Explicit input review. Never automatically trust supplier footage or invented facts.
     router.put('/products/:id/inputs',route(async(req,res)=>{
@@ -301,8 +406,11 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     }
     if(social&&(process.env.PILOT_TIKTOK_RECOVERY_PROBE==='true'||process.env.PILOT_TIKTOK_ASSET_REPAIR_POST_ID)&&process.env.PILOT_TIKTOK_RECOVERY_CUTOFF&&process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID)
       await runTikTokRecoveryProbe(social,new Date(),new Date(process.env.PILOT_TIKTOK_RECOVERY_CUTOFF),process.env.PILOT_TIKTOK_RECOVERY_ACCOUNT_ID,process.env.PILOT_TIKTOK_ASSET_REPAIR_POST_ID||null);
+    if(operations)await operations.tick().catch(e=>log('MARKETING_OPERATIONS_PENDING',{reason:codeOf(e)}));
+    operations?.start();
     worker.start();
     social?.start();
+    generated.startPolling();
     if(cfg.syncOnce){
       log('SYNC_ONCE_START',{publishingEnabled:cfg.publishingEnabled,workerEnabled:cfg.workerEnabled});
       try {
@@ -314,9 +422,13 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       } catch(e) { log('SYNC_ONCE_FAILED',{reason:codeOf(e)}); }
     }
     if(cfg.workerEnabled){syncTimer=setInterval(()=>void sync(),15*60000);syncTimer.unref();if(!cfg.autonomyEnabled)void sync();}
+    if(catalogBrain?.enabled){
+      const runBrain=()=>catalogBrain.tick().catch(e=>log('CATALOG_BRAIN_FAILED',{reason:codeOf(e)}));
+      brainTimer=setInterval(()=>void runBrain(),5*60000);brainTimer.unref();void runBrain();
+    }
     log('INITIALIZED',{publishingEnabled:cfg.publishingEnabled,feedEnabled:cfg.feedEnabled,adSpendEUR:0});
-    return {enabled:true,processProduct,sync,store,worker,social,feedXML:freshFeedXML,
-      stop(){worker.stop();social?.stop();clearInterval(syncTimer);}};
+    return {enabled:true,processProduct,sync,store,worker,social,operations,feedXML:freshFeedXML,
+      stop(){operations?.stop();worker.stop();social?.stop();generated.stopPolling();clearInterval(syncTimer);clearInterval(brainTimer);}};
   }catch(e){log('DISABLED',{reason:codeOf(e)});return {enabled:false,processProduct:async()=>({processed:0,status:'marketing_disabled'}),stop(){}};}
 }
 

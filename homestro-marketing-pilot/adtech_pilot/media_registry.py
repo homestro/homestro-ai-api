@@ -21,34 +21,6 @@ HOSTS = {'d8j0ntlcm91z4.cloudfront.net'}
 MAX_BYTES = 100 * 1024 * 1024
 
 
-def _exact_variant_id(value):
-    if not value:
-        return None
-    text = str(value).strip()
-    match = re.fullmatch(r'(?:gid://shopify/ProductVariant/|gid-shopify-ProductVariant-)?(\d+)', text)
-    if not match:
-        raise ValueError('SHOPIFY_VARIANT_ID_INVALID')
-    return 'gid://shopify/ProductVariant/' + match.group(1)
-
-
-def _match_products(products, *, variant_id=None, product_url=None):
-    if variant_id:
-        numeric = variant_id.rsplit('/', 1)[-1]
-        return [str(product['id']) for product in products
-                if str(product.get('id', '')).rsplit('/', 1)[-1] == numeric]
-    if product_url:
-        target = canonical(product_url)
-        matches = []
-        for product in products:
-            try:
-                if canonical(product.get('link', '')) == target:
-                    matches.append(str(product['id']))
-            except ValueError:
-                continue
-        return matches
-    return []
-
-
 def approved_source(url):
     try:
         parsed = urlsplit(url)
@@ -109,18 +81,22 @@ class MediaRegistry:
             path = self.root / (previous['sha256'] + ('.image' if kind == 'image' else '.mp4'))
             if path.is_file() and await asyncio.to_thread(lambda: hashlib.sha256(path.read_bytes()).hexdigest()) == previous['sha256']:
                 target = record.get('product_url')
-                variant_id = _exact_variant_id(record.get('shopify_variant_id'))
-                matches = _match_products(products, variant_id=variant_id, product_url=target)
-                if target and previous.get('source_product_url') and canonical(previous['source_product_url']) != canonical(target):
-                    raise ValueError('EXISTING_JOB_PRODUCT_MAPPING_CHANGED')
-                previous['source_product_url'] = target or previous.get('source_product_url')
-                previous['source_media_url'] = url
-                previous['shopify_variant_id'] = variant_id
-                previous['matched_product_ids'] = matches
-                previous['state'] = 'review_required' if matches else 'product_mapping_required'
-                previous['blockers'] = ['VISUAL_REVIEW_REQUIRED'] + ([] if matches else ['VERIFIED_PRODUCT_MAPPING_REQUIRED']) + ([] if previous['aspect_ratio'] in {'1:1', '9:16'} else ['UNSUPPORTED_PUBLICATION_ASPECT_RATIO'])
-                with closing(self.audit._connect()) as db, db:
-                    db.execute('UPDATE pilot_imported_media SET payload=? WHERE job=?', (json.dumps(previous), job))
+                if target:
+                    if previous.get('source_product_url') and canonical(previous['source_product_url']) != canonical(target):
+                        raise ValueError('EXISTING_JOB_PRODUCT_MAPPING_CHANGED')
+                    matches = []
+                    for product in products:
+                        try:
+                            if canonical(product.get('link', '')) == canonical(target):
+                                matches.append(str(product['id']))
+                        except ValueError:
+                            continue
+                    previous['source_product_url'] = target
+                    previous['matched_product_ids'] = matches
+                    previous['state'] = 'review_required' if matches else 'product_mapping_required'
+                    previous['blockers'] = ['VISUAL_REVIEW_REQUIRED'] + ([] if matches else ['VERIFIED_PRODUCT_MAPPING_REQUIRED']) + ([] if previous['aspect_ratio'] in {'1:1', '9:16'} else ['UNSUPPORTED_PUBLICATION_ASPECT_RATIO'])
+                    with closing(self.audit._connect()) as db, db:
+                        db.execute('UPDATE pilot_imported_media SET payload=? WHERE job=?', (json.dumps(previous), job))
                 return {**previous, 'already_imported': True}
         payload = bytearray()
         async with client.stream('GET', url, follow_redirects=False) as response:
@@ -145,12 +121,18 @@ class MediaRegistry:
             width, height = facts['width'], facts['height']
             ratio = '1:1' if width == height else '9:16' if abs(width / height - 9 / 16) < 0.01 else 'other'
             product_url = record.get('product_url')
-            variant_id = _exact_variant_id(record.get('shopify_variant_id'))
-            matches = _match_products(products, variant_id=variant_id, product_url=product_url)
+            matches = []
+            if product_url:
+                path = canonical(product_url)
+                for product in products:
+                    try:
+                        if canonical(product.get('link', '')) == path:
+                            matches.append(str(product['id']))
+                    except ValueError:
+                        continue
             row = {'job_id': job, 'provider': 'higgsfield', 'kind': kind, 'sha256': checksum,
                 'byte_count': len(payload), **facts, 'aspect_ratio': ratio,
-                'matched_product_ids': matches, 'source_product_url': product_url, 'source_media_url': url,
-                'shopify_variant_id': variant_id,
+                'matched_product_ids': matches, 'source_product_url': product_url,
                 'state': 'review_required' if matches else 'product_mapping_required',
                 'publication_queue': 'media_review', 'publication_confirmed': False,
                 'blockers': ['VISUAL_REVIEW_REQUIRED'] + ([] if matches else ['VERIFIED_PRODUCT_MAPPING_REQUIRED'])

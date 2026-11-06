@@ -75,6 +75,7 @@ class HttpAdapterTests(unittest.TestCase):
             self.assertEqual(request.url.path, "/v26.0/ads_archive")
             self.assertEqual(request.headers["Authorization"], "Bearer secret-token")
             self.assertNotIn("access_token", request.url.query.decode())
+            self.assertEqual(request.url.params["ad_active_status"], "ACTIVE")
             return httpx.Response(
                 200,
                 json={
@@ -92,7 +93,7 @@ class HttpAdapterTests(unittest.TestCase):
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         ads = asyncio.run(
             MetaAdLibraryClient("secret-token", client=client).search(
-                ["dog feeder"], country="DE"
+                ["dog feeder"], country="DE", active_only=True
             )
         )
         self.assertEqual(ads[0].ad_copy, ["Try this idea"])

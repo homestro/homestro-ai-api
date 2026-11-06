@@ -1,8 +1,9 @@
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.adtech-pilot"
+dockerfilePath = "Dockerfile.homestro-fixed"
 
 [deploy]
-healthcheckPath = "/healthz"
-healthcheckTimeout = 60
+startCommand = "node ./server.js"
 restartPolicyType = "ALWAYS"
+
+# Homestro fixed deployment trigger 2026-09-16

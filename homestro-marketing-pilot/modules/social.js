@@ -1,6 +1,8 @@
+import {validateImportedReview} from './imported-media.js';
 import {randomUUID} from 'node:crypto';
 import {hash,fail,codeOf,log,productURL,trackingLink} from './core.js';
 import {compilePost} from './localization.js';
+import {trackedDestination} from './tracking.js';
 import {ZernioOrganic} from './zernio.js';
 import {channelPolicy,repeatedMedia} from './publishing-policy.js';
 
@@ -47,7 +49,9 @@ export function approvePayload(job,body,revision) {
   if(body.expectedRevision!==undefined && body.expectedRevision!==job.revision)fail('SOCIAL_REVIEW_STALE');
   const reviewer=String(body.reviewer||'').trim();
   if(!reviewer||reviewer.length>100)fail('REVIEWER_REQUIRED');
+  validateImportedReview(job,body);
   const payload={...job.payload};
+  if(payload.importedMedia)payload.requiresVisualReview=false;
   if(job.channel==='tiktok'){
     const s=body.tiktokSettings;
     if(s?.content_preview_confirmed!==true||s.express_consent_given!==true)fail('TIKTOK_PREVIEW_CONSENT_REQUIRED');
@@ -103,7 +107,8 @@ export class SocialCoordinator {
         }
         const payload=prepareSocial(p,channel,{...this.cfg,...this.providerCfg}),revision=hash(payload);
         await this.pool.query(`UPDATE marketing_social_posts SET status='superseded',updated_at=now()
-          WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')`,[p.id,channel,revision]);
+          WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')
+          AND COALESCE(payload->>'importedMedia','false')<>'true'`,[p.id,channel,revision]);
         const r=await this.pool.query(`INSERT INTO marketing_social_posts(id,product_id,channel,revision,payload,status)
           SELECT $1,$2,$3,$4,$5,'draft_queued' WHERE NOT EXISTS (
             SELECT 1 FROM marketing_social_posts WHERE product_id=$2 AND channel=$3
@@ -118,6 +123,7 @@ export class SocialCoordinator {
       AND p.status='ready' AND p.document->>'contentReviewed'='true'
       AND p.document->>'status'='ACTIVE' AND COALESCE(p.document->>'rejected','false')<>'true'
       AND s.payload->>'productRevision'=p.document->>'revision'
+      AND COALESCE(s.payload->>'importedMedia','false')<>'true'
       AND NOT (s.product_id=ANY($1::text[]))`,[this.cfg.excludedProductIds||[]]);
     return {queued,adSpendEUR:0};
   }
@@ -199,11 +205,23 @@ export class SocialCoordinator {
         try{await this.settle(job.id,await this.provider.reconcile(job.remote.providerPostId,job.channel));}
         catch(e){log('SOCIAL_VERIFICATION_PENDING',{postId:job.id,reason:codeOf(e)});}
       }
+      if(typeof this.provider.recoverMissing==='function'){
+        const missing=(await client.query(`SELECT * FROM marketing_social_posts
+          WHERE status='recovery_required' AND NOT(remote ? 'providerPostId')
+          AND remote ? 'idempotencyKey' ORDER BY updated_at LIMIT 20`)).rows;
+        try{
+          const recovered=await this.provider.recoverMissing(missing,(id,remote)=>this.checkpoint(id,remote));
+          for(const result of recovered)await this.settle(result.id,result.state);
+          if(missing.length)log('SOCIAL_RECOVERY_LOOKUP',{inspected:missing.length,recovered:recovered.length,
+            unresolved:missing.length-recovered.length,writesPerformed:false});
+        }catch(e){log('SOCIAL_RECOVERY_LOOKUP_PENDING',{reason:codeOf(e)});}
+      }
       if(!this.cfg.workerEnabled||!this.cfg.publishingEnabled||!this.providerCfg.publishingEnabled||(!this.cfg.publishAroundClock&&!berlinWindow(now)))return;
       // A large approved TikTok batch must not starve Pinterest after TikTok's cap.
       const jobs=(await client.query(`SELECT * FROM (
         SELECT s.*,row_number() OVER (PARTITION BY channel ORDER BY approved_at,id) AS queue_rank
-        FROM marketing_social_posts s WHERE status='approved') fair
+        FROM marketing_social_posts s WHERE status='approved'
+          AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_social_posts' AND plan.post_id=s.id AND plan.scheduled_for>now())) fair
         WHERE queue_rank<=20 ORDER BY approved_at,id`)).rows;
       for(const job of jobs){
         if(!this.providerCfg.accounts[job.channel])continue;
@@ -232,14 +250,22 @@ export class SocialCoordinator {
           if(duplicate||!eligible(p,this.cfg)||p.revision!==job.payload.productRevision){
             await client.query("UPDATE marketing_social_posts SET status='superseded',error_code='SOCIAL_SOURCE_CHANGED' WHERE id=$1",[job.id]);continue;
           }
+          if(job.payload.requiresVisualReview)fail('IMPORTED_VISUAL_REVIEW_REQUIRED');
           if(this.ensureAssets)await this.ensureAssets(job,p);
           await client.query("UPDATE marketing_social_posts SET status='publishing',attempted_at=now(),updated_at=now() WHERE id=$1",[job.id]);
           claimed=true;
-          const state=await this.provider.submit({...job,status:'publishing'},remote=>this.checkpoint(job.id,remote));
+          // Mint only on the actual send; time-dependent tags must never change draft hashes.
+          const payload=job.channel==='pinterest'&&this.cfg.adminKey
+            ? {...job.payload,productURL:trackedDestination(p,'pinterest',job.payload.format,{secret:this.cfg.adminKey,now})}
+            : job.payload;
+          const state=await this.provider.submit({...job,payload,status:'publishing'},remote=>this.checkpoint(job.id,remote));
           await this.settle(job.id,state);
         }catch(e){
+          // A definitive missing source cannot become publishable without a new draft.
+          // Timeouts retain approval; any attempted write remains held for recovery.
+          const nextStatus=claimed?'recovery_required':codeOf(e)==='PRODUCT_NOT_FOUND'?'superseded':'approved';
           await client.query(`UPDATE marketing_social_posts SET status=$3,error_code=$2,updated_at=now() WHERE id=$1`,
-            [job.id,codeOf(e),claimed?'recovery_required':'approved']);
+            [job.id,codeOf(e),nextStatus]);
           log(claimed?'SOCIAL_RECOVERY_REQUIRED':'SOCIAL_SOURCE_CHECK_PENDING',{postId:job.id,reason:codeOf(e)});
         }
       }
