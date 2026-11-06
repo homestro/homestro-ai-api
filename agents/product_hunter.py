@@ -279,7 +279,7 @@ def _trend_terms(products: list[dict[str, Any]], limit: int = 10) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for product in products:
-        title = re.sub(r"\\s+", " ", str(product.get("title") or "")).strip()
+        title = re.sub(r"\s+", " ", str(product.get("title") or "")).strip()
         category = str(product.get("product_type") or "").strip()
         term = title[:80] if title else category[:80]
         key = term.casefold()
@@ -339,14 +339,14 @@ def _trend_label(row: dict[str, Any]) -> str:
 
 def _match_trend_products(label: str, products: list[dict[str, Any]]) -> list[dict[str, Any]]:
     label_tokens = _tokens(label)
-    normalized_label = re.sub(r"\\s+", " ", label.casefold()).strip()
+    normalized_label = re.sub(r"\s+", " ", label.casefold()).strip()
     matches = []
     for product in products:
         title = str(product.get("title") or "")
         category = str(product.get("product_type") or product.get("google_product_category") or "")
         combined = f"{title} {category}"
         overlap = len(label_tokens.intersection(_tokens(combined)))
-        exact_query = bool(normalized_label and normalized_label in re.sub(r"\\s+", " ", combined.casefold()))
+        exact_query = bool(normalized_label and normalized_label in re.sub(r"\s+", " ", combined.casefold()))
         if exact_query or overlap >= 2:
             matches.append(product)
     return matches
