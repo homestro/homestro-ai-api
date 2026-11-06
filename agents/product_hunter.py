@@ -574,7 +574,7 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
             candidate["google_trend_score"] = scores["google"]
         if scores:
             candidate["trend_priority_score"] = round(sum(scores.values()) / len(scores), 2)
-    candidates.sort(key=lambda item: (-float(item.get("trend_priority_score", 0)), str(item.get("title", "")).casefold()))
+    candidates.sort(key=lambda item: -float(item.get("trend_priority_score", 0)))
     limit = max(1, min(int(env.get("PILOT_HUNTER_LIMIT", "10")), 10))
     result = {
         "status": "selected" if candidates else "no_eligible_products",
