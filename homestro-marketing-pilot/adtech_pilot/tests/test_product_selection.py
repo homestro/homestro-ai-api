@@ -45,3 +45,13 @@ class ProductSelectionTests(unittest.TestCase):
     def test_unavailable_products_remain_ineligible_even_with_large_headroom(self):
         products, _ = select_cost_candidates([self.product(1, availability='out_of_stock')], self.costs({1: 1}), now=self.now)
         self.assertEqual(products, [])
+
+    def test_same_product_url_keeps_distinct_variant_ids_and_collapses_exact_repeats(self):
+        first = self.product(11, link='https://homestro.de/products/same')
+        second = self.product(12, link='https://homestro.de/products/same?variant=12')
+        duplicate = {**first, 'link': first['link']+'?utm_source=feed'}
+        products, result = select_cost_candidates(
+            [first, second, duplicate], self.costs({11: 5, 12: 6}), now=self.now
+        )
+        self.assertEqual({product['id'] for product in products}, {first['id'], second['id']})
+        self.assertEqual(result['rejected_by_reason']['DUPLICATE_PRODUCT_URL'], 1)

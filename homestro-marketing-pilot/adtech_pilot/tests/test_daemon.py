@@ -85,6 +85,7 @@ class DaemonTests(unittest.TestCase):
                     competitor_job=lambda: done("competitor"),
                     creative_job=lambda: done("creative"),
                     metrics_job=lambda: done("metrics"),
+                    agent_chain_job=lambda: done("agent_chain"),
                 )
                 await daemon.run(stop)
             heartbeat = audit.records[-1][1]
@@ -94,7 +95,9 @@ class DaemonTests(unittest.TestCase):
             self.assertTrue(heartbeat["micro_budget_submission_enabled"])
             self.assertTrue(heartbeat["optimizer"]["dry_run"])
             self.assertEqual(heartbeat["optimizer"]["budget_limit_eur"], 0.0)
-            self.assertEqual(len(heartbeat["jobs"]), 6)
+            self.assertEqual(len(heartbeat["jobs"]), 7)
+            self.assertEqual(heartbeat["jobs"]["agent_chain"]["status"], "ok")
+            self.assertEqual(daemon.jobs["agent_chain"][0], 3600)
 
         asyncio.run(run())
 

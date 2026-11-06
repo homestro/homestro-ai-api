@@ -359,17 +359,6 @@ class PurchaseWatchdog:
                 await client.aclose()
 
     async def run(self, stop: asyncio.Event) -> None:
-        # Meta rate-limits this controller when it re-reads the full account,
-        # campaign, ad set, pixel and catalog state every minute. Keep the
-        # owner-authorized daily and lifetime caps unchanged while spacing
-        # verification cycles; bound the setting to a safe operational range.
-        try:
-            requested_interval = int(
-                self.env.get("PILOT_FIRST_PURCHASE_INTERVAL_SECONDS", "300")
-            )
-        except (TypeError, ValueError):
-            requested_interval = 300
-        interval_seconds = min(900, max(60, requested_interval))
         while not stop.is_set():
             try:
                 await self.cycle()
@@ -378,6 +367,6 @@ class PurchaseWatchdog:
             except Exception:
                 logger.error("purchase_watchdog_cycle_failed")
             try:
-                await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
+                await asyncio.wait_for(stop.wait(), timeout=60)
             except TimeoutError:
                 pass

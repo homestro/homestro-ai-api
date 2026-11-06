@@ -20,25 +20,6 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 
 
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
-    async def test_provider_backoff_survives_restart_and_keeps_exact_campaign_paused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            audit, state, client, control = await self.fixture(directory)
-            control.store.defer_provider(CAMPAIGN, 'META_API_RATE_LIMIT_BACKOFF', NOW, 900)
-            restarted = FirstPurchaseController(audit, env=ENV, client=client)
-            result = await restarted.cycle(now=NOW + timedelta(seconds=1))
-            self.assertEqual(result['reason'], 'META_API_RATE_LIMIT_BACKOFF')
-            self.assertEqual(result['status'], 'paused_confirmed')
-            self.assertEqual(state['writes'], [])
-            self.assertFalse(result['activation_performed'])
-            self.assertIsNone(restarted.store.provider_backoff(CAMPAIGN, NOW + timedelta(seconds=900)))
-            self.assertIsNone(restarted.store.provider_backoff('11111', NOW))
-            state['status'] = 'ACTIVE'
-            result = await restarted.cycle(now=NOW + timedelta(seconds=2))
-            self.assertEqual(result['status'], 'paused_confirmed')
-            self.assertEqual(state['status'], 'PAUSED')
-            self.assertEqual(state['writes'], [('/v26.0/' + CAMPAIGN, {'status': ['PAUSED']})])
-            await client.aclose()
-
     async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False, pause_rejected=False, lifetime_supported=False, lifetime_rejected=False):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
         await audit.claim_meta_micro_campaign('act_12345', 'all')
@@ -57,7 +38,7 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             if request.method == 'POST':
                 body = parse_qs(request.content.decode())
                 state['writes'].append((path, body))
-                if 'spend_cap' in body and cap_rejected and body['spend_cap'] != ['10000']:
+                if 'spend_cap' in body and cap_rejected:
                     return httpx.Response(400, json={'error': {'code': 100, 'error_subcode': 2446307 if lifetime_supported else 1234, 'message': 'test provider cap minimum', 'error_user_title': 'Minimum cap', 'error_user_msg': 'Minimum 100 EUR https://secret.example/hidden '+('A'*50)}})
                 if 'lifetime_budget' in body:
                     if lifetime_rejected:
@@ -207,30 +188,32 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restarted.store.read()['state'], 'stopped')
             await client.aclose()
 
-    async def test_provider_cap_fallback_keeps_daily_budget(self):
+    async def test_frozen_lifetime_fallback_can_acquire_first_purchase_only_with_all_other_gates(self):
         with tempfile.TemporaryDirectory() as directory:
             _, state, client, control = await self.fixture(directory, cap_rejected=True, lifetime_supported=True)
             control.env = {**ENV, 'SHOPIFY_WEBHOOK_SECRET': 'test', 'PILOT_ADMIN_KEY': 'test-signature-secret'}
             with self.patches()[0], self.patches()[1]:
                 result = await control.cycle(now=NOW)
             self.assertEqual(result['status'], 'active_confirmed')
-            self.assertEqual(result['provider_cap_fallback_eur'], '100.00')
-            self.assertEqual(state['daily'], '500')
-            self.assertIsNone(state['lifetime'])
-            self.assertEqual(state['cap'], '10000')
+            self.assertEqual(result['native_adset_lifetime_budget_readback_cents'], 500)
+            self.assertEqual(state['lifetime'], '500')
+            self.assertFalse(result['prior_purchase_required'])
+            self.assertFalse(any(body.get('spend_cap') == ['10000'] for _, body in state['writes']))
             await client.aclose()
 
-    async def test_provider_cap_fallback_still_stops_at_35(self):
+    async def test_rejected_budget_type_conversion_never_activates_or_replenishes_frozen_allowance(self):
         with tempfile.TemporaryDirectory() as directory:
             _, state, client, control = await self.fixture(directory, spend='2.98', cap_rejected=True, lifetime_supported=True, lifetime_rejected=True)
             with self.patches()[0], self.patches()[1]:
                 result = await control.cycle(now=NOW)
-            self.assertEqual(result['status'], 'active_confirmed')
+            self.assertEqual(result['status'], 'paused_confirmed')
+            self.assertEqual(result['stage'], 'paused_native_lifetime_budget_preparation')
+            self.assertEqual(result['error_user_title'], 'Budget type immutable')
+            self.assertEqual(control.store.lifetime_cap(ADSET, 3500), 798)
             self.assertEqual(state['daily'], '500')
             self.assertIsNone(state['lifetime'])
-            state['spend'] = '35'
-            stopped = await control.cycle(now=NOW)
-            self.assertEqual(stopped['reason'], 'TEST_TOTAL_CAP_REACHED')
+            self.assertIsNone(result['consent']['activated_at'])
+            self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
             await client.aclose()
 
     async def test_total_cap_and_expiry_are_durable_and_cannot_be_reset_by_restart_or_new_campaign(self):

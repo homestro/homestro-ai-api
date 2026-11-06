@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {socialReviewPage} from '../modules/social-review.js';
 class Element {
- constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.value='';this.checked=false;this.disabled=false;this.dataset={};}
+ constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.value='';this.checked=false;this.disabled=false;this.dataset={};this.style={};this.listeners={};this._textContent='';}
+ get textContent(){return this._textContent+this.children.map(n=>n.textContent).join('');}
+ set textContent(value){this._textContent=String(value);this.children=[];}
+ addEventListener(type,listener){this.listeners[type]=listener;this['on'+type]=listener;}
  append(n){n.parent=this;this.children.push(n);}prepend(n){n.parent=this;this.children.unshift(n);}
  replaceChildren(){this.children=[];}scrollIntoView(){}
  get nextElementSibling(){return this.parent?.children[this.parent.children.indexOf(this)+1];}

@@ -18,11 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && groupadd --system --gid 10001 pilot \
     && useradd --system --uid 10001 --gid pilot --home-dir /nonexistent \
        --shell /usr/sbin/nologin pilot \
-    && mkdir -p /data/adtech-pilot /data/adtech-creatives \
+    && mkdir -p /data/adtech-pilot /data/adtech-creatives /app/agents \
     && chown -R pilot:pilot /data
 COPY --from=builder /opt/venv /opt/venv
 RUN mkdir -p /app/adtech_pilot
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/*.py /app/adtech_pilot/
+COPY --chown=pilot:pilot agents/*.py /app/agents/
 COPY --chown=pilot:pilot homestro-marketing-pilot/adtech_pilot/entrypoint.py /app/entrypoint.py
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

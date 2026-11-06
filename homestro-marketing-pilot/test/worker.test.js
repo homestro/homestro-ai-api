@@ -93,3 +93,15 @@ test('a different product posted on the same channel does not block this product
   assert.equal(writes,1);assert.deepEqual(statuses,['publishing','published']);
 });
 
+
+test('daily quota uses immutable attempt time while uncertain same-product duplicates stay blocked',async()=>{
+  const queries=[];
+  const worker=new Worker({store:{withWorkerLock:fn=>fn({query:async(sql)=>{
+    queries.push(sql);return {rows:sql.includes('SELECT count(*) FROM marketing_posts WHERE')?[{count:0}]:[]};
+  }})},cfg:{...cfg,autonomyEnabled:true,maxDailyPerChannel:2},meta:{},freshSnapshot:async()=>null,isPublishingWindow:()=>true});
+  await worker.tick();
+  assert.match(queries[0],/COALESCE\(attempted_at,updated_at\)>now\(\)-interval '24 hours'/);
+  assert.match(queries[1],/COALESCE\(recent.attempted_at,recent.updated_at\)>now\(\)-interval '24 hours'/);
+  assert.match(queries[1],/old.status IN \('published','publishing','recovery_required'\)/);
+  assert.doesNotMatch(queries[1],/old.attempted_at/);
+});

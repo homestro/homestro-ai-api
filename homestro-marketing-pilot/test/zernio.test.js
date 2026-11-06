@@ -62,3 +62,40 @@ test('reconciliation requires correct account, public permalink and published st
   assert.equal((await api.reconcile(remoteId,'pinterest')).status,'published');
   assert.equal(api.publicationState({platforms:[{platform:'pinterest',accountId:'d'.repeat(24),status:'published',platformPostUrl:'https://www.pinterest.com/pin/123/'}]},'pinterest').status,'recovery_required');
 });
+
+test('lost submission is recovered by exact metadata and account using reads only',async()=>{
+  const j=job();j.remote={idempotencyKey:'existing'};const events=[];
+  const api=new ZernioOrganic(cfg,async(url,options)=>{
+    assert.equal(options.method,'GET');
+    if(url.endsWith('/posts'))return response({posts:[{_id:remoteId,metadata:{pilotPostId:String(j.id),productId:j.product_id},
+      platforms:[{platform:j.channel,accountId:id,status:'published'}]}]});
+    assert.equal(events.length,1);
+    return response({post:{platforms:[{platform:j.channel,accountId:id,status:'published',platformPostUrl:'https://www.tiktok.com/@homestro/video/123'}]}});
+  });
+  const result=await api.recoverMissing([j],async(postId,remote)=>events.push({postId,remote}));
+  assert.equal(events[0].remote.providerPostId,remoteId);
+  assert.equal(result[0].state.status,'published');
+});
+
+test('missing, ambiguous or other-account recovery results never permit another write',async()=>{
+  const j=job();j.remote={idempotencyKey:'existing'};
+  for(const mode of ['missing','ambiguous','account','product']){
+    let reads=0;
+    const candidate={_id:remoteId,metadata:{pilotPostId:String(j.id),productId:mode==='product'?'other':j.product_id},
+      platforms:[{platform:j.channel,accountId:mode==='account'?'d'.repeat(24):id}]};
+    const api=new ZernioOrganic(cfg,async(_url,options)=>{reads++;assert.equal(options.method,'GET');
+      return response({posts:mode==='missing'?[]:mode==='ambiguous'?[candidate,candidate]:[candidate]});});
+    assert.deepEqual(await api.recoverMissing([j],async()=>assert.fail('unexpected checkpoint')),[]);
+    assert.equal(reads,1);
+  }
+});
+
+test('publication readback separates platform permalink ID from aggregator job ID and rejects profile URLs',()=>{
+ const api=new ZernioOrganic(cfg);
+ const post={_id:remoteId,platforms:[{platform:'pinterest',accountId:id,status:'published',platformPostUrl:'https://www.pinterest.com/pin/987654321/'}]};
+ const receipt=api.publicationState(post,'pinterest');
+ assert.equal(receipt.platformPostId,'987654321');assert.notEqual(receipt.platformPostId,remoteId);
+ assert.equal(receipt.platformIdSource,'provider_reported_permalink');
+ post.platforms[0].platformPostUrl='https://www.pinterest.com/homestro/';
+ assert.equal(api.publicationState(post,'pinterest').status,'verification_pending');
+});

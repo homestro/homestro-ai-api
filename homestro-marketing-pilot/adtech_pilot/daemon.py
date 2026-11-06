@@ -85,6 +85,7 @@ class PilotDaemon:
         creative_job: Job | None = None,
         metrics_job: Job | None = None,
         catalog_job: Job | None = None,
+        agent_chain_job: Job | None = None,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
     ):
@@ -125,6 +126,7 @@ class PilotDaemon:
                 feed_interval_hours * 3600,
                 catalog_job or self._catalog_access_job,
             ),
+            "agent_chain": (3600, agent_chain_job or self._agent_chain_job),
         }
         self._next_run = {name: 0.0 for name in self.jobs}
         self._retry_at = {name: 0.0 for name in self.jobs}
@@ -144,7 +146,8 @@ class PilotDaemon:
             if creative_due and metrics_age > 900:
                 self._next_run["media_buying_plan"] = 0
             order = ("feed_diagnostics", "merchant_center_diagnostics", "competitor_scan",
-                     "media_buying_plan", "meta_catalog_access", "creative_candidates")
+                     "media_buying_plan", "meta_catalog_access", "creative_candidates",
+                     "agent_chain")
             for name in order:
                 interval, job = self.jobs[name]
                 now = time.monotonic()
@@ -563,32 +566,7 @@ class PilotDaemon:
 
         latest = await self.audit.latest_brain_evidence()
         meta_record = latest.get('meta_performance_snapshot') or {}
-        meta_payload = meta_record.get('payload', {})
-        meta_source = {**meta_payload, 'observed_at': meta_record.get('created_at')}
-
-        # Bind accounting to the exact persisted campaign claim and a complete,
-        # successful Insights response. This verifies campaign scope only; it
-        # does not invent a common reporting window or authorize any writes.
-        owned_campaign_id = str((claim or {}).get('campaign_id') or '')
-        configured_campaign_id = os.getenv('PILOT_FIRST_PURCHASE_CAMPAIGN_ID', '').strip()
-        meta_rows = meta_source.get('metrics')
-        meta_row_ids = (
-            [str(row.get('campaign_id') or '') for row in meta_rows if isinstance(row, dict)]
-            if isinstance(meta_rows, list) else []
-        )
-        if (
-            meta_source.get('status') == 'collected'
-            and re.fullmatch(r'[1-9]\d{0,29}', owned_campaign_id)
-            and configured_campaign_id == owned_campaign_id
-            and len(meta_rows) == 1
-            and meta_row_ids == [owned_campaign_id]
-        ):
-            meta_source.update(
-                owned_campaign_ids=[owned_campaign_id],
-                campaign_scope_verified=True,
-                report_complete=True,
-            )
-
+        meta_source = {**meta_record.get('payload', {}), 'observed_at': meta_record.get('created_at')}
         provider_sources = {'meta': meta_source,
             'google': {**search_channels['google'], 'observed_at': datetime.now(UTC).isoformat()},
             'microsoft': microsoft_performance}
@@ -611,8 +589,7 @@ class PilotDaemon:
         logger.info("marketing_director %s", json.dumps(strategy, separators=(",", ":")))
         try:
             async with asyncio.timeout(90):
-                media_registry = MediaRegistry(self.audit)
-                media_imports = await media_registry.seed_existing(candidates, limit=13)
+                media_imports = await MediaRegistry(self.audit).seed_existing(candidates, limit=11)
         except TimeoutError:
             media_imports = {"status": "partial", "reason": "MEDIA_IMPORT_CYCLE_TIMEOUT", "publication_confirmed": False}
         from .publisher_handoff import PublisherHandoff
@@ -626,16 +603,6 @@ class PilotDaemon:
         logger.info("publisher_media_handoff %s", json.dumps(handoff, separators=(",", ":")))
         await self.audit.record("existing_media_import", media_imports)
         logger.info("existing_media_import %s", json.dumps(media_imports, separators=(",", ":")))
-        from .meta_video_ads import MetaVideoQueue
-
-        video_queue = MetaVideoQueue(self.audit)
-        try:
-            await video_queue.process_webhooks(candidates, media_registry)
-            video_result = await video_queue.cycle(media_registry.list(), candidates)
-        except Exception as exc:
-            video_result = {**video_queue.health(), "reason": "VIDEO_WORKER_" + type(exc).__name__}
-        await self.audit.record("meta_video_ads", video_result)
-        logger.info("meta_video_ads %s", json.dumps(video_result, separators=(",", ":")))
         from .search_campaigns import SearchCampaignDrafts
 
         search_drafts = await asyncio.to_thread(SearchCampaignDrafts(self.audit).reconcile, ranked_candidates)
@@ -656,6 +623,17 @@ class PilotDaemon:
                 'generated_at': daily['generated_at'], 'net_profit_verified': False,
                 'budget_increase_authorized': False}, separators=(',', ':')))
         return {"ranked_candidates": ranked_candidates, "selection": selection}
+
+    async def _agent_chain_job(self) -> dict[str, Any]:
+        """Run the repository's read-only product, copy and metrics agents."""
+        from agents.orchestrator import run_once
+
+        result = await run_once()
+        record = result.get("log_record")
+        if isinstance(record, dict):
+            return record
+        return {"status": result.get("status", "completed_with_blockers"),
+                "stages": result.get("stages", {})}
 
     async def _creative_job(self) -> dict[str, Any]:
         """Submit the catalog-based pilot without paid AI creative generation.
@@ -783,8 +761,8 @@ class PilotDaemon:
 
     async def _catalog_access_job(self) -> dict[str, Any]:
         """Diagnose Meta catalog access without requiring or enabling paid spend."""
-        # Diagnose the Meta catalog even when the existing ad runs in website mode.
-        # Read-only: this does not switch ad formats or create duplicate campaigns.
+        if os.getenv("PILOT_AD_MODE", "catalog") == "website_sales":
+            return {"status": "not_required", "reason": "WEBSITE_SALES_DOES_NOT_USE_META_CATALOG"}
         result = await MetaPublisher(self.audit).check_catalog_access()
         await self.audit.record("meta_catalog_access_diagnostic", result)
         return result

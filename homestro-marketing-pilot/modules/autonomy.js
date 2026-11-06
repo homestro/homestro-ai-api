@@ -29,6 +29,7 @@ export async function approveReviewed(store,cfg) {
       WHERE COALESCE((v->>'available')::boolean,false)=true
       AND COALESCE((v->>'price')::numeric,0)>0)
     AND s.payload->>'adSpendEUR'='0'
+    AND COALESCE(s.payload->>'importedMedia','false')<>'true'
     AND COALESCE(s.payload->>'format','')<>'reels'
     AND s.payload->>'productRevision'=p.document->>'revision'
     AND NOT (s.product_id=ANY($1::text[]))

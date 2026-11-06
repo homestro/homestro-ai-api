@@ -9,7 +9,7 @@ import os
 import re
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,22 +18,6 @@ from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
-
-
-def _meta_error_fields(error: Any) -> dict[str, Any]:
-    """Keep Meta's exact error fields; never include auth headers or request bodies."""
-    if not isinstance(error, dict):
-        return {}
-    fields: dict[str, Any] = {}
-    for key in ('code', 'error_subcode'):
-        value = error.get(key)
-        if type(value) is int:
-            fields[key] = value
-    for key in ('message', 'error_user_msg', 'fbtrace_id'):
-        value = error.get(key)
-        if isinstance(value, str):
-            fields[key] = value
-    return fields
 
 from .creative_factory import GeneratedCreative
 from .micro_budget import (
@@ -483,6 +467,26 @@ class PlanAuditStore:
 
         return await asyncio.to_thread(read)
 
+    async def latest_record(self, kind: str) -> dict[str, Any] | None:
+        """Read the newest audit item of one kind for bounded worker caches."""
+        def read() -> dict[str, Any] | None:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT id,kind,created_at,payload_json FROM adtech_audit "
+                    "WHERE kind=? ORDER BY created_at DESC LIMIT 1",
+                    (kind[:40],),
+                ).fetchone()
+            if row is None:
+                return None
+            return {
+                "id": row[0],
+                "kind": row[1],
+                "created_at": row[2],
+                "payload": json.loads(row[3]),
+            }
+
+        return await asyncio.to_thread(read)
+
 
 class AdExecutionEngine:
     """One fail-closed point for all ad mutations. Defaults can never spend."""
@@ -642,7 +646,12 @@ class MetaAdLibraryClient:
         )
 
     async def search(
-        self, terms: list[str], *, country: str = "DE", limit: int = 25
+        self,
+        terms: list[str],
+        *,
+        country: str = "DE",
+        limit: int = 25,
+        active_only: bool = False,
     ) -> list[CompetitorAd]:
         if country not in {"DE", "AT", "CH", "US", "GB", "FR", "IT", "ES", "NL"}:
             raise ValueError("Unsupported country code")
@@ -652,16 +661,19 @@ class MetaAdLibraryClient:
         client = self.client or httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5))
         own_client = self.client is None
         try:
+            params: dict[str, str | int] = {
+                "search_terms": bounded_terms,
+                "ad_type": "ALL",
+                "ad_reached_countries": json.dumps([country]),
+                "fields": "id,page_name,ad_creative_bodies,publisher_platforms,ad_delivery_start_time,ad_snapshot_url",
+                "limit": limit,
+            }
+            if active_only:
+                params["ad_active_status"] = "ACTIVE"
             response = await client.get(
                 f"{self.ENDPOINT}/{self.api_version}/ads_archive",
                 headers={"Authorization": f"Bearer {self.access_token}"},
-                params={
-                    "search_terms": bounded_terms,
-                    "ad_type": "ALL",
-                    "ad_reached_countries": json.dumps([country]),
-                    "fields": "id,page_name,ad_creative_bodies,publisher_platforms,ad_delivery_start_time,ad_snapshot_url",
-                    "limit": limit,
-                },
+                params=params,
             )
             response.raise_for_status()
             rows = response.json().get("data", [])
@@ -831,7 +843,6 @@ class MetaPublisher:
                 "http_status": response.status_code,
                 "stage": stage,
             }
-            details.update(_meta_error_fields(error))
             for source, target in (
                 ("code", "meta_error_code"),
                 ("error_subcode", "meta_error_subcode"),
@@ -850,9 +861,7 @@ class MetaPublisher:
             if own_client:
                 await client.aclose()
 
-    async def check_catalog_access(
-        self, *, expected_product_count: int | None = None
-    ) -> dict[str, Any]:
+    async def check_catalog_access(self) -> dict[str, Any]:
         """Read catalog and whole-catalog product-set access; never writes Meta objects."""
         token = self.env.get("META_ACCESS_TOKEN", "").strip()
         catalog_id = self.env.get("META_PRODUCT_CATALOG_ID", "").strip()
@@ -880,7 +889,7 @@ class MetaPublisher:
                 client,
                 f"{catalog_id}/product_sets",
                 headers,
-                {"fields": "id,name,product_count,filter", "limit": "100"},
+                {"fields": "id,name", "limit": "100"},
             )
             rows = result.get("data")
             if not isinstance(rows, list):
@@ -896,59 +905,28 @@ class MetaPublisher:
                 and self.ID_PATTERN.fullmatch(str(row.get("id", "")))
             ]
             configured_set_id = self.env.get("META_PRODUCT_SET_ID", "").strip()
-
-            def is_unfiltered_complete_set(row: dict[str, Any]) -> bool:
-                filter_value = row.get("filter")
-                if isinstance(filter_value, str) and filter_value.strip():
-                    try:
-                        filter_value = json.loads(filter_value)
-                    except ValueError:
-                        return False
-                if filter_value not in (None, "", {}, []):
-                    return False
-                try:
-                    item_count = int(str(row.get("product_count", "")))
-                except (TypeError, ValueError):
-                    return False
-                return item_count > 0
-
-            eligible_sets = [row for row in full_sets if is_unfiltered_complete_set(row)]
             if configured_set_id:
                 if not self.ID_PATTERN.fullmatch(configured_set_id):
                     return {"status": "blocked", "reason": "META_PRODUCT_SET_ID_INVALID"}
                 selected = [
-                    row for row in eligible_sets
+                    row for row in full_sets
                     if str(row.get("id")) == configured_set_id
                 ]
                 if len(selected) != 1:
                     return {
                         "status": "blocked",
-                        "reason": "META_CONFIGURED_SET_IS_NOT_VERIFIED_ALL_PRODUCTS",
+                        "reason": "META_CONFIGURED_SET_IS_NOT_ALL_PRODUCTS",
                         "catalog_id": catalog_id,
-                        "matching_set_count": len(full_sets),
-                        "eligible_unfiltered_set_count": len(eligible_sets),
                     }
                 full_set = selected[0]
-            elif len(eligible_sets) == 1:
-                full_set = eligible_sets[0]
-            elif len(eligible_sets) > 1:
-                # Same label, empty filters, and exact feed count prove equivalent
-                # full-catalog scopes; stable numeric ordering makes retries idempotent.
-                full_set = sorted(eligible_sets, key=lambda row: int(str(row["id"])))[0]
+            elif len(full_sets) == 1:
+                full_set = full_sets[0]
             else:
                 return {
                     "status": "blocked",
                     "reason": "META_ALL_PRODUCTS_SET_NOT_FOUND_OR_AMBIGUOUS",
                     "catalog_id": catalog_id,
                     "matching_set_count": len(full_sets),
-                    "eligible_unfiltered_set_count": 0,
-                    "expected_product_count": expected_product_count,
-                    "candidate_sets": [{
-                        "id": str(row.get("id", "")),
-                        "product_count": row.get("product_count"),
-                        "filter_type": type(row.get("filter")).__name__,
-                        "filter_empty": row.get("filter") in (None, "", {}, []),
-                    } for row in full_sets],
                 }
 
             return {
@@ -957,8 +935,6 @@ class MetaPublisher:
                 "catalog_name": str(catalog.get("name", ""))[:160],
                 "product_set_id": str(full_set["id"]),
                 "product_set_name": str(full_set.get("name", ""))[:80],
-                "product_count": int(str(full_set.get("product_count", "0"))),
-                "selection_basis": "unfiltered_exact_feed_count" if expected_product_count is not None else "unique_unfiltered_all_products_set",
                 "visible_product_set_count": len(rows),
                 "campaign_writes_performed": False,
             }
@@ -995,381 +971,6 @@ class MetaPublisher:
                 "reason": "META_CATALOG_READ_FAILED",
                 "error_type": type(exc).__name__,
                 "campaign_writes_performed": False,
-            }
-        finally:
-            if own_client:
-                await client.aclose()
-
-    async def publish_existing_catalog_campaign(
-        self,
-        *,
-        campaign_id: str,
-        feed_record_count: int,
-    ) -> dict[str, Any]:
-        """Convert the exact owned, paused campaign's ad to the verified All products set.
-
-        This is an idempotent in-place creative migration: it never creates a campaign,
-        ad set, or extra ad, and it deliberately leaves every delivery object PAUSED.
-        """
-        campaign_id = str(campaign_id).strip()
-        account_id = self.env.get("META_AD_ACCOUNT_ID", "").strip()
-        token = self.env.get("META_ACCESS_TOKEN", "").strip()
-        page_id = self.env.get("META_PAGE_ID", "").strip()
-        pixel_id = self.env.get("META_PIXEL_ID", "").strip()
-        version = self._version()
-        if not self.ID_PATTERN.fullmatch(campaign_id):
-            return {"status": "blocked", "reason": "CATALOG_CAMPAIGN_ID_INVALID"}
-        if not self.ACCOUNT_PATTERN.fullmatch(account_id):
-            return {"status": "blocked", "reason": "META_AD_ACCOUNT_ID_INVALID"}
-        if not token or not self.ID_PATTERN.fullmatch(page_id) or not self.ID_PATTERN.fullmatch(pixel_id):
-            return {"status": "blocked", "reason": "META_CATALOG_CONFIGURATION_INCOMPLETE"}
-        if not self.API_VERSION_PATTERN.fullmatch(version):
-            return {"status": "blocked", "reason": "META_API_VERSION_INVALID"}
-
-        claim = await self.audit.get_meta_micro_campaign_claim()
-        if (
-            not isinstance(claim, dict)
-            or str(claim.get("campaign_id", "")) != campaign_id
-            or claim.get("status") not in {"ACTIVE_PENDING_REVIEW", "RECONCILED_EXISTING_CAMPAIGN"}
-        ):
-            return {"status": "blocked", "reason": "EXACT_OWNED_CAMPAIGN_SCOPE_REQUIRED",
-                    "campaign_id": campaign_id}
-        # A stale local account label is not authority to mutate anything. The
-        # remote campaign/account relationship is verified below before writes.
-        stored_claim_account_matches = (
-            str(claim.get("account_id", "")).removeprefix("act_")
-            == account_id.removeprefix("act_")
-        )
-
-        own_client = self.client is None
-        client = self.client or httpx.AsyncClient(
-            timeout=httpx.Timeout(35, connect=8), follow_redirects=False
-        )
-        headers = {"Authorization": f"Bearer {token}"}
-        writes_performed = False
-        stage = "account_read"
-        try:
-            account = await self._get(
-                client, account_id, headers,
-                {"fields": "id,currency,spend_cap,amount_spent"},
-            )
-            if (
-                str(account.get("id", "")).removeprefix("act_")
-                    != account_id.removeprefix("act_")
-                or str(account.get("currency", "")).upper() != "EUR"
-                or int(str(account.get("spend_cap", ""))) != 3500
-                or int(str(account.get("amount_spent", "0"))) > 3500
-            ):
-                return {"status": "blocked", "reason": "GLOBAL_35_EUR_ACCOUNT_CAP_READBACK_FAILED",
-                        "campaign_id": campaign_id}
-
-            stage = "campaign_read"
-            campaign = await self._get(
-                client, campaign_id, headers,
-                {"fields": "id,account_id,objective,status"},
-            )
-            if (
-                str(campaign.get("id", "")) != campaign_id
-                or str(campaign.get("account_id", "")).removeprefix("act_")
-                    != account_id.removeprefix("act_")
-                or campaign.get("objective") != "OUTCOME_SALES"
-            ):
-                return {"status": "blocked", "reason": "OWNED_CAMPAIGN_IDENTITY_READBACK_FAILED",
-                        "campaign_id": campaign_id}
-            campaign_status = str(campaign.get("status", "")).upper()
-            if campaign_status == "ACTIVE":
-                return {
-                    "status": "active_campaign_unchanged",
-                    "reason": "PILOT_CATALOG_PREPARATION_NOT_NEEDED_WHILE_LIVE",
-                    "campaign_id": campaign_id,
-                    "campaign_status": campaign_status,
-                    "writes_performed": False,
-                    "activation_performed": False,
-                }
-            if campaign_status != "PAUSED":
-                return {"status": "blocked", "reason": "OWNED_CAMPAIGN_STATUS_NOT_PAUSED",
-                        "campaign_id": campaign_id, "campaign_status": campaign_status}
-
-            catalog = await self.check_catalog_access(expected_product_count=feed_record_count)
-            if catalog.get("status") != "checked":
-                return {"status": "blocked", "reason": catalog.get("reason", "META_ALL_PRODUCTS_SET_NOT_VERIFIED"),
-                        "catalog_check": catalog}
-
-            stage = "adsets_read"
-            adsets_result = await self._get(
-                client, f"{campaign_id}/adsets", headers,
-                {"fields": "id,status,daily_budget,targeting,start_time,end_time", "limit": "100"},
-            )
-            adsets = adsets_result.get("data")
-            if (
-                not isinstance(adsets, list) or len(adsets) != 1
-                or (isinstance(adsets_result.get("paging"), dict) and adsets_result["paging"].get("next"))
-            ):
-                return {"status": "blocked", "reason": "EXISTING_SINGLE_ADSET_REQUIRED",
-                        "campaign_id": campaign_id}
-            adset = adsets[0]
-            adset_id = str(adset.get("id", ""))
-            targeting = adset.get("targeting") or {}
-            geo = targeting.get("geo_locations") or {}
-            countries = set(geo.get("countries") or [])
-            if (
-                not self.ID_PATTERN.fullmatch(adset_id)
-                or str(adset.get("status", "")).upper() not in {"PAUSED", "ACTIVE"}
-                or str(adset.get("daily_budget", "")) != "500"
-                or not {"DE", "AT"}.issubset(countries)
-            ):
-                return {"status": "blocked", "reason": "EXISTING_ADSET_LIMITS_NOT_VERIFIED",
-                        "campaign_id": campaign_id, "adset_id": adset_id or None}
-
-            if targeting.get("publisher_platforms") != ["facebook"]:
-                facebook_targeting = dict(targeting)
-                facebook_targeting["publisher_platforms"] = ["facebook"]
-                facebook_targeting.pop("instagram_positions", None)
-                facebook_targeting.pop("messenger_positions", None)
-                facebook_targeting.pop("audience_network_positions", None)
-                stage = "facebook_only_placement_update"
-                placement_response = await client.post(
-                    f"{self.ENDPOINT}/{version}/{adset_id}",
-                    headers=headers,
-                    data={"targeting": json.dumps(facebook_targeting), "status": "PAUSED"},
-                )
-                self._json_response(placement_response, require_object_id=False)
-                stage = "facebook_only_placement_readback"
-                adset_readback = await self._get(
-                    client, adset_id, headers,
-                    {"fields": "id,status,daily_budget,targeting"},
-                )
-                readback_targeting = adset_readback.get("targeting") or {}
-                if (
-                    str(adset_readback.get("id", "")) != adset_id
-                    or str(adset_readback.get("status", "")).upper() != "PAUSED"
-                    or str(adset_readback.get("daily_budget", "")) != "500"
-                    or readback_targeting.get("publisher_platforms") != ["facebook"]
-                ):
-                    return {"status": "write_unconfirmed", "reason": "FACEBOOK_ONLY_PLACEMENTS_NOT_CONFIRMED",
-                            "campaign_id": campaign_id, "adset_id": adset_id,
-                            "writes_performed": True, "activation_performed": False}
-                targeting = readback_targeting
-            stage = "ads_read"
-            ads_result = await self._get(
-                client, f"{adset_id}/ads", headers,
-                {"fields": "id,campaign_id,adset_id,status,creative", "limit": "100"},
-            )
-            ads = ads_result.get("data")
-            if (
-                not isinstance(ads, list)
-                or (isinstance(ads_result.get("paging"), dict) and ads_result["paging"].get("next"))
-            ):
-                return {"status": "blocked", "reason": "EXISTING_ADS_READ_INCOMPLETE",
-                        "campaign_id": campaign_id, "adset_id": adset_id}
-            ad_id = ""
-            actual_creative_id = ""
-            matching_catalog_ad_id = ""
-            matching_catalog_creative_id = ""
-            for existing_ad in ads:
-                existing_ad_id = str(existing_ad.get("id", ""))
-                existing_creative_id = str((existing_ad.get("creative") or {}).get("id", ""))
-                if (
-                    not self.ID_PATTERN.fullmatch(existing_ad_id)
-                    or str(existing_ad.get("campaign_id", "")) != campaign_id
-                    or str(existing_ad.get("adset_id", "")) != adset_id
-                    or str(existing_ad.get("status", "")).upper() != "PAUSED"
-                    or not self.ID_PATTERN.fullmatch(existing_creative_id)
-                ):
-                    return {"status": "blocked", "reason": "EXISTING_PAUSED_AD_READBACK_FAILED",
-                            "campaign_id": campaign_id, "adset_id": adset_id}
-                stage = "existing_creative_read"
-                existing_creative = await self._get(
-                    client, existing_creative_id, headers,
-                    {"fields": "id,product_set_id,object_story_spec"},
-                )
-                existing_story = existing_creative.get("object_story_spec") or {}
-                existing_template = existing_story.get("template_data")
-                if (
-                    str(existing_creative.get("product_set_id", "")) == str(catalog["product_set_id"])
-                    and isinstance(existing_template, dict)
-                ):
-                    if matching_catalog_ad_id:
-                        return {"status": "blocked", "reason": "MULTIPLE_ADS_MATCH_CATALOG_PRODUCT_SET",
-                                "campaign_id": campaign_id, "adset_id": adset_id}
-                    matching_catalog_ad_id = existing_ad_id
-                    matching_catalog_creative_id = existing_creative_id
-                    ad_id = existing_ad_id
-                    actual_creative_id = existing_creative_id
-                    name_mapped = "{{product.name}}" in str(existing_template.get("name", ""))
-                    description_mapped = "{{product.description}}" in str(existing_template.get("description", ""))
-                    if not name_mapped:
-                        continue
-                    return {
-                        "status": "catalog_verified",
-                        "campaign_id": campaign_id,
-                        "adset_id": adset_id,
-                        "ad_id": existing_ad_id,
-                        "creative_id": existing_creative_id,
-                        "product_description_template_mapped": description_mapped,
-                        "product_catalog_id": catalog["catalog_id"],
-                        "product_set_id": catalog["product_set_id"],
-                        "product_set_name": catalog["product_set_name"],
-                        "shopify_feed_records": feed_record_count,
-                        "campaign_status": "PAUSED",
-                        "stored_claim_account_matches": stored_claim_account_matches,
-                        "daily_budget_eur": "5.00",
-                        "account_spend_cap_eur": "35.00",
-                        "writes_performed": False,
-                        "activation_performed": False,
-                    }
-
-            if not matching_catalog_ad_id:
-                return {"status": "blocked", "reason": "EXISTING_CATALOG_AD_IDENTITY_NOT_FOUND",
-                        "campaign_id": campaign_id, "adset_id": adset_id}
-            # AdCreative content is immutable in Meta. Create a catalog creative,
-            # then attach its ID to the existing paused ad; do not send an inline
-            # creative spec in the Ad.update call.
-            stage = "catalog_ad_creative_create"
-            writes_performed = True
-            creative_response = await client.post(
-                f"{self.ENDPOINT}/{version}/{account_id}/adcreatives",
-                headers=headers,
-                data={
-                    "name": f"Homestro catalog creative // {campaign_id}"[:240],
-                    "product_set_id": str(catalog["product_set_id"]),
-                    "object_story_spec": json.dumps({
-                        "page_id": page_id,
-                        "template_data": {
-                            "message": "Entdecke Produkte von Homestro für deinen Alltag.",
-                            "name": "{{product.name}}",
-                            "description": "Produktdetails: {{product.description}}",
-                            "link": "https://homestro.de",
-                            "call_to_action": {"type": "SHOP_NOW"},
-                        },
-                    }, ensure_ascii=False),
-                },
-            )
-            creative_payload = self._json_response(creative_response)
-            new_creative_id = str(creative_payload.get("id", ""))
-            if not self.ID_PATTERN.fullmatch(new_creative_id):
-                return {"status": "write_unconfirmed", "reason": "META_CATALOG_CREATIVE_ID_MISSING",
-                        "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
-                        "writes_performed": True, "activation_performed": False}
-
-            stage = "catalog_ad_creative_attach"
-            attach_response = await client.post(
-                f"{self.ENDPOINT}/{version}/{ad_id}",
-                headers=headers,
-                data={
-                    "creative": json.dumps({"creative_id": new_creative_id}),
-                    "status": "PAUSED",
-                },
-            )
-            self._json_response(attach_response, require_object_id=False)
-            stage = "catalog_ad_readback"
-            ad_readback = await self._get(
-                client, ad_id, headers,
-                {"fields": "id,campaign_id,adset_id,status,effective_status,creative"},
-            )
-            actual_creative_id = str((ad_readback.get("creative") or {}).get("id", ""))
-            stage = "catalog_creative_readback"
-            creative_readback = await self._get(
-                client, actual_creative_id, headers,
-                {"fields": "id,product_set_id,object_story_spec"},
-            )
-            readback_story = creative_readback.get("object_story_spec") or {}
-            readback_template = readback_story.get("template_data")
-            mismatch_fields = []
-            if str(ad_readback.get("id", "")) != ad_id:
-                mismatch_fields.append("ad_id")
-            if str(ad_readback.get("campaign_id", "")) != campaign_id:
-                mismatch_fields.append("campaign_id")
-            if str(ad_readback.get("adset_id", "")) != adset_id:
-                mismatch_fields.append("adset_id")
-            if str(ad_readback.get("status", "")).upper() != "PAUSED":
-                mismatch_fields.append("ad_status")
-            if actual_creative_id != new_creative_id:
-                mismatch_fields.append("creative_id")
-            if str(creative_readback.get("product_set_id", "")) != str(catalog["product_set_id"]):
-                mismatch_fields.append("product_set_id")
-            if str(readback_story.get("page_id", "")) != page_id:
-                mismatch_fields.append("page_id")
-            if not isinstance(readback_template, dict):
-                mismatch_fields.append("template_data")
-            else:
-                if "{{product.name}}" not in str(readback_template.get("name", "")):
-                    mismatch_fields.append("template_data.name")
-                description_template_mapped = (
-                    "{{product.description}}" in str(readback_template.get("description", ""))
-                )
-            if mismatch_fields:
-                return {"status": "write_unconfirmed", "reason": "CATALOG_CREATIVE_READBACK_MISMATCH",
-                        "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
-                        "creative_id": actual_creative_id or None,
-                        "mismatch_fields": mismatch_fields,
-                        "writes_performed": True, "activation_performed": False}
-
-            await self.audit.record("meta_catalog_campaign_migrated", {
-                "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": ad_id,
-                "creative_id": actual_creative_id, "product_catalog_id": catalog["catalog_id"],
-                "product_set_id": catalog["product_set_id"], "product_set_name": catalog["product_set_name"],
-                "shopify_feed_records": feed_record_count, "daily_budget_eur": "5.00",
-                "account_spend_cap_eur": "35.00", "status": "PAUSED",
-            })
-            return {
-                "status": "catalog_updated_paused",
-                "campaign_id": campaign_id,
-                "adset_id": adset_id,
-                "ad_id": ad_id,
-                "creative_id": actual_creative_id,
-                "product_catalog_id": catalog["catalog_id"],
-                "product_set_id": catalog["product_set_id"],
-                "product_set_name": catalog["product_set_name"],
-                "shopify_feed_records": feed_record_count,
-                "campaign_status": "PAUSED",
-                "stored_claim_account_matches": stored_claim_account_matches,
-                "daily_budget_eur": "5.00",
-                "account_spend_cap_eur": "35.00",
-                "writes_performed": True,
-                "activation_performed": False,
-            }
-        except asyncio.CancelledError:
-            raise
-        except httpx.HTTPStatusError as exc:
-            response = exc.response
-            try:
-                body = response.json()
-            except ValueError:
-                body = {}
-            error = body.get("error", {}) if isinstance(body, dict) else {}
-            if not isinstance(error, dict):
-                error = {}
-            result = {
-                "status": "blocked",
-                "reason": "META_CATALOG_UPDATE_FAILED",
-                "campaign_id": campaign_id,
-                "stage": stage,
-                "http_status": response.status_code,
-                "writes_performed": writes_performed,
-                "activation_performed": False,
-            }
-            result.update(_meta_error_fields(error))
-            if isinstance(error.get("code"), int):
-                result["meta_error_code"] = error["code"]
-            if isinstance(error.get("error_subcode"), int):
-                result["meta_error_subcode"] = error["error_subcode"]
-            if isinstance(error.get("type"), str):
-                result["meta_error_type"] = error["type"][:80]
-            if isinstance(error.get("message"), str):
-                result["meta_error_message"] = error["message"][:240]
-            if isinstance(error.get("error_user_title"), str):
-                result["meta_error_user_title"] = error["error_user_title"][:160]
-            if isinstance(error.get("error_user_msg"), str):
-                result["meta_error_user_msg"] = error["error_user_msg"][:240]
-            return result
-        except Exception as exc:
-            return {
-                "status": "blocked",
-                "reason": type(exc).__name__,
-                "campaign_id": campaign_id,
-                "writes_performed": writes_performed,
-                "activation_performed": False,
             }
         finally:
             if own_client:
@@ -1535,7 +1136,7 @@ class MetaPublisher:
                         "objective": "OUTCOME_SALES",
                         "status": "PAUSED",
                         "special_ad_categories": "[]",
-                        "is_adset_budget_sharing_enabled": "False",
+                        "is_adset_budget_sharing_enabled": "false",
                     },
                 )
             else:
@@ -2080,574 +1681,3 @@ async def autopilot_loop(
             await asyncio.wait_for(stop.wait(), timeout=interval_hours * 3600)
         except TimeoutError:
             continue
-
-
-class MetaGraphAPIError(RuntimeError):
-    """A Meta Graph failure with bounded, non-secret diagnostic fields."""
-
-    def __init__(
-        self, status_code: int, code: int | None, subcode: int | None,
-        stage: str, details: dict[str, str],
-    ) -> None:
-        code_text = str(code) if isinstance(code, int) else "unknown"
-        subcode_text = str(subcode) if isinstance(subcode, int) else "unknown"
-        super().__init__(
-            f"META_API_ERROR:{status_code}:{code_text}:{subcode_text}:{stage}"
-        )
-        self.meta_details = details
-
-
-class MetaSaaSPublisher:
-    """Create one idempotent, PAUSED preview concept; this class never activates ads."""
-
-    API_ROOT = "https://graph.facebook.com"
-    EXPECTED_ACCOUNT_ID = "918741266442442"
-    EXPECTED_PIXEL_ID = "774286518060183"
-    PORTFOLIO_DAILY_CAP_CENTS = 50_000
-    ACCOUNT_SPEND_CAP_CENTS = 3_500
-    CONCEPT_DAILY_BUDGET_CENTS = 500
-
-    def __init__(
-        self,
-        token: str,
-        account_id: str,
-        pixel_id: str,
-        page_id: str,
-        api_version: str = "v26.0",
-        *,
-        client: httpx.AsyncClient | None = None,
-    ):
-        account_number = str(account_id).removeprefix("act_")
-        if account_number != self.EXPECTED_ACCOUNT_ID:
-            raise ValueError("META_ACCOUNT_NOT_OWNER_APPROVED_A1")
-        if str(pixel_id) != self.EXPECTED_PIXEL_ID:
-            raise ValueError("META_PIXEL_NOT_MATCHED_TO_SHOPIFY")
-        if not re.fullmatch(r"\d{4,30}", str(page_id)):
-            raise ValueError("META_PAGE_ID_INVALID")
-        if not re.fullmatch(r"v\d+\.\d+", api_version):
-            raise ValueError("META_API_VERSION_INVALID")
-        if not token:
-            raise ValueError("META_ACCESS_TOKEN_MISSING")
-        self.account_id = f"act_{account_number}"
-        self.pixel_id = str(pixel_id)
-        self.page_id = str(page_id)
-        self.api_version = api_version
-        self.token = token
-        self.client = client
-        self.write_attempted = False
-
-    async def _call(self, method: str, path: str, *, params=None, data=None) -> dict[str, Any]:
-        own_client = self.client is None
-        client = self.client or httpx.AsyncClient(
-            timeout=httpx.Timeout(35, connect=8), follow_redirects=False
-        )
-        try:
-            response = await client.request(
-                method,
-                f"{self.API_ROOT}/{self.api_version}/{path.lstrip('/')}",
-                headers={"Authorization": f"Bearer {self.token}"},
-                params=params,
-                data=data,
-            )
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = {}
-            if response.status_code >= 400 or not isinstance(payload, dict) or "error" in payload:
-                error = payload.get("error", {}) if isinstance(payload, dict) else {}
-                code = error.get("code") if isinstance(error, dict) else None
-                subcode = error.get("error_subcode") if isinstance(error, dict) else None
-                clean_path = path.lstrip("/")
-                if clean_path == self.account_id:
-                    stage = "account_read"
-                elif clean_path == self.page_id:
-                    stage = "page_read"
-                elif clean_path == f"{self.account_id}/adspixels":
-                    stage = "pixel_access_read"
-                elif clean_path == f"{self.account_id}/campaigns":
-                    stage = (
-                        "campaign_create"
-                        if method.upper() == "POST"
-                        else "campaign_list_read"
-                    )
-                else:
-                    stage = "meta_api_request"
-                safe_details: dict[str, Any] = _meta_error_fields(error)
-                for source, target in (
-                    ("type", "meta_error_type"),
-                    ("error_user_title", "meta_error_title"),
-                    ("error_user_msg", "meta_error_message"),
-                    ("message", "meta_error_summary"),
-                    ("fbtrace_id", "meta_fbtrace_id"),
-                ):
-                    value = error.get(source)
-                    if isinstance(value, str):
-                        safe_details[target] = " ".join(value.split())[:240]
-                if stage == "account_read":
-                    try:
-                        accounts_response = await client.get(
-                            f"{self.API_ROOT}/{self.api_version}/me/adaccounts",
-                            headers={"Authorization": f"Bearer {self.token}"},
-                            params={"fields": "id,account_id", "limit": "100"},
-                        )
-                        accounts_payload = accounts_response.json()
-                        rows = accounts_payload.get("data") if isinstance(accounts_payload, dict) else None
-                        if accounts_response.status_code < 400 and isinstance(rows, list):
-                            account_ids = [
-                                str(row.get("account_id") or row.get("id", ""))
-                                for row in rows
-                                if isinstance(row, dict)
-                            ]
-                            target_id = self.account_id.removeprefix("act_")
-                            safe_details["meta_target_account_visible"] = (
-                                "true" if target_id in account_ids else "false"
-                            )
-                            safe_details["meta_accessible_ad_account_ids"] = ",".join(
-                                account_ids[:50]
-                            )[:1000]
-                            paging = accounts_payload.get("paging", {})
-                            safe_details["meta_account_list_complete"] = (
-                                "false"
-                                if isinstance(paging, dict) and paging.get("next")
-                                else "true"
-                            )
-                        else:
-                            safe_details["meta_accessible_accounts_probe"] = (
-                                f"failed_http_{accounts_response.status_code}"
-                            )
-                    except Exception as probe_exc:
-                        safe_details["meta_accessible_accounts_probe"] = (
-                            f"failed_{type(probe_exc).__name__}"
-                        )
-                elif stage == "page_read":
-                    try:
-                        pages_response = await client.get(
-                            f"{self.API_ROOT}/{self.api_version}/me/accounts",
-                            headers={"Authorization": f"Bearer {self.token}"},
-                            params={"fields": "id,name,tasks", "limit": "100"},
-                        )
-                        pages_payload = pages_response.json()
-                        rows = pages_payload.get("data") if isinstance(pages_payload, dict) else None
-                        if pages_response.status_code < 400 and isinstance(rows, list):
-                            page_ids = [
-                                str(row.get("id", ""))
-                                for row in rows
-                                if isinstance(row, dict)
-                            ]
-                            safe_details["meta_target_page_visible"] = (
-                                "true" if self.page_id in page_ids else "false"
-                            )
-                            safe_details["meta_accessible_page_ids"] = ",".join(
-                                page_ids[:50]
-                            )[:1000]
-                            page_names = [
-                                f"{row.get('id', '')}:{row.get('name', '')}"
-                                for row in rows
-                                if isinstance(row, dict)
-                            ]
-                            safe_details["meta_accessible_pages"] = " | ".join(
-                                page_names[:20]
-                            )[:1000]
-                            paging = pages_payload.get("paging", {})
-                            safe_details["meta_page_list_complete"] = (
-                                "false"
-                                if isinstance(paging, dict) and paging.get("next")
-                                else "true"
-                            )
-                        else:
-                            safe_details["meta_accessible_pages_probe"] = (
-                                f"failed_http_{pages_response.status_code}"
-                            )
-                    except Exception as probe_exc:
-                        safe_details["meta_accessible_pages_probe"] = (
-                            f"failed_{type(probe_exc).__name__}"
-                        )
-                raise MetaGraphAPIError(
-                    response.status_code,
-                    code if isinstance(code, int) else None,
-                    subcode if isinstance(subcode, int) else None,
-                    stage,
-                    safe_details,
-                )
-            return payload
-        finally:
-            if own_client:
-                await client.aclose()
-
-    async def _all_pages(self, path: str, fields: str) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        after: str | None = None
-        for _ in range(50):
-            params: dict[str, str] = {"fields": fields, "limit": "100"}
-            if after:
-                params["after"] = after
-            payload = await self._call("GET", path, params=params)
-            data = payload.get("data")
-            if not isinstance(data, list) or any(not isinstance(x, dict) for x in data):
-                raise RuntimeError("META_API_LIST_INVALID")
-            rows.extend(data)
-            paging = payload.get("paging") or {}
-            if not isinstance(paging, dict) or not paging.get("next"):
-                return rows
-            cursors = paging.get("cursors") or {}
-            after = cursors.get("after") if isinstance(cursors, dict) else None
-            if not isinstance(after, str) or not after:
-                raise RuntimeError("META_API_PAGINATION_INCOMPLETE")
-        raise RuntimeError("META_API_PAGE_LIMIT_EXCEEDED")
-
-    async def _check_assets_and_cap(self) -> tuple[list[dict[str, Any]], int]:
-        account = await self._call(
-            "GET", self.account_id,
-            params={"fields": "id,currency,spend_cap"},
-        )
-        if str(account.get("id", "")).removeprefix("act_") != self.EXPECTED_ACCOUNT_ID:
-            raise RuntimeError("META_ACCOUNT_ID_READBACK_MISMATCH")
-        if str(account.get("currency", "")).upper() != "EUR":
-            raise RuntimeError("META_ACCOUNT_CURRENCY_NOT_EUR")
-        try:
-            spend_cap_cents = int(str(account.get("spend_cap", "")))
-        except (TypeError, ValueError):
-            raise RuntimeError("META_ACCOUNT_SPEND_CAP_UNVERIFIED")
-        if spend_cap_cents <= 0 or spend_cap_cents > self.ACCOUNT_SPEND_CAP_CENTS:
-            raise RuntimeError("META_ACCOUNT_SPEND_CAP_OUTSIDE_35_EUR")
-
-        accessible_pixels = await self._all_pages(
-            f"{self.account_id}/adspixels", "id"
-        )
-        if self.pixel_id not in {str(row.get("id", "")) for row in accessible_pixels}:
-            raise RuntimeError("META_PIXEL_NOT_ACCESSIBLE_TO_A1")
-        page = await self._call("GET", self.page_id, params={"fields": "id"})
-        if str(page.get("id", "")) != self.page_id:
-            raise RuntimeError("META_PAGE_ID_READBACK_MISMATCH")
-
-        campaigns = await self._all_pages(
-            f"{self.account_id}/campaigns",
-            "id,name,status,effective_status,daily_budget,lifetime_budget,adsets{daily_budget,status,effective_status}",
-        )
-        active_daily_cents = 0
-        for campaign in campaigns:
-            state = str(campaign.get("effective_status") or campaign.get("status") or "").upper()
-            if state != "ACTIVE":
-                continue
-            if campaign.get("lifetime_budget") not in (None, "", "0", 0):
-                raise RuntimeError("ACTIVE_LIFETIME_BUDGET_REQUIRES_REVIEW")
-            if campaign.get("daily_budget") not in (None, "", "0", 0):
-                active_daily_cents += int(str(campaign["daily_budget"]))
-                continue
-            adsets = campaign.get("adsets") or {}
-            adset_rows = adsets.get("data") if isinstance(adsets, dict) else None
-            if not isinstance(adset_rows, list):
-                raise RuntimeError("META_ACTIVE_ADSETS_UNREADABLE")
-            if isinstance(adsets.get("paging"), dict) and adsets["paging"].get("next"):
-                raise RuntimeError("META_ACTIVE_ADSETS_INCOMPLETE")
-            for adset in adset_rows:
-                if not isinstance(adset, dict):
-                    raise RuntimeError("META_ACTIVE_ADSET_INVALID")
-                adset_state = str(
-                    adset.get("effective_status") or adset.get("status") or ""
-                ).upper()
-                if adset_state == "ACTIVE":
-                    active_daily_cents += int(str(adset.get("daily_budget") or 0))
-        if active_daily_cents + self.CONCEPT_DAILY_BUDGET_CENTS > self.PORTFOLIO_DAILY_CAP_CENTS:
-            raise RuntimeError("PORTFOLIO_DAILY_CAP_500_EUR_EXCEEDED")
-        return campaigns, spend_cap_cents
-
-    async def deploy_paused_concept(
-        self, product: dict[str, Any], initial_budget_eur: float = 5.0
-    ) -> dict[str, Any]:
-        if round(float(initial_budget_eur) * 100) != self.CONCEPT_DAILY_BUDGET_CENTS:
-            raise ValueError("CONCEPT_BUDGET_MUST_REMAIN_5_EUR_PER_DAY")
-        title = str(product.get("title", "")).strip()
-        product_id = str(product.get("id", "")).strip()
-        link = str(product.get("link", "")).strip()
-        image = str(product.get("image_link", "")).strip()
-        parsed_link, parsed_image = urlsplit(link), urlsplit(image)
-        if not title:
-            raise ValueError("PRODUCT_TITLE_MISSING")
-        if not product_id or len(product_id) > 128:
-            raise ValueError("SHOPIFY_PRODUCT_ID_INVALID")
-        product_key = re.sub(r"[^A-Za-z0-9_-]+", "-", product_id).strip("-")[:64]
-        if not product_key:
-            raise ValueError("SHOPIFY_PRODUCT_ID_INVALID")
-        if (
-            parsed_link.scheme != "https"
-            or parsed_link.hostname not in {"homestro.de", "www.homestro.de"}
-            or parsed_link.username or parsed_link.password
-        ):
-            raise ValueError("PRODUCT_LINK_NOT_ALLOWED")
-        if (
-            parsed_image.scheme != "https"
-            or not parsed_image.hostname
-            or parsed_image.username or parsed_image.password
-        ):
-            raise ValueError("PRODUCT_IMAGE_NOT_ALLOWED")
-        campaigns, account_cap_cents = await self._check_assets_and_cap()
-        concept_name = f"AUTOPILOT CONCEPT // {product_key} // {title}"[:240]
-        campaign_id = ""
-        for existing_campaign in campaigns:
-            if str(existing_campaign.get("name", "")) != concept_name:
-                continue
-            existing_campaign_id = str(existing_campaign.get("id", ""))
-            existing_status = str(
-                existing_campaign.get("effective_status")
-                or existing_campaign.get("status")
-                or ""
-            ).upper()
-            if existing_status not in {"PAUSED", "CAMPAIGN_PAUSED"}:
-                return {
-                    "status": "SKIPPED_DUPLICATE",
-                    "campaign_id": existing_campaign_id,
-                    "campaign_name": concept_name,
-                    "campaign_status": existing_status,
-                }
-            campaign_id = existing_campaign_id
-            break
-
-        now = datetime.now(timezone.utc)
-        starts = (now + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%S%z")
-        ends = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S%z")
-        if not campaign_id:
-            self.write_attempted = True
-            campaign = await self._call(
-                "POST", f"{self.account_id}/campaigns",
-                data={
-                    "name": concept_name,
-                    "objective": "OUTCOME_SALES",
-                    "status": "PAUSED",
-                    "special_ad_categories": "[]",
-                    "is_adset_budget_sharing_enabled": "false",
-                },
-            )
-            campaign_id = str(campaign.get("id", ""))
-            if not re.fullmatch(r"\d{4,30}", campaign_id):
-                raise RuntimeError("META_CAMPAIGN_ID_MISSING")
-
-        adset_name = f"Concept // DE-AT // {product_key}"
-        existing_adsets = await self._call(
-            "GET", f"{campaign_id}/adsets",
-            params={"fields": "id,name,status,effective_status", "limit": "100"},
-        )
-        existing_rows = existing_adsets.get("data")
-        if not isinstance(existing_rows, list) or (
-            isinstance(existing_adsets.get("paging"), dict)
-            and existing_adsets["paging"].get("next")
-        ):
-            raise RuntimeError("META_EXISTING_ADSETS_UNVERIFIED")
-        if existing_rows:
-            matching_adsets = [
-                row for row in existing_rows
-                if isinstance(row, dict) and str(row.get("name", "")) == adset_name
-            ]
-            if len(matching_adsets) != 1:
-                return {
-                    "status": "BLOCKED",
-                    "reason": "EXISTING_ADSET_SCOPE_AMBIGUOUS",
-                    "campaign_id": campaign_id,
-                    "writes_performed": True,
-                }
-            existing_adset_id = str(matching_adsets[0].get("id", ""))
-            existing_ads = await self._call(
-                "GET", f"{existing_adset_id}/ads",
-                params={"fields": "id,status,creative", "limit": "100"},
-            )
-            existing_ad_rows = existing_ads.get("data")
-            if not isinstance(existing_ad_rows, list) or (
-                isinstance(existing_ads.get("paging"), dict)
-                and existing_ads["paging"].get("next")
-            ) or len(existing_ad_rows) != 1:
-                return {
-                    "status": "BLOCKED",
-                    "reason": "EXISTING_AD_SCOPE_UNVERIFIED",
-                    "campaign_id": campaign_id,
-                    "adset_id": existing_adset_id,
-                    "writes_performed": True,
-                }
-            existing_ad = existing_ad_rows[0]
-            existing_ad_id = str(existing_ad.get("id", ""))
-            existing_creative = existing_ad.get("creative")
-            existing_creative_id = (
-                str(existing_creative.get("id", ""))
-                if isinstance(existing_creative, dict) else ""
-            )
-            final_campaign = await self._call(
-                "GET", campaign_id, params={"fields": "id,status,effective_status"}
-            )
-            final_adset = await self._call(
-                "GET", existing_adset_id, params={"fields": "id,status,effective_status"}
-            )
-            final_ad = await self._call(
-                "GET", existing_ad_id, params={"fields": "id,status,effective_status"}
-            )
-            configured_statuses = [
-                str(final_campaign.get("status", "")).upper(),
-                str(final_adset.get("status", "")).upper(),
-                str(final_ad.get("status", "")).upper(),
-            ]
-            effective_statuses = [
-                str(final_campaign.get("effective_status", "")).upper(),
-                str(final_adset.get("effective_status", "")).upper(),
-                str(final_ad.get("effective_status", "")).upper(),
-            ]
-            if any(status != "PAUSED" for status in configured_statuses):
-                return {
-                    "status": "BLOCKED",
-                    "reason": "META_CONFIGURED_STATUS_NOT_PAUSED",
-                    "campaign_id": campaign_id,
-                    "adset_id": existing_adset_id,
-                    "creative_id": existing_creative_id,
-                    "ad_id": existing_ad_id,
-                    "configured_statuses": configured_statuses,
-                    "effective_statuses": effective_statuses,
-                    "writes_performed": True,
-                }
-            return {
-                "status": "CONCEPT_RECONCILED",
-                "campaign_id": campaign_id,
-                "adset_id": existing_adset_id,
-                "creative_id": existing_creative_id,
-                "ad_id": existing_ad_id,
-                "campaign_status": configured_statuses[0],
-                "adset_status": configured_statuses[1],
-                "ad_status": configured_statuses[2],
-                "effective_statuses": effective_statuses,
-                "daily_budget_eur": "5.00",
-                "account_spend_cap_cents": account_cap_cents,
-                "product_id": product_id,
-                "product_title": title,
-                "creative_card_count": 1,
-                "reconciled_existing_objects": True,
-                "writes_performed": True,
-            }
-
-        self.write_attempted = True
-        adset = await self._call(
-            "POST", f"{self.account_id}/adsets",
-            data={
-                "name": adset_name,
-                "campaign_id": campaign_id,
-                "daily_budget": str(self.CONCEPT_DAILY_BUDGET_CENTS),
-                "billing_event": "IMPRESSIONS",
-                "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
-                "optimization_goal": "OFFSITE_CONVERSIONS",
-                "destination_type": "WEBSITE",
-                "start_time": starts,
-                "end_time": ends,
-                "promoted_object": json.dumps({
-                    "pixel_id": self.pixel_id,
-                    "custom_event_type": "PURCHASE",
-                }),
-                "targeting": json.dumps({
-                    "geo_locations": {"countries": ["DE", "AT"]},
-                    "age_min": 18,
-                    "publisher_platforms": ["facebook", "instagram"],
-                }),
-                "status": "PAUSED",
-            },
-        )
-        adset_id = str(adset.get("id", ""))
-        if not re.fullmatch(r"\d{4,30}", adset_id):
-            raise RuntimeError("META_ADSET_ID_MISSING")
-        story = {
-            "page_id": self.page_id,
-            "link_data": {
-                "link": link,
-                "picture": image,
-                "name": title[:40],
-                "message": f"{title}. Details, Varianten und aktuelle Preise findest du bei Homestro.",
-                "description": str(product.get("description", ""))[:300],
-                "call_to_action": {"type": "SHOP_NOW", "value": {"link": link}},
-            },
-        }
-        creative = await self._call(
-            "POST", f"{self.account_id}/adcreatives",
-            data={
-                "name": f"Paused concept // {product_key}"[:240],
-                "object_story_spec": json.dumps(story, ensure_ascii=False),
-            },
-        )
-        creative_id = str(creative.get("id", ""))
-        if not re.fullmatch(r"\d{4,30}", creative_id):
-            raise RuntimeError("META_CREATIVE_ID_MISSING")
-        ad = await self._call(
-            "POST", f"{self.account_id}/ads",
-            data={
-                "name": f"Paused concept ad // {product_key}"[:240],
-                "adset_id": adset_id,
-                "creative": json.dumps({"creative_id": creative_id}),
-                "status": "PAUSED",
-            },
-        )
-        ad_id = str(ad.get("id", ""))
-        if not re.fullmatch(r"\d{4,30}", ad_id):
-            raise RuntimeError("META_AD_ID_MISSING")
-
-        final_campaign = await self._call(
-            "GET", campaign_id, params={"fields": "id,status,effective_status"}
-        )
-        final_adset = await self._call(
-            "GET", adset_id, params={"fields": "id,status,effective_status"}
-        )
-        final_ad = await self._call(
-            "GET", ad_id, params={"fields": "id,status,effective_status"}
-        )
-        statuses = [
-            str(final_campaign.get("effective_status") or final_campaign.get("status") or "").upper(),
-            str(final_adset.get("effective_status") or final_adset.get("status") or "").upper(),
-            str(final_ad.get("effective_status") or final_ad.get("status") or "").upper(),
-        ]
-        if any(status not in {"PAUSED", "CAMPAIGN_PAUSED", "ADSET_PAUSED"} for status in statuses):
-            raise RuntimeError("META_PAUSED_STATUS_READBACK_FAILED")
-
-        preview_url = None
-        preview_status = "UNAVAILABLE"
-        try:
-            preview = await self._call(
-                "GET", f"{ad_id}/previews",
-                params={"ad_format": "DESKTOP_FEED_STANDARD"},
-            )
-            preview_rows = preview.get("data")
-            html = (
-                str(preview_rows[0].get("body", ""))
-                if isinstance(preview_rows, list) and preview_rows
-                and isinstance(preview_rows[0], dict)
-                else ""
-            )
-            match = re.search(r"<iframe[^>]+src=[\"']([^\"']+)", html, re.IGNORECASE)
-            candidate = __import__("html").unescape(match.group(1)) if match else ""
-            preview_parts = urlsplit(candidate)
-            if (
-                preview_parts.scheme == "https"
-                and preview_parts.hostname in {"facebook.com", "www.facebook.com"}
-                and preview_parts.path.startswith("/ads/api/preview_iframe.php")
-                and "access_token" not in preview_parts.query.lower()
-            ):
-                preview_url = candidate
-                preview_status = "READY"
-        except Exception:
-            preview_status = "UNAVAILABLE"
-
-        ads_manager_url = (
-            "https://www.facebook.com/adsmanager/manage/ads"
-            f"?act={self.EXPECTED_ACCOUNT_ID}&selected_ad_ids={ad_id}"
-        )
-        return {
-            "status": "CONCEPT_CREATED",
-            "campaign_id": campaign_id,
-            "adset_id": adset_id,
-            "creative_id": creative_id,
-            "ad_id": ad_id,
-            "campaign_status": statuses[0],
-            "adset_status": statuses[1],
-            "ad_status": statuses[2],
-            "daily_budget_eur": "5.00",
-            "account_spend_cap_cents": account_cap_cents,
-            "window_start_utc": starts,
-            "window_end_utc": ends,
-            "product_id": product_id,
-            "product_title": title,
-            "creative_card_count": 1,
-            "owner_preview_authorization_required": True,
-            "preview_url": preview_url,
-            "preview_status": preview_status,
-            "ads_manager_url": ads_manager_url,
-        }

@@ -95,12 +95,12 @@ el('load').onclick=async()=>{
   const progress=()=>{el('message').textContent=(jobs.length-approved)+' příspěvků ke kontrole; '+approved+' schváleno v tomto přehledu.';};
   progress();
   let batchPrivacy,batchComment,batchDuet,batchStitch,batchPreview,batchConsent,batchButton,batchCount,chooseAll;
-  const selection=()=>records.filter(r=>!r.done&&!r.working&&r.choose.checked);
+  const selection=()=>records.filter(r=>r.job.channel==='tiktok'&&!r.done&&!r.working&&r.choose?.checked);
   const refreshBatch=(reset=true)=>{
     if(!creator)return;
     if(reset){batchPreview.checked=false;batchConsent.checked=false;}
     const selected=selection();batchCount.textContent='Vybráno '+selected.length+' konkrétních příspěvků na TikTok.';
-    chooseAll.textContent=selected.length===records.filter(r=>!r.done&&!r.working).length?'Zrušit výběr':'Vybrat všechny zobrazené TikTok příspěvky';
+    chooseAll.textContent=selected.length===records.filter(r=>r.job.channel==='tiktok'&&!r.done&&!r.working).length?'Zrušit výběr':'Vybrat všechny zobrazené TikTok příspěvky';
     batchButton.disabled=busy||!selected.length||!el('reviewer').value.trim()||!batchPrivacy.value||!batchPreview.checked||!batchConsent.checked;
   };
   const markDone=(record)=>{
@@ -123,7 +123,7 @@ el('load').onclick=async()=>{
     batchConsent=check(panel,'Souhlasím s odesláním KAŽDÉHO vybraného příspěvku na TikTok a s Music Usage Confirmation.');
     const terms=node('a','TikTok Music Usage Confirmation',panel);terms.href='https://www.tiktok.com/legal/page/global/music-usage-confirmation/en';terms.target='_blank';terms.rel='noopener';
     batchButton=node('button','Schválit vybranou dávku',panel);
-    chooseAll.onclick=()=>{const available=records.filter(r=>!r.done&&!r.working),all=available.every(r=>r.choose.checked);for(const r of available)r.choose.checked=!all;refreshBatch();};
+    chooseAll.onclick=()=>{const available=records.filter(r=>r.job.channel==='tiktok'&&!r.done&&!r.working),all=available.every(r=>r.choose.checked);for(const r of available)r.choose.checked=!all;refreshBatch();};
     for(const input of [batchPrivacy,batchComment,batchDuet,batchStitch,batchPreview,batchConsent])input.onchange=()=>refreshBatch(false);
     el('reviewer').oninput=()=>refreshBatch(false);
     batchButton.onclick=async()=>{
