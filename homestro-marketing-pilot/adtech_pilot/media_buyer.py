@@ -467,6 +467,26 @@ class PlanAuditStore:
 
         return await asyncio.to_thread(read)
 
+    async def latest_record(self, kind: str) -> dict[str, Any] | None:
+        """Read the newest audit item of one kind for bounded worker caches."""
+        def read() -> dict[str, Any] | None:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT id,kind,created_at,payload_json FROM adtech_audit "
+                    "WHERE kind=? ORDER BY created_at DESC LIMIT 1",
+                    (kind[:40],),
+                ).fetchone()
+            if row is None:
+                return None
+            return {
+                "id": row[0],
+                "kind": row[1],
+                "created_at": row[2],
+                "payload": json.loads(row[3]),
+            }
+
+        return await asyncio.to_thread(read)
+
 
 class AdExecutionEngine:
     """One fail-closed point for all ad mutations. Defaults can never spend."""
@@ -626,7 +646,12 @@ class MetaAdLibraryClient:
         )
 
     async def search(
-        self, terms: list[str], *, country: str = "DE", limit: int = 25
+        self,
+        terms: list[str],
+        *,
+        country: str = "DE",
+        limit: int = 25,
+        active_only: bool = False,
     ) -> list[CompetitorAd]:
         if country not in {"DE", "AT", "CH", "US", "GB", "FR", "IT", "ES", "NL"}:
             raise ValueError("Unsupported country code")
@@ -636,16 +661,19 @@ class MetaAdLibraryClient:
         client = self.client or httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5))
         own_client = self.client is None
         try:
+            params: dict[str, str | int] = {
+                "search_terms": bounded_terms,
+                "ad_type": "ALL",
+                "ad_reached_countries": json.dumps([country]),
+                "fields": "id,page_name,ad_creative_bodies,publisher_platforms,ad_delivery_start_time,ad_snapshot_url",
+                "limit": limit,
+            }
+            if active_only:
+                params["ad_active_status"] = "ACTIVE"
             response = await client.get(
                 f"{self.ENDPOINT}/{self.api_version}/ads_archive",
                 headers={"Authorization": f"Bearer {self.access_token}"},
-                params={
-                    "search_terms": bounded_terms,
-                    "ad_type": "ALL",
-                    "ad_reached_countries": json.dumps([country]),
-                    "fields": "id,page_name,ad_creative_bodies,publisher_platforms,ad_delivery_start_time,ad_snapshot_url",
-                    "limit": limit,
-                },
+                params=params,
             )
             response.raise_for_status()
             rows = response.json().get("data", [])

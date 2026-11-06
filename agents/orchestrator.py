@@ -96,6 +96,11 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
                 "candidate_count": len(candidates),
                 "product_ids": [str(product.get("id")) for product in candidates],
                 "reason": stages["product_hunter"].get("reason"),
+                "meta_trend_status": stages["product_hunter"].get("competitor_trends", {}).get("status"),
+                "meta_active_ads_checked": stages["product_hunter"].get("competitor_trends", {}).get("active_ads_checked", 0),
+                "meta_matched_products": len(stages["product_hunter"].get("competitor_trends", {}).get("matched_products", [])),
+                "meta_suggestions_queued": stages["product_hunter"].get("competitor_trends", {}).get("suggestion_count", 0),
+                "meta_suggestion_queue_status": stages["product_hunter"].get("competitor_trends", {}).get("queue_status"),
             },
             "creative_seo": {
                 "status": stages["creative_seo"].get("status"),
