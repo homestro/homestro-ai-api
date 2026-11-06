@@ -150,5 +150,69 @@ class ProductHunterTrendTests(unittest.TestCase):
         client.assert_not_called()
 
 
+
+class ProductHunterOptionalTrendSourceTests(unittest.TestCase):
+    def setUp(self):
+        product_hunter._TREND_MEMORY_CACHE = None
+
+    def test_missing_apify_configuration_skips_optional_sources(self):
+        result = asyncio.run(product_hunter._scan_tiktok_trends([], {}))
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "APIFY_API_TOKEN_MISSING")
+        google = asyncio.run(product_hunter._scan_google_trends([], {"APIFY_API_TOKEN": "configured"}))
+        self.assertEqual(google["status"], "skipped")
+        self.assertEqual(google["reason"], "APIFY_GOOGLE_TRENDS_ACTOR_ID_MISSING")
+
+    def test_google_trend_series_and_catalog_match_are_normalized(self):
+        score = product_hunter._score_trend_record({"values": [20, 40]})
+        self.assertEqual(score, 90.0)
+        product = {"id": "sku-1", "title": "Bambus Schneidebrett mit Halter", "product_type": "Küche"}
+        matched = product_hunter._match_trend_products("Bambus Schneidebrett", [product])
+        self.assertEqual([item["id"] for item in matched], ["sku-1"])
+
+    def test_actor_network_failure_returns_partial_without_raising(self):
+        class _BrokenClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, *args, **kwargs):
+                request = httpx.Request("POST", "https://api.apify.com/v2/acts/test/run-sync-get-dataset-items")
+                raise httpx.ConnectError("offline", request=request)
+
+        env = {
+            "APIFY_API_TOKEN": "test-token",
+            "APIFY_TIKTOK_TRENDS_ACTOR_ID": "test/actor",
+        }
+        with patch.object(product_hunter.httpx, "AsyncClient", _BrokenClient):
+            result = asyncio.run(product_hunter._scan_tiktok_trends([], env))
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["reason"], "APIFY_REQUEST_OR_RESPONSE_FAILED")
+        self.assertEqual(result["matched_products"], [])
+
+    def test_one_source_failure_does_not_break_hourly_trend_collection(self):
+        async def good_meta(products, env):
+            return {"status": "completed", "matched_products": [], "active_ads_checked": 0}
+
+        async def bad_tiktok(products, env):
+            raise RuntimeError("provider unavailable")
+
+        async def good_google(products, env):
+            return {"status": "skipped", "matched_products": []}
+
+        with patch.object(product_hunter, "_scan_meta_trends", good_meta), patch.object(
+            product_hunter, "_scan_tiktok_trends", bad_tiktok
+        ), patch.object(product_hunter, "_scan_google_trends", good_google):
+            result = asyncio.run(product_hunter._scan_all_trends([], {}))
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["sources"]["tiktok"]["reason"], "TIKTOK_TREND_SCAN_FAILED")
+        self.assertEqual(result["sources"]["google"]["status"], "skipped")
+
+
 if __name__ == "__main__":
     unittest.main()
