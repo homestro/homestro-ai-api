@@ -364,8 +364,12 @@ class PurchaseWatchdog:
                 await self.cycle()
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.error("purchase_watchdog_cycle_failed")
+            except Exception as exc:
+                # Log only the exception class; provider bodies and credentials may be sensitive.
+                logger.error(
+                    "purchase_watchdog_cycle_failed error_type=%s",
+                    type(exc).__name__,
+                )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=60)
             except TimeoutError:
