@@ -324,8 +324,16 @@ async def _scan_google_trends(
     cached = _EXTERNAL_TREND_CACHE.get("google")
     now = datetime.now(UTC)
     if cached and (now - cached[0]).total_seconds() < interval * 3600:
-        payload = cached[1]
-        return {**payload, "cache_hit": True}
+        trends = cached[1].get("trends", [])
+        return {
+            "status": "completed",
+            "source": "google_trends_trending_now_rss",
+            "country": "DE",
+            "trend_count": len(trends),
+            "trends": trends,
+            "matched_products": _rank_keyword_trends(products, trends, source="google_trends"),
+            "cache_hit": True,
+        }
     url = "https://trends.google.com/trending/rss?geo=DE&hl=de"
     try:
         async with httpx.AsyncClient(
@@ -350,9 +358,9 @@ async def _scan_google_trends(
             "trends": trends,
             "matched_products": _rank_keyword_trends(products, trends, source="google_trends"),
         }
-        _EXTERNAL_TREND_CACHE["google"] = (now, result)
+        _EXTERNAL_TREND_CACHE["google"] = (now, {"status": "completed", "trends": trends})
         return result
-    except (httpx.HTTPError, ValueError, TypeError, OSError):
+    except (httpx.HTTPError, ValueError, TypeError, OSError, SyntaxError):
         logger.warning("product_hunter_google_trends_unavailable", exc_info=True)
         return {"status": "partial", "reason": "GOOGLE_TRENDS_UNAVAILABLE", "matched_products": []}
 

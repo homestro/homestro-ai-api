@@ -31,6 +31,7 @@ class _Store:
 class ProductHunterTrendTests(unittest.TestCase):
     def setUp(self):
         product_hunter._TREND_MEMORY_CACHE = None
+        product_hunter._EXTERNAL_TREND_CACHE.clear()
 
     def test_missing_token_skips_meta_without_constructing_clients(self):
         with patch.object(product_hunter, "MetaAdLibraryClient") as client:
@@ -186,6 +187,80 @@ class ProductHunterTrendTests(unittest.TestCase):
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["matched_products"], [])
 
+
+
+    def test_google_trends_rss_matches_german_catalog_terms(self):
+        class _Response:
+            content = b"<rss><channel><item><title>LED Tischlampe</title></item></channel></rss>"
+            def raise_for_status(self):
+                return None
+        class _Client:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return None
+            async def get(self, *args, **kwargs):
+                return _Response()
+        with patch.object(product_hunter.httpx, "AsyncClient", return_value=_Client()):
+            result = asyncio.run(product_hunter._scan_google_trends(
+                [{"id": "lamp-1", "title": "LED Tischlampe dimmbar"}], {}
+            ))
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["country"], "DE")
+        self.assertEqual(result["matched_products"][0]["product_id"], "lamp-1")
+
+    def test_tiktok_empty_apify_result_completes_without_candidates(self):
+        class _Response:
+            content = b"[]"
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return []
+        class _Client:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return None
+            async def post(self, *args, **kwargs):
+                return _Response()
+        with patch.object(product_hunter.httpx, "AsyncClient", return_value=_Client()):
+            result = asyncio.run(product_hunter._scan_tiktok_trends(
+                [{"id": "lamp-1", "title": "LED Tischlampe"}],
+                {
+                    "APIFY_API_TOKEN": "token",
+                    "APIFY_TIKTOK_TRENDS_ACTOR_ID": "user/actor",
+                    "HOMESTRO_APIFY_ALLOW_PAID_RUNS": "true",
+                },
+            ))
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["trend_count"], 0)
+        self.assertEqual(result["matched_products"], [])
+
+    def test_tiktok_rate_limit_returns_partial_fallback(self):
+        request = httpx.Request("POST", "https://api.apify.com/v2/acts/user~actor/run-sync-get-dataset-items")
+        response = httpx.Response(429, request=request)
+        class _Response:
+            content = b'{"error":"rate limited"}'
+            def raise_for_status(self):
+                raise httpx.HTTPStatusError("rate limited", request=request, response=response)
+        class _Client:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return None
+            async def post(self, *args, **kwargs):
+                return _Response()
+        with patch.object(product_hunter.httpx, "AsyncClient", return_value=_Client()):
+            result = asyncio.run(product_hunter._scan_tiktok_trends(
+                [], {
+                    "APIFY_API_TOKEN": "token",
+                    "APIFY_TIKTOK_TRENDS_ACTOR_ID": "user/actor",
+                    "HOMESTRO_APIFY_ALLOW_PAID_RUNS": "true",
+                }
+            ))
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["reason"], "APIFY_TIKTOK_HTTP_429")
+        self.assertEqual(result["matched_products"], [])
 
 
 if __name__ == "__main__":
