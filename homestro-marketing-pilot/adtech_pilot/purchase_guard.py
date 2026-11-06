@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import traceback
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
@@ -365,10 +366,14 @@ class PurchaseWatchdog:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                # Log only the exception class; provider bodies and credentials may be sensitive.
+                # Log only the error class and source location; never the provider body.
+                frames = traceback.extract_tb(exc.__traceback__)
+                origin = frames[-1] if frames else None
                 logger.error(
-                    "purchase_watchdog_cycle_failed error_type=%s",
+                    "purchase_watchdog_cycle_failed error_type=%s origin=%s:%s",
                     type(exc).__name__,
+                    origin.name if origin else "unknown",
+                    origin.lineno if origin else 0,
                 )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=60)
