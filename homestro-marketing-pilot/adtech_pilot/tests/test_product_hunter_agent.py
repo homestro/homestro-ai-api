@@ -150,5 +150,43 @@ class ProductHunterTrendTests(unittest.TestCase):
         client.assert_not_called()
 
 
+    def test_keyword_trends_match_catalog_and_rank_by_score(self):
+        products = [
+            {"id": "a", "title": "LED Tischlampe mit Akku", "product_type": "Lampen"},
+            {"id": "b", "title": "Küchenregal aus Bambus"},
+        ]
+        matches = product_hunter._rank_keyword_trends(
+            products,
+            [{"keyword": "LED Tischlampe", "score": 92}],
+            source="google_trends",
+        )
+        self.assertEqual(matches[0]["product_id"], "a")
+        self.assertEqual(matches[0]["country"], "DE")
+        self.assertEqual(matches[0]["score"], 92)
+
+    def test_tiktok_apify_paid_run_is_disabled_by_default(self):
+        with patch.object(product_hunter.httpx, "AsyncClient") as client:
+            result = asyncio.run(product_hunter._scan_tiktok_trends(
+                [], {"APIFY_API_TOKEN": "token", "APIFY_TIKTOK_TRENDS_ACTOR_ID": "user/actor"}
+            ))
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "APIFY_PAID_RUNS_DISABLED")
+        client.assert_not_called()
+
+    def test_google_trends_failure_returns_partial_fallback(self):
+        class _Client:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return None
+            async def get(self, *args, **kwargs):
+                raise httpx.ConnectError("offline")
+        with patch.object(product_hunter.httpx, "AsyncClient", return_value=_Client()):
+            result = asyncio.run(product_hunter._scan_google_trends([], {}))
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["matched_products"], [])
+
+
+
 if __name__ == "__main__":
     unittest.main()
