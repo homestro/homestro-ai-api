@@ -2,13 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
-import hmac
 import json
 import os
 import re
-import time
 from contextlib import closing
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
