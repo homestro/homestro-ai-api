@@ -12,7 +12,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -267,6 +267,201 @@ async def _scan_meta_trends(
     return result
 
 
+
+_TREND_SCORE_KEYS = (
+    "trend_score", "trendScore", "score", "interest", "interestScore",
+    "popularity", "popularityScore", "growth", "growthRate", "growthPercent",
+)
+
+
+def _trend_terms(products: list[dict[str, Any]], limit: int = 10) -> list[str]:
+    """Build bounded German product queries, preferring concrete catalog titles."""
+    terms: list[str] = []
+    seen: set[str] = set()
+    for product in products:
+        title = re.sub(r"\s+", " ", str(product.get("title") or "")).strip()
+        category = str(product.get("product_type") or "").strip()
+        term = title[:80] if title else category[:80]
+        key = term.casefold()
+        if term and key not in seen:
+            terms.append(term)
+            seen.add(key)
+        if len(terms) >= limit:
+            break
+    if not terms:
+        terms = ["Wohnaccessoires", "Küche", "Haushalt", "Garten"]
+    return terms
+
+
+def _score_trend_record(row: dict[str, Any]) -> float | None:
+    """Normalize common actor score shapes to 0-100; rising series score above baseline."""
+    value: Any = next((row.get(key) for key in _TREND_SCORE_KEYS if row.get(key) is not None), None)
+    if isinstance(value, list):
+        value = value[-2:] if value else None
+        if isinstance(value, list):
+            try:
+                previous, latest = float(value[0]), float(value[-1])
+                return round(max(0.0, min(100.0, 50.0 + (latest - previous) * 2.0)), 2)
+            except (TypeError, ValueError):
+                value = None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float("nan")
+    if number != number:
+        series = row.get("values") or row.get("timelineData") or row.get("interest_over_time")
+        if isinstance(series, list) and len(series) >= 2:
+            points = []
+            for item in series[-2:]:
+                candidate = item.get("value") if isinstance(item, dict) else item
+                if isinstance(candidate, list) and candidate:
+                    candidate = candidate[0]
+                try:
+                    points.append(float(candidate))
+                except (TypeError, ValueError):
+                    return None
+            number = 50.0 + (points[-1] - points[0]) * 2.0
+        else:
+            return None
+    key = next((key for key in _TREND_SCORE_KEYS if row.get(key) is not None), "")
+    if key.lower() in {"growth", "growthrate", "growthpercent"}:
+        number = 50.0 + number / 2.0
+    return round(max(0.0, min(100.0, number)), 2)
+
+
+def _trend_label(row: dict[str, Any]) -> str:
+    for key in ("keyword", "searchTerm", "search_term", "query", "productName", "product", "title", "name", "term"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:200]
+    return ""
+
+
+def _match_trend_products(label: str, products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    label_tokens = _tokens(label)
+    normalized_label = re.sub(r"\s+", " ", label.casefold()).strip()
+    matches = []
+    for product in products:
+        title = str(product.get("title") or "")
+        category = str(product.get("product_type") or product.get("google_product_category") or "")
+        combined = f"{title} {category}"
+        overlap = len(label_tokens.intersection(_tokens(combined)))
+        exact_query = bool(normalized_label and normalized_label in re.sub(r"\s+", " ", combined.casefold()))
+        if exact_query or overlap >= 2:
+            matches.append(product)
+    return matches
+
+
+async def _run_apify_actor(
+    source: str, products: list[dict[str, Any]], env: dict[str, str]
+) -> dict[str, Any]:
+    """Run a configured read-only trend actor; actor-specific input is optional JSON."""
+    token = (env.get("APIFY_API_TOKEN") or "").strip()
+    actor_id = (env.get(f"APIFY_{source.upper()}_TRENDS_ACTOR_ID") or "").strip()
+    if not token:
+        return {"status": "skipped", "reason": "APIFY_API_TOKEN_MISSING", "matched_products": [], "signals": []}
+    if not actor_id:
+        return {"status": "skipped", "reason": f"APIFY_{source.upper()}_TRENDS_ACTOR_ID_MISSING", "matched_products": [], "signals": []}
+    terms = _trend_terms(products, _bounded_int(env, "PRODUCT_TRENDS_MAX_TERMS", 10, 20))
+    input_name = f"APIFY_{source.upper()}_TRENDS_INPUT_JSON"
+    try:
+        actor_input = json.loads(env.get(input_name, "{}") or "{}")
+        if not isinstance(actor_input, dict):
+            raise ValueError
+    except (TypeError, ValueError):
+        return {"status": "partial", "reason": f"{input_name}_INVALID", "matched_products": [], "signals": []}
+    defaults = (
+        {"country": "DE", "countryCode": "DE", "category": "Home & Living", "searchTerms": terms, "keywords": terms}
+        if source == "tiktok"
+        else {"geo": "DE", "country": "DE", "keywords": terms, "searchTerms": terms, "timeRange": "today 3-m"}
+    )
+    defaults.update(actor_input)
+    actor_path = quote(actor_id, safe="~")
+    url = f"https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items"
+    errors: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=5), follow_redirects=False) as client:
+            response = await client.post(url, params={"token": token, "clean": "true", "limit": "100"}, json=defaults)
+            response.raise_for_status()
+            rows = response.json()
+        if not isinstance(rows, list):
+            raise ValueError("invalid_dataset_shape")
+    except httpx.HTTPStatusError as exc:
+        errors.append(f"APIFY_HTTP_{exc.response.status_code}")
+        return {"status": "partial", "reason": errors[0], "matched_products": [], "signals": []}
+    except (httpx.HTTPError, ValueError, TypeError):
+        return {"status": "partial", "reason": "APIFY_REQUEST_OR_RESPONSE_FAILED", "matched_products": [], "signals": []}
+    except Exception:
+        logger.warning("product_hunter_%s_trend_actor_failed", source, exc_info=True)
+        return {"status": "partial", "reason": "APIFY_ACTOR_FAILED", "matched_products": [], "signals": []}
+
+    signals: list[dict[str, Any]] = []
+    scores: dict[str, dict[str, Any]] = {}
+    product_by_id = {str(p.get("id")): p for p in products if str(p.get("id", "")).strip()}
+    for row in rows[:100]:
+        if not isinstance(row, dict):
+            continue
+        label = _trend_label(row)
+        score = _score_trend_record(row)
+        if score is None:
+            continue
+        matched = _match_trend_products(label, products)
+        signal = {"label": label[:200], "score": score, "country": "DE", "source": source}
+        signals.append({**signal, "matched_product_ids": [str(p.get("id")) for p in matched]})
+        for product in matched:
+            product_id = str(product.get("id"))
+            current = scores.get(product_id)
+            if current is None or score > current["score"]:
+                scores[product_id] = {
+                    "product_id": product_id,
+                    "title": str(product.get("title", ""))[:200],
+                    "score": score,
+                    "signal_label": label[:200],
+                }
+    return {
+        "status": "partial" if errors else "completed",
+        "source": "tiktok_creative_center_ads" if source == "tiktok" else "google_trends",
+        "country": "DE",
+        "terms": terms,
+        "signals_checked": len(rows),
+        "signals": signals[:100],
+        "matched_products": sorted(scores.values(), key=lambda x: (-x["score"], x["title"].casefold()))[:100],
+        "errors": errors,
+    }
+
+
+async def _scan_tiktok_trends(products: list[dict[str, Any]], env: dict[str, str]) -> dict[str, Any]:
+    return await _run_apify_actor("tiktok", products, env)
+
+
+async def _scan_google_trends(products: list[dict[str, Any]], env: dict[str, str]) -> dict[str, Any]:
+    return await _run_apify_actor("google", products, env)
+
+
+async def _scan_all_trends(products: list[dict[str, Any]], env: dict[str, str]) -> dict[str, Any]:
+    results: dict[str, Any] = {}
+    for name, scanner in (
+        ("meta", _scan_meta_trends),
+        ("tiktok", _scan_tiktok_trends),
+        ("google", _scan_google_trends),
+    ):
+        try:
+            results[name] = await scanner(products, env)
+        except Exception:
+            logger.warning("product_hunter_%s_trend_scan_failed", name, exc_info=True)
+            results[name] = {"status": "partial", "reason": f"{name.upper()}_TREND_SCAN_FAILED", "matched_products": []}
+    return {
+        "status": "partial" if any(item.get("status") == "partial" for item in results.values()) else "completed",
+        "source": "multi_source_product_trends",
+        "country": "DE",
+        "active_ads_checked": results["meta"].get("active_ads_checked", 0),
+        "matched_products": results["meta"].get("matched_products", []),
+        "queued_suggestions": results["meta"].get("queued_suggestions", []),
+        "suggestion_count": results["meta"].get("suggestion_count", 0),
+        "sources": results,
+    }
+
+
 async def _read_feed(env: dict[str, str]) -> bytes:
     feed_path = env.get("PILOT_PRODUCT_FEED_PATH", "").strip()
     if feed_path:
@@ -313,15 +508,12 @@ def _read_verified_costs(env: dict[str, str]) -> dict[str, dict[str, str]]:
 
 
 async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
-    """Return eligible products only when feed availability and recent EUR costs verify."""
+    """Read feed, collect optional DE trend signals, then select verified-cost candidates."""
     env = dict(os.environ if env is None else env)
     try:
         payload = await _read_feed(env)
     except (OSError, ValueError, httpx.HTTPError) as exc:
-        try:
-            trends = await _scan_meta_trends([], env)
-        except Exception:
-            trends = {"status": "partial", "reason": "META_AD_LIBRARY_SCAN_FAILED"}
+        trends = await _scan_all_trends([], env)
         result = {
             "status": "blocked",
             "reason": str(exc) if isinstance(exc, ValueError) else "PRODUCT_FEED_READ_FAILED",
@@ -335,10 +527,7 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
     report = ProductFeedManager().parse(payload)
     products = [product.model_dump(mode="json") for product in report.products]
     if not products:
-        try:
-            trends = await _scan_meta_trends([], env)
-        except Exception:
-            trends = {"status": "partial", "reason": "META_AD_LIBRARY_SCAN_FAILED"}
+        trends = await _scan_all_trends([], env)
         result = {
             "status": "blocked",
             "reason": "NO_VALID_FEED_PRODUCTS",
@@ -349,12 +538,7 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
         logger.info("product_hunter %s", json.dumps(result, separators=(",", ":")))
         return result
 
-    try:
-        trends = await _scan_meta_trends(products, env)
-    except Exception:
-        logger.warning("product_hunter_meta_trend_scan_failed", exc_info=True)
-        trends = {"status": "partial", "reason": "META_AD_LIBRARY_SCAN_FAILED"}
-
+    trends = await _scan_all_trends(products, env)
     try:
         costs = _read_verified_costs(env)
     except (OSError, sqlite3.Error):
@@ -369,20 +553,28 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
         logger.info("product_hunter %s", json.dumps(result, separators=(",", ":")))
         return result
 
-    candidates, selection = select_cost_candidates(
-        products, costs, now=datetime.now(UTC)
-    )
-    trend_by_id = {
-        str(item.get("product_id")): item
-        for item in trends.get("matched_products", [])
-        if isinstance(item, dict)
-    }
+    candidates, selection = select_cost_candidates(products, costs, now=datetime.now(UTC))
+    sources = trends.get("sources", {})
+    score_by_id: dict[str, dict[str, float]] = {}
+    for source in ("meta", "tiktok", "google"):
+        for item in sources.get(source, {}).get("matched_products", []):
+            if isinstance(item, dict):
+                product_id = str(item.get("product_id", "")).strip()
+                score_key = "longevity_score" if source == "meta" else "score"
+                if product_id:
+                    score_by_id.setdefault(product_id, {})[source] = float(item.get(score_key, 0) or 0)
+
     for candidate in candidates:
-        trend = trend_by_id.get(str(candidate.get("id", "")))
-        if trend:
-            candidate["meta_trend_score"] = trend["longevity_score"]
-            candidate["meta_trend_age_days"] = trend["observed_longest_ad_age_days"]
-            candidate["meta_trend_ad_ids"] = trend["matched_ad_ids"]
+        scores = score_by_id.get(str(candidate.get("id", "")), {})
+        if "meta" in scores:
+            candidate["meta_trend_score"] = scores["meta"]
+        if "tiktok" in scores:
+            candidate["tiktok_trend_score"] = scores["tiktok"]
+        if "google" in scores:
+            candidate["google_trend_score"] = scores["google"]
+        if scores:
+            candidate["trend_priority_score"] = round(sum(scores.values()) / len(scores), 2)
+    candidates.sort(key=lambda item: -float(item.get("trend_priority_score", 0)))
     limit = max(1, min(int(env.get("PILOT_HUNTER_LIMIT", "10")), 10))
     result = {
         "status": "selected" if candidates else "no_eligible_products",
@@ -403,11 +595,14 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
                 "products_checked": result["products_checked"],
                 "invalid_feed_rows": result["invalid_feed_rows"],
                 "candidate_count_returned": result["candidate_count_returned"],
-                "meta_trend_status": trends.get("status"),
-                "meta_active_ads_checked": trends.get("active_ads_checked", 0),
-                "meta_matched_products": len(trends.get("matched_products", [])),
-                "meta_suggestions_queued": trends.get("suggestion_count", 0),
-                "meta_suggestion_queue_status": trends.get("queue_status"),
+                "trend_source_status": {
+                    name: value.get("status")
+                    for name, value in sources.items()
+                },
+                "trend_signals": {
+                    name: value.get("signals_checked", 0)
+                    for name, value in sources.items()
+                },
                 "product_ids": [str(product["id"]) for product in result["candidates"]],
                 "rejected_by_reason": selection["rejected_by_reason"],
             },

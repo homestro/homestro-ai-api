@@ -101,6 +101,10 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
                 "meta_matched_products": len(stages["product_hunter"].get("competitor_trends", {}).get("matched_products", [])),
                 "meta_suggestions_queued": stages["product_hunter"].get("competitor_trends", {}).get("suggestion_count", 0),
                 "meta_suggestion_queue_status": stages["product_hunter"].get("competitor_trends", {}).get("queue_status"),
+                "tiktok_trend_status": stages["product_hunter"].get("competitor_trends", {}).get("sources", {}).get("tiktok", {}).get("status"),
+                "tiktok_trend_signals": stages["product_hunter"].get("competitor_trends", {}).get("sources", {}).get("tiktok", {}).get("signals_checked", 0),
+                "google_trend_status": stages["product_hunter"].get("competitor_trends", {}).get("sources", {}).get("google", {}).get("status"),
+                "google_trend_signals": stages["product_hunter"].get("competitor_trends", {}).get("sources", {}).get("google", {}).get("signals_checked", 0),
             },
             "creative_seo": {
                 "status": stages["creative_seo"].get("status"),
