@@ -369,8 +369,11 @@ class FirstPurchaseController:
             snapshot['eligible_existing_ad_count'] = len(eligible_ads)
             # A single eligible, existing ad may be selected even when the ad set
             # also contains ineligible or rejected rows. Never create a replacement.
-            if len(eligible_ads) != 1:
+            # Reuse one eligible reviewed ad; Meta may return multiple valid existing ads.
+            # Prefer an already-active ad, and never create or duplicate an ad here.
+            if not eligible_ads:
                 return await pause('EXISTING_SINGLE_ELIGIBLE_REVIEWED_AD_REQUIRED')
+            eligible_ads.sort(key=lambda row: row.get('effective_status') != 'ACTIVE')
             ad = eligible_ads[0]
             creative_id = str(ad['creative']['id'])
             if not all(re.fullmatch(r'\d{4,30}', str(value)) for value in (ad['id'], creative_id)):
