@@ -156,14 +156,29 @@ export class Worker {
         !['image','carousel'].includes(payload.format)||payload.videoURL||
         !Array.isArray(images)||images.length<1||images.length>10) continue;
 
-      const photoKeys=new Set(extractMedia(current.media||[]).images.map(carouselAssetKey));
-      const imageIsProductPhoto=images.every(raw=>{
-        try {
-          const u=new URL(raw),match=u.pathname.match(/^\/marketing-assets\/([a-f0-9]{64})\.jpg$/);
-          return u.origin===cfg.publicOrigin&&!u.search&&!u.hash&&!u.username&&!u.password&&
-            Boolean(match&&photoKeys.has(match[1]));
-        } catch { return false; }
-      });
+      const sourceImages=extractMedia(current.media||[]).images;
+      if(!sourceImages.length)continue;
+      let imageIsProductPhoto=false;
+      if(payload.importedMedia===true) {
+        const imported=(await client.query(`SELECT checksum,product_id,product_revision,metadata,asset,state
+          FROM marketing_imported_media WHERE job_id=$1`,[payload.importedJobId])).rows[0];
+        const asset=imported?.asset||{};
+        imageIsProductPhoto=Boolean(imported&&imported.state==='queued'&&
+          imported.product_id===job.product_id&&imported.product_revision===current.revision&&
+          imported.checksum===payload.assetSha256&&imported.metadata?.provider==='higgsfield'&&
+          imported.metadata?.kind==='image'&&sameProductPage(imported.metadata?.product_url,current.url)&&
+          asset.format==='image'&&Array.isArray(asset.imageURLs)&&
+          JSON.stringify(asset.imageURLs)===JSON.stringify(images));
+      } else {
+        const photoKeys=new Set(sourceImages.map(carouselAssetKey));
+        imageIsProductPhoto=images.every(raw=>{
+          try {
+            const u=new URL(raw),match=u.pathname.match(/^\/marketing-assets\/([a-f0-9]{64})\.jpg$/);
+            return u.origin===cfg.publicOrigin&&!u.search&&!u.hash&&!u.username&&!u.password&&
+              Boolean(match&&photoKeys.has(match[1]));
+          } catch { return false; }
+        });
+      }
       if(!imageIsProductPhoto)continue;
 
       const changed=await client.query(`UPDATE marketing_posts SET status='approved',
