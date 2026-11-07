@@ -356,9 +356,22 @@ class FirstPurchaseController:
                     return await pause('FROZEN_LIFETIME_TEST_CAP_REACHED', latch=True)
             stage = 'creative'
             ads = (await get(str(adset['id']) + '/ads', 'id,status,effective_status,creative{id},ad_review_feedback')).get('data', [])
-            if len(ads) != 1 or ads[0].get('ad_review_feedback') or ads[0].get('effective_status') not in {'ACTIVE', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'PAUSED'}:
+            eligible_ads = [
+                row for row in ads
+                if isinstance(row, dict)
+                and not row.get('ad_review_feedback')
+                and row.get('effective_status') in {'ACTIVE', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'PAUSED'}
+                and isinstance(row.get('creative'), dict)
+                and re.fullmatch(r'\d{4,30}', str(row.get('id', '')))
+                and re.fullmatch(r'\d{4,30}', str(row.get('creative', {}).get('id', '')))
+            ]
+            snapshot['existing_ad_count'] = len(ads)
+            snapshot['eligible_existing_ad_count'] = len(eligible_ads)
+            # A single eligible, existing ad may be selected even when the ad set
+            # also contains ineligible or rejected rows. Never create a replacement.
+            if len(eligible_ads) != 1:
                 return await pause('EXISTING_SINGLE_ELIGIBLE_REVIEWED_AD_REQUIRED')
-            ad = ads[0]
+            ad = eligible_ads[0]
             creative_id = str(ad['creative']['id'])
             if not all(re.fullmatch(r'\d{4,30}', str(value)) for value in (ad['id'], creative_id)):
                 return await pause('AD_OR_CREATIVE_ID_NOT_VERIFIED')
