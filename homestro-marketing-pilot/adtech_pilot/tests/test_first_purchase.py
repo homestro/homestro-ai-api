@@ -224,6 +224,8 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             original = store.authorize(CAMPAIGN, NOW)
             legacy_terms = json.loads(original['terms'])
             legacy_terms['source'] = 'explicit_owner_voice_authorization_legacy'
+            legacy_terms['daily_eur'] = 5
+            legacy_terms['total_eur'] = 35.0
             with audit._connect() as db:
                 db.execute('UPDATE pilot_first_purchase_consent SET terms=? WHERE singleton=1',
                            (json.dumps(legacy_terms, sort_keys=True),))
