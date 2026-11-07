@@ -12,7 +12,7 @@ import os
 import re
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qs, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -73,15 +73,15 @@ class FirstPurchaseStore:
             saved = json.loads(current.get('terms') or '')
             saved_caps_match = (
                 set(saved.get('markets', [])) == {'DE', 'AT'}
-                and str(saved.get('daily_eur')) == '5.00'
-                and str(saved.get('total_eur')) == '35.00'
+                and Decimal(str(saved.get('daily_eur'))) == Decimal('5.00')
+                and Decimal(str(saved.get('total_eur'))) == Decimal('35.00')
                 and int(saved.get('days')) == 7
                 and saved.get('automatic_increase') is False
                 and saved.get('starts_at_actual_activation') is True
                 and saved.get('new_paid_generation_authorized') is False
                 and saved.get('unseen_creatives_authorized') is False
             )
-        except (TypeError, ValueError, json.JSONDecodeError):
+        except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
             saved_caps_match = False
         if not saved_caps_match:
             return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CONSENT_TERMS_MISMATCH'}
