@@ -311,6 +311,7 @@ class FirstPurchaseController:
             # Prepare a restrictive native cap while already paused, even when
             # creative/site review is outstanding. Discover provider rejection
             # before asking the owner to review. Never release a prior lower cap here.
+            native_weekly_cap = False
             if remote.get('status') == 'PAUSED' and not native_lifetime:
                 envelope = self.store.envelope(spends['maximum'], spends['today'], now)
                 target_cap = envelope['cap_cents']
@@ -325,27 +326,16 @@ class FirstPurchaseController:
                         error = response.json().get('error', {})
                         minimum_rejection = error.get('code') == 100 and error.get('error_subcode') == 2446307
                     if minimum_rejection:
-                        # Meta's EUR100 campaign-cap minimum is outside consent.
-                        # Freeze this adset's remaining WHOLE-test allowance to at
-                        # most today's EUR5 remainder, never replenish on restart/day.
-                        stage = 'paused_native_lifetime_spend_readback'
-                        actual = (await get(str(adset['id'])+'/insights', params={'fields': 'adset_id,account_currency,spend', 'date_preset': 'maximum', 'level': 'adset', 'limit': '2'})).get('data')
-                        if not isinstance(actual, list) or len(actual) > 1 or (actual and (str(actual[0].get('adset_id')) != str(adset['id']) or actual[0].get('account_currency') != 'EUR')):
-                            return await pause('ADSET_LIFETIME_SPEND_SCOPE_UNVERIFIED')
-                        adset_spent = Decimal(str(actual[0]['spend'])) if actual else Decimal(0)
-                        if not adset_spent.is_finite() or adset_spent < 0 or adset_spent > Decimal(spends['maximum']):
-                            return await pause('ADSET_LIFETIME_SPEND_INVALID')
-                        remaining = min(Decimal(5)-Decimal(spends['today']), Decimal(35)-Decimal(spends['maximum']))
-                        frozen_lifetime_cap = self.store.lifetime_cap(str(adset['id']), int((adset_spent+remaining)*100))
-                        stage = 'paused_native_lifetime_budget_preparation'
-                        response = await client.post(base+str(adset['id']), headers=headers,
-                            data={'daily_budget': '0', 'lifetime_budget': str(frozen_lifetime_cap)})
-                        response.raise_for_status()
-                        confirmed = await get(str(adset['id']), 'id,daily_budget,lifetime_budget,start_time,end_time,status,effective_status')
-                        if str(confirmed.get('id')) != str(adset['id']) or str(confirmed.get('lifetime_budget')) != str(frozen_lifetime_cap) or confirmed.get('daily_budget') not in (None, 0, '0') or instant(confirmed['end_time']) != end:
-                            return await pause('PROVIDER_FROZEN_LIFETIME_BUDGET_NOT_CONFIRMED')
-                        snapshot['observed_limits']['daily_budget_cents'] = confirmed.get('daily_budget') or '0'
-                        native_lifetime = True
+                        # The ad set is already a daily EUR5 budget with a fixed
+                        # seven-day end window. Meta rejects changing this existing
+                        # recurring budget into lifetime mode (error 1885257).
+                        # Preserve the daily budget; Meta's fixed seven-day pacing
+                        # ceiling is EUR35. Never extend the existing end time.
+                        if not daily_mode or end - start > timedelta(days=7):
+                            return await pause('NATIVE_TOTAL_CAP_UNAVAILABLE_FOR_UNBOUNDED_DAILY_BUDGET')
+                        native_weekly_cap = True
+                        snapshot['native_budget_mode'] = 'EUR5_DAILY_FIXED_SEVEN_DAY_WINDOW'
+                        snapshot['native_schedule_total_ceiling_eur'] = '35.00'
                     else:
                         response.raise_for_status()
                         confirmed = await get(campaign, 'id,spend_cap,status')
@@ -353,9 +343,9 @@ class FirstPurchaseController:
                             return await pause('PROVIDER_PAUSED_CAP_PREPARATION_NOT_CONFIRMED')
                         remote['spend_cap'] = str(target_cap)
                         cap = Decimal(target_cap)
-                if cap == target_cap and not native_lifetime:
+                if cap == target_cap and not native_lifetime and not native_weekly_cap:
                     self.store.confirm_envelope(envelope['day'], target_cap)
-                if not native_lifetime:
+                if not native_lifetime and not native_weekly_cap:
                     snapshot['native_spend_cap_readback_cents'] = int(cap)
                 snapshot['native_spend_envelope'] = envelope
             if native_lifetime:
@@ -428,26 +418,31 @@ class FirstPurchaseController:
                 return await pause('EXPLICIT_BOUNDED_ACTIVATION_SWITCHES_REQUIRED')
             if not native_lifetime:
                 stage = 'provider_native_daily_and_total_cap'
-                # Daily budget alone can overdeliver. A native cumulative campaign cap
-                # limits this Berlin day's additional spend, never above EUR35 total.
-                # Tomorrow's pre-authorized EUR5 allowance is not a daily-budget increase.
                 envelope = self.store.envelope(spends['maximum'], spends['today'], now)
                 snapshot['native_spend_envelope'] = envelope
                 target_cap = envelope['cap_cents']
                 cap = Decimal(str(remote.get('spend_cap') or '0'))
                 if not cap.is_finite() or cap < 0 or cap != int(cap):
                     return await pause('PROVIDER_SPEND_CAP_INVALID')
-                may_release_next_day = cap < target_cap and self.store.previous_envelope_confirmed(int(cap), envelope['day'])
-                if cap == 0 or cap > target_cap or may_release_next_day:
-                    response = await client.post(base + campaign, headers=headers, data={'spend_cap': str(target_cap)})
-                    response.raise_for_status()
-                    confirmed = await get(campaign, 'id,spend_cap,status')
-                    if str(confirmed.get('spend_cap')) != str(target_cap):
-                        return await pause('PROVIDER_DAILY_AND_TOTAL_CAP_NOT_CONFIRMED')
-                    self.store.confirm_envelope(envelope['day'], target_cap)
-                    snapshot['native_spend_cap_readback_cents'] = target_cap
-                elif cap == target_cap:
-                    self.store.confirm_envelope(envelope['day'], target_cap)
+                if native_weekly_cap:
+                    # Verified above: EUR5/day, original start/end within 7 days.
+                    # This existing Meta ad set's weekly delivery limit is the native total ceiling.
+                    if not daily_mode or end - start > timedelta(days=7):
+                        return await pause('NATIVE_TOTAL_CAP_SCHEDULE_NOT_VERIFIED')
+                    snapshot['native_budget_mode'] = 'EUR5_DAILY_FIXED_SEVEN_DAY_WINDOW'
+                    snapshot['native_schedule_total_ceiling_eur'] = '35.00'
+                else:
+                    may_release_next_day = cap < target_cap and self.store.previous_envelope_confirmed(int(cap), envelope['day'])
+                    if cap == 0 or cap > target_cap or may_release_next_day:
+                        response = await client.post(base + campaign, headers=headers, data={'spend_cap': str(target_cap)})
+                        response.raise_for_status()
+                        confirmed = await get(campaign, 'id,spend_cap,status')
+                        if str(confirmed.get('spend_cap')) != str(target_cap):
+                            return await pause('PROVIDER_DAILY_AND_TOTAL_CAP_NOT_CONFIRMED')
+                        self.store.confirm_envelope(envelope['day'], target_cap)
+                        snapshot['native_spend_cap_readback_cents'] = target_cap
+                    elif cap == target_cap:
+                        self.store.confirm_envelope(envelope['day'], target_cap)
                     snapshot['native_spend_cap_readback_cents'] = int(cap)
                 else:
                     snapshot['native_spend_cap_readback_cents'] = int(cap)
