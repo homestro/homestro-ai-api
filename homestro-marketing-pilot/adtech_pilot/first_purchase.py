@@ -203,17 +203,22 @@ class FirstPurchaseController:
                 raise ValueError('PROVIDER_SCOPE_INCOMPLETE')
             return data
 
+        remote = {}
+
         async def pause(reason, *, latch=False):
-            response = await client.post(base + campaign, headers=headers, data={'status': 'PAUSED'})
-            response.raise_for_status()
-            if response.json().get('success') is not True:
-                raise ValueError('PAUSE_NOT_ACKNOWLEDGED')
+            pause_write_skipped = remote.get('status') == 'PAUSED'
+            if not pause_write_skipped:
+                response = await client.post(base + campaign, headers=headers, data={'status': 'PAUSED'})
+                response.raise_for_status()
+                if response.json().get('success') is not True:
+                    raise ValueError('PAUSE_NOT_ACKNOWLEDGED')
             observed = await get(campaign, 'id,status,effective_status')
             if observed.get('status') != 'PAUSED':
                 raise ValueError('PAUSE_NOT_CONFIRMED')
             if latch:
                 self.store.stop(reason)
             return {**snapshot, 'status': 'paused_confirmed', 'reason': reason,
+                    'pause_write_skipped': pause_write_skipped,
                     'effective_status': observed.get('effective_status'), 'consent': self.store.read()}
 
         try:

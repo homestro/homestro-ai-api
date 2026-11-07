@@ -89,6 +89,20 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             'account_status': 'active', 'currency': 'EUR', 'billing_ready': True, 'pixel_access_verified': True}})),
             patch('adtech_pilot.performance_loader.load_meta_performance', new=AsyncMock(return_value={'status': 'collected', 'metrics': []})))
 
+    async def test_already_paused_campaign_is_read_back_without_redundant_pause_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, state, client, control = await self.fixture(directory)
+            control.store.authorize(CAMPAIGN, NOW)
+            control.store.stop('SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE')
+            with self.patches()[0], self.patches()[1]:
+                result = await control.cycle(now=NOW)
+            await client.aclose()
+            self.assertEqual(result['status'], 'paused_confirmed')
+            self.assertEqual(result['campaign_status'], 'PAUSED')
+            self.assertTrue(result['pause_write_skipped'])
+            self.assertEqual(state['writes'], [])
+
+
     async def test_zero_previous_orders_activate_only_existing_owned_approved_ad_and_consent_starts_on_activation(self):
         with tempfile.TemporaryDirectory() as directory:
             audit, state, client, control = await self.fixture(directory)
