@@ -15,7 +15,7 @@ function sameProductPage(a,b) {
 
 async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
   if(!cfg.autonomyEnabled)return 0;
-  const candidates=(await client.query("SELECT * FROM marketing_posts WHERE status='draft_queued' AND channel IN ('facebook','instagram') AND product_id LIKE 'gid://shopify/Product/%' ORDER BY created_at LIMIT 20")).rows;
+  const candidates=(await client.query("SELECT * FROM marketing_posts WHERE status='draft_queued' AND channel IN ('facebook','instagram') AND product_id LIKE 'gid://shopify/Product/%' ORDER BY created_at DESC LIMIT 20")).rows;
   let approved=0;
   for(const job of candidates) {
     try {
