@@ -13,7 +13,7 @@ from adtech_pilot.purchase_guard import PurchaseWatchdog
 
 NOW = datetime.now(UTC).replace(microsecond=0)
 CAMPAIGN, ADSET, AD, CREATIVE = '98765', '23456', '34567', '45678'
-ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'META_PIXEL_ID': '56789',
+ENV = {'META_AD_ACCOUNT_ID': 'act_918741266442442', 'META_ACCESS_TOKEN': 'test-secret', 'META_PIXEL_ID': '56789',
        'META_PAGE_ID': '67890', 'PILOT_LAUNCH_POLICY': 'first_purchase_acquisition_test',
        'PILOT_FIRST_PURCHASE_CAMPAIGN_ID': CAMPAIGN, 'PILOT_FIRST_PURCHASE_TEST_AUTHORIZED': 'true',
        'PILOT_FIRST_PURCHASE_ACTIVATION_ENABLED': 'true', 'ALLOW_MICRO_BUDGET': 'true',
@@ -23,7 +23,7 @@ ENV = {'META_AD_ACCOUNT_ID': 'act_12345', 'META_ACCESS_TOKEN': 'test-secret', 'M
 class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
     async def fixture(self, directory, *, spend='0', today='0', approved=True, source_blockers=None, lost=False, cards=None, cap_rejected=False, pause_rejected=False, lifetime_supported=False, lifetime_rejected=False):
         audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
-        await audit.claim_meta_micro_campaign('act_12345', 'all')
+        await audit.claim_meta_micro_campaign('act_918741266442442', 'all')
         await audit.update_meta_micro_campaign(status='ACTIVE_PENDING_REVIEW', campaign_id=CAMPAIGN)
         if approved:
             await audit.record('meta_micro_campaign_partial', {'campaign_id': CAMPAIGN, 'adset_id': ADSET,
@@ -61,8 +61,8 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={'data': [{'campaign_id': CAMPAIGN, 'account_currency': 'EUR',
                     'adset_id': ADSET,
                     'spend': state['today'] if period == 'today' else state['spend']}]})
-            if path.endswith('/act_12345'):
-                return httpx.Response(200, json={'id': 'act_12345', 'timezone_name': 'Europe/Berlin'})
+            if path.endswith('/act_918741266442442'):
+                return httpx.Response(200, json={'id': 'act_918741266442442', 'timezone_name': 'Europe/Berlin'})
             if path.endswith('/adsets'):
                 return httpx.Response(200, json={'data': [adset()]})
             if path.endswith('/'+ADSET):
@@ -77,7 +77,7 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
                     'link_data': {'message': 'Produktdetails bei Homestro', 'link': 'https://homestro.de/products/box', 'picture': 'https://cdn.shopify.com/box.jpg', 'name': 'Box', **({'child_attachments': cards} if cards else {})}}})
             if path.endswith('/' + AD):
                 return httpx.Response(200, json={'id': AD, 'status': 'ACTIVE', 'effective_status': 'ACTIVE', 'creative': {'id': CREATIVE}})
-            return httpx.Response(200, json={'id': CAMPAIGN, 'account_id': '12345', 'objective': 'OUTCOME_SALES',
+            return httpx.Response(200, json={'id': CAMPAIGN, 'account_id': '918741266442442', 'objective': 'OUTCOME_SALES',
                 'status': state['status'], 'effective_status': state['status'], 'updated_time': NOW.isoformat(), 'spend_cap': state['cap']})
         client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
         control = FirstPurchaseController(audit, env=ENV, client=client)
@@ -296,9 +296,9 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
 
         secret = 'test-existing-signature-secret'
         token = tracking_ref(CAMPAIGN, AD, 'a'*24, secret=secret, expires_at=NOW+timedelta(days=1), issued_at=NOW)
-        card = {'link': 'https://homestro.de/products/box?variant=123456&pilot_ref='+token, 'picture': 'https://cdn.shopify.com/box.jpg'}
-        feed = [{'id': '123456', 'title': 'Box', 'price': '39.90', 'currency': 'EUR', 'availability': 'in_stock',
-                 'link': 'https://homestro.de/products/box?variant=123456', 'image_link': card['picture']}]
+        card = {'link': 'https://homestro.de/products/box?variant=9187412664424426&pilot_ref='+token, 'picture': 'https://cdn.shopify.com/box.jpg'}
+        feed = [{'id': '9187412664424426', 'title': 'Box', 'price': '39.90', 'currency': 'EUR', 'availability': 'in_stock',
+                 'link': 'https://homestro.de/products/box?variant=9187412664424426', 'image_link': card['picture']}]
         state = {'pixel': True, 'stock': True, 'checkout': True, 'requests': []}
         def handle(request):
             state['requests'].append(request.method)
