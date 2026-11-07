@@ -23,6 +23,7 @@ from .micro_budget import configured_daily_budget_limit_eur, live_ads_dry_run
 from .order_economics import decode_ref, instant
 
 POLICY = 'first_purchase_acquisition_test'
+OWNER_META_ACCOUNT_ID = '918741266442442'
 AUTHORIZATION = 'homestro-DE-AT-5EUR-day-35EUR-7days-owner-20261027'
 STOPPED_CLAIMS = {'STOPPED_TEST_BUDGET', 'STOPPED_PERFORMANCE', 'STOPPED_OWNER', 'STOPPED_TEST_EXPIRED'}
 
@@ -180,6 +181,10 @@ class FirstPurchaseController:
                     'campaign_id': campaign, 'consent_recorded': True,
                     'activation_performed': False, 'prior_purchase_required': False}
         account, token, pixel, page = (env.get(k, '') for k in ('META_AD_ACCOUNT_ID', 'META_ACCESS_TOKEN', 'META_PIXEL_ID', 'META_PAGE_ID'))
+        if account != 'act_' + OWNER_META_ACCOUNT_ID:
+            return {'status': 'blocked', 'reason': 'META_ACCOUNT_SCOPE_MISMATCH',
+                    'requested_account_matches': False, 'activation_performed': False,
+                    'prior_purchase_required': False}
         version = env.get('META_API_VERSION', 'v26.0')
         if not re.fullmatch(r'act_\d{4,30}', account) or not token or not re.fullmatch(r'v\d+\.\d+', version):
             return {'status': 'blocked', 'reason': 'META_CONFIGURATION_INVALID', 'consent_recorded': True}
