@@ -701,7 +701,15 @@ async def run_once() -> dict[str, Any]:
 
     daily = Decimal(os.getenv("FRANKENSTEIN_META_DAILY_BUDGET_EUR", "5.00"))
     total = Decimal(os.getenv("FRANKENSTEIN_META_TOTAL_BUDGET_EUR", "35.00"))
-    if daily <= 0 or total <= 0:
+    # Frankenstein is a preparation worker. The central adtech pilot is the
+    # sole owner of Meta campaign mutations; keep this lane draft-only unless
+    # an explicitly enabled, reviewed integration replaces this guard.
+    if not live:
+        result = {"status": "prepared_only",
+                  "reason": "CENTRAL_ADTECH_PILOT_OWNS_META_WRITES",
+                  "campaign_created": False, "writes_performed": False,
+                  "product_id": product["id"]}
+    elif daily <= 0 or total <= 0:
         result = {"status": "blocked", "reason": "META_SPEND_BUDGET_REQUIRED",
                   "campaign_created": False, "writes_performed": False}
     elif reuse_existing:
@@ -712,7 +720,8 @@ async def run_once() -> dict[str, Any]:
         buyer = buyer or MetaBuyer()
         result = await buyer.create_paused_ad(product, copy_data,
             hashlib.sha256(str(product["id"]).encode()).hexdigest(), float(daily), float(total), live)
-    state = ("meta_active" if result.get("status") == "active_existing_campaign"
+    state = ("prepared_only" if result.get("status") == "prepared_only"
+             else "meta_active" if result.get("status") == "active_existing_campaign"
              else "meta_paused" if result.get("status") == "created_paused_existing_campaign"
              else "meta_blocked" if result.get("status") == "blocked"
              else "meta_active" if result.get("status") == "active"
