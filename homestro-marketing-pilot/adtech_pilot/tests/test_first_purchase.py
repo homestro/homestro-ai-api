@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -215,6 +216,37 @@ class FirstPurchaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result['consent']['activated_at'])
             self.assertFalse(any(body.get('status') == ['ACTIVE'] for _, body in state['writes']))
             await client.aclose()
+
+    async def test_authorize_accepts_same_campaign_and_exact_caps_when_only_legacy_metadata_differs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
+            store = FirstPurchaseStore(audit)
+            original = store.authorize(CAMPAIGN, NOW)
+            legacy_terms = json.loads(original['terms'])
+            legacy_terms['source'] = 'explicit_owner_voice_authorization_legacy'
+            with audit._connect() as db:
+                db.execute('UPDATE pilot_first_purchase_consent SET terms=? WHERE singleton=1',
+                           (json.dumps(legacy_terms, sort_keys=True),))
+            accepted = store.authorize(CAMPAIGN, NOW+timedelta(minutes=1))
+            self.assertEqual(accepted['terms'], json.dumps(legacy_terms, sort_keys=True))
+            self.assertEqual(store.read()['authorized_at'], NOW.isoformat())
+
+    async def test_authorize_blocks_campaign_or_budget_scope_mismatch_without_rewriting_consent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audit = PlanAuditStore(Path(directory) / 'audit.sqlite')
+            store = FirstPurchaseStore(audit)
+            original = store.authorize(CAMPAIGN, NOW)
+            self.assertEqual(store.authorize('11111', NOW)['authorization_blocker'],
+                             'PERSISTED_CAMPAIGN_SCOPE_MISMATCH')
+            broader = json.loads(original['terms'])
+            broader['total_eur'] = '100.00'
+            with audit._connect() as db:
+                db.execute('UPDATE pilot_first_purchase_consent SET terms=? WHERE singleton=1',
+                           (json.dumps(broader, sort_keys=True),))
+            blocked = store.authorize(CAMPAIGN, NOW+timedelta(minutes=1))
+            self.assertEqual(blocked['authorization_blocker'],
+                             'PERSISTED_CONSENT_TERMS_MISMATCH')
+            self.assertEqual(json.loads(store.read()['terms'])['total_eur'], '100.00')
 
     async def test_total_cap_and_expiry_are_durable_and_cannot_be_reset_by_restart_or_new_campaign(self):
         with tempfile.TemporaryDirectory() as directory:
