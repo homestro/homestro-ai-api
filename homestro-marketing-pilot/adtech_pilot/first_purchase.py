@@ -120,6 +120,16 @@ class FirstPurchaseStore:
     def stop(self, reason):
         with closing(self.audit._connect()) as db, db:
             db.execute("UPDATE pilot_first_purchase_consent SET state='stopped',stop_reason=? WHERE singleton=1", (reason,))
+    def resume_legacy_performance_stop(self):
+        """Resume only the recorded EUR15 stop under the unchanged EUR35 consent."""
+        with closing(self.audit._connect()) as db, db:
+            db.execute(
+                "UPDATE pilot_first_purchase_consent SET state=CASE WHEN activated_at IS NULL "
+                "THEN 'authorized' ELSE 'active' END "
+                "WHERE singleton=1 AND state='stopped' "
+                "AND stop_reason='SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE'"
+            )
+        return self.read()
 
     def envelope(self, lifetime, today, now):
         lifetime, today = Decimal(lifetime), Decimal(today)
@@ -175,6 +185,15 @@ class FirstPurchaseController:
         if not re.fullmatch(r'\d{4,30}', scope) or campaign != scope:
             return {'status': 'blocked', 'reason': 'EXACT_OWNED_CAMPAIGN_SCOPE_REQUIRED', 'activation_performed': False}
         consent = self.store.authorize(campaign, now)
+        if consent.get('state') == 'stopped' and consent.get('stop_reason') == 'SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE':
+            consent = self.store.resume_legacy_performance_stop()
+            await self.audit.record('first_purchase_performance_stop_resumed', {
+                'campaign_id': campaign, 'previous_stop_reason': 'SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE',
+                'lifetime_budget_eur': '35.00', 'spend_history_reset': False,
+            })
+            if claim.get('status') == 'STOPPED_PERFORMANCE':
+                await self.audit.update_meta_micro_campaign(status='ACTIVE_PENDING_REVIEW', campaign_id=campaign)
+                claim = await self.audit.get_meta_micro_campaign_claim()
         if consent.get('state') == 'blocked':
             return {'status': 'blocked', 'reason': consent['authorization_blocker'],
                     'mismatched_terms': consent.get('mismatched_terms', []),

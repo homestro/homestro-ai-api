@@ -97,8 +97,8 @@ def performance_decision(performance, *, current_daily_budget_eur=5, daily_cap_e
                  "current_daily_budget_eur": float(current), "daily_cap_eur": float(cap)})
     if spend >= Decimal("35"):
         return {**base, "action": "pause", "reason": "TEST_TOTAL_BUDGET_REACHED"}
-    if spend > Decimal("15") and purchases == 0:
-        return {**base, "action": "pause", "reason": "SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE"}
+    if spend > Decimal("35") and purchases == 0:
+        return {**base, "action": "pause", "reason": "SPEND_OVER_35_WITH_NO_REPORTED_PURCHASE"}
     if current > min(cap, Decimal("5")):
         return {**base, "action": "pause", "reason": "DAILY_BUDGET_EXCEEDS_AUTHORIZATION"}
     if roas is not None and roas >= 3 and purchases >= 3:
