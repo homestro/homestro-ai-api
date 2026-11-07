@@ -69,7 +69,6 @@ export class Worker {
   async tick(postId=null) {
     if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return;}
     if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return;}
-    if(this.cfg.autonomyEnabled && !this.cfg.publishAroundClock && !this.isPublishingWindow()){log('PUBLISH_BLOCKED',{reason:'OUTSIDE_PUBLISHING_WINDOW'});return;}
     this.busy=true;
     try {
       const acquired=await this.store.withWorkerLock(async client=>{
@@ -95,10 +94,15 @@ export class Worker {
               AND ($3::int=0 OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
                 AND spaced.status IN ('published','publishing','recovery_required')
                 AND COALESCE(spaced.published_at,spaced.attempted_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
-              ORDER BY s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])
+              ORDER BY CASE WHEN s.approved_by='auto-verified-shopify-product-v1' THEN 0 ELSE 1 END,s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now()) ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job){
           log('PUBLISH_BLOCKED',{reason:'NO_ELIGIBLE_APPROVED_POST',publishedOrUncertainLast24h:count,limit:this.cfg.maxDailyPosts});
+          return;
+        }
+        if(this.cfg.autonomyEnabled && !this.cfg.publishAroundClock && !this.isPublishingWindow() &&
+          job.approved_by!=='auto-verified-shopify-product-v1') {
+          log('PUBLISH_BLOCKED',{postId:job.id,reason:'OUTSIDE_PUBLISHING_WINDOW'});
           return;
         }
         if(this.cfg.organicPolicy==='balanced-v1'){
