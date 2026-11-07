@@ -575,3 +575,26 @@ Railway deployment dac4816e-0077-4863-9d42-edbaf669a509 reached SUCCESS. Its nex
 Live campaign check after deployment: existing campaign 120254564749740274 remains PAUSED, with EUR15.36 reported spend and zero Meta-reported purchases. The durable stop reason is SPEND_OVER_15_WITH_NO_REPORTED_PURCHASE; tracking is not verified and the launch path still requires exact creative review. No new campaign was created or activated. Live publisher handoff shows 11 assets queue-confirmed (44 queue rows) and 2 blocked/unconfirmed; Facebook and Instagram examples remain draft_queued with visual review required. content_drafts reports publication_performed=false. Do not claim these are live posts or visitors.
 
 The deploy logs after e5486ef720959a2cb88f466169d4d208f51bc140 contained zero occurrences of authorize:65. The deployment did not change ad campaign state or bypass social review gates.
+
+## Live operational check — 7 November 2026, 22:00 UTC
+
+The AdTech service uses `deploy/adtech-pilot`. Commit `cd83075f06d1564965dccb5b7ab14a5b39e63c3e`
+deployed to Railway as `80978526-280f-4678-b73d-6371ccd77e7f` (`SUCCESS`). The existing-ad
+gate now selects exactly one eligible reviewed ad from the existing ad set; it does not create
+a replacement. The live controller read the existing campaign's €5/day budget, DE/AT targeting,
+and seven-day €35 ceiling, but Meta returned rate limit `80004/2446079` before the ad check
+completed. Latest observed campaign state remains `PAUSED`; no new spend was confirmed.
+
+The separate Facebook/Instagram publisher uses branch `main`. Commit
+`823687469f3397f5fbc0b81e61eee896fa2497e7` deployed to Railway as
+`2266d5e5-27c6-4f0d-83bf-652cc7687eff` (`SUCCESS`). Its worker now auto-approves only
+drafts whose active Shopify product and revision still match, whose German caption matches the
+reviewed hook, and whose image is matched to the Shopify product photo or an image handoff
+mapped to that exact product. Existing publishing windows, quotas, duplicate prevention, and
+Meta connection checks remain in force. No Facebook/Instagram publication receipt was observed
+after this deployment.
+
+The €5-per-product spend kill rule is not present: current Meta performance reads are
+campaign-level only. Shopify's connected read tool returned `Authentication required` during
+this check; no product or media was changed. Existing Higgsfield Ads Studio products and
+completed runs were read; no new generation was requested.
