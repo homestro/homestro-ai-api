@@ -56,14 +56,38 @@ class FirstPurchaseStore:
                  'automatic_increase': False, 'starts_at_actual_activation': True,
                  'new_paid_generation_authorized': False, 'unseen_creatives_authorized': False,
                  'source': 'explicit_owner_voice_authorization_20261027'}
-        with closing(self.audit._connect()) as db, db:
-            db.execute('INSERT INTO pilot_first_purchase_consent(singleton,authorization,campaign,terms,state,authorized_at) '
-                       'VALUES(1,?,?,?,?,?) ON CONFLICT(singleton) DO NOTHING',
-                       (AUTHORIZATION, campaign, json.dumps(terms, sort_keys=True), 'authorized', now.isoformat()))
-            row = db.execute('SELECT campaign,terms FROM pilot_first_purchase_consent WHERE singleton=1').fetchone()
-            if row != (campaign, json.dumps(terms, sort_keys=True)):
-                raise ValueError('PERSISTED_CONSENT_SCOPE_MISMATCH')
-        return self.read()
+        current = self.read()
+        if current is None:
+            with closing(self.audit._connect()) as db, db:
+                db.execute('INSERT INTO pilot_first_purchase_consent(singleton,authorization,campaign,terms,state,authorized_at) '
+                           'VALUES(1,?,?,?,?,?) ON CONFLICT(singleton) DO NOTHING',
+                           (AUTHORIZATION, campaign, json.dumps(terms, sort_keys=True), 'authorized', now.isoformat()))
+            current = self.read()
+        if not current:
+            return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CONSENT_UNAVAILABLE'}
+        if current.get('authorization') != AUTHORIZATION:
+            return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_AUTHORIZATION_ID_MISMATCH'}
+        if current.get('campaign') != campaign:
+            return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CAMPAIGN_SCOPE_MISMATCH'}
+        try:
+            saved = json.loads(current.get('terms') or '')
+            saved_caps_match = (
+                set(saved.get('markets', [])) == {'DE', 'AT'}
+                and str(saved.get('daily_eur')) == '5.00'
+                and str(saved.get('total_eur')) == '35.00'
+                and int(saved.get('days')) == 7
+                and saved.get('automatic_increase') is False
+                and saved.get('starts_at_actual_activation') is True
+                and saved.get('new_paid_generation_authorized') is False
+                and saved.get('unseen_creatives_authorized') is False
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            saved_caps_match = False
+        if not saved_caps_match:
+            return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CONSENT_TERMS_MISMATCH'}
+        # Keep the existing consent record unchanged. Formatting/source metadata
+        # may evolve, but its account scope, campaign and spending terms must match.
+        return current
 
     def read(self):
         with closing(self.audit._connect()) as db:
@@ -144,6 +168,10 @@ class FirstPurchaseController:
         if not re.fullmatch(r'\d{4,30}', scope) or campaign != scope:
             return {'status': 'blocked', 'reason': 'EXACT_OWNED_CAMPAIGN_SCOPE_REQUIRED', 'activation_performed': False}
         consent = self.store.authorize(campaign, now)
+        if consent.get('state') == 'blocked':
+            return {'status': 'blocked', 'reason': consent['authorization_blocker'],
+                    'campaign_id': campaign, 'consent_recorded': True,
+                    'activation_performed': False, 'prior_purchase_required': False}
         account, token, pixel, page = (env.get(k, '') for k in ('META_AD_ACCOUNT_ID', 'META_ACCESS_TOKEN', 'META_PIXEL_ID', 'META_PAGE_ID'))
         version = env.get('META_API_VERSION', 'v26.0')
         if not re.fullmatch(r'act_\d{4,30}', account) or not token or not re.fullmatch(r'v\d+\.\d+', version):
