@@ -71,6 +71,10 @@ class FirstPurchaseStore:
             return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CAMPAIGN_SCOPE_MISMATCH'}
         try:
             saved = json.loads(current.get('terms') or '')
+            def denied(key):
+                value = saved.get(key, False)
+                return (value is False or (type(value) is int and value == 0)
+                        or (isinstance(value, str) and value.strip().lower() in {'false', 'no', '0'}))
             checks = {
                 'markets_de_at': set(saved.get('markets', [])) == {'DE', 'AT'},
                 'daily_cap_5_eur': Decimal(str(saved.get('daily_eur'))) == Decimal('5.00'),
@@ -78,8 +82,8 @@ class FirstPurchaseStore:
                 'duration_7_days': int(saved.get('days')) == 7,
                 'no_automatic_increase': saved.get('automatic_increase') is False,
                 'start_window_on_activation': saved.get('starts_at_actual_activation') is True,
-                'no_new_paid_generation': saved.get('new_paid_generation_authorized', False) is False,
-                'no_unreviewed_creatives': saved.get('unseen_creatives_authorized', False) is False,
+                'no_new_paid_generation': denied('new_paid_generation_authorized'),
+                'no_unreviewed_creatives': denied('unseen_creatives_authorized'),
             }
         except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
             checks = {'stored_terms_parseable': False}
