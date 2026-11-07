@@ -78,8 +78,8 @@ class FirstPurchaseStore:
                 'duration_7_days': int(saved.get('days')) == 7,
                 'no_automatic_increase': saved.get('automatic_increase') is False,
                 'start_window_on_activation': saved.get('starts_at_actual_activation') is True,
-                'no_new_paid_generation': saved.get('new_paid_generation_authorized') is False,
-                'no_unreviewed_creatives': saved.get('unseen_creatives_authorized') is False,
+                'no_new_paid_generation': saved.get('new_paid_generation_authorized', False) is False,
+                'no_unreviewed_creatives': saved.get('unseen_creatives_authorized', False) is False,
             }
         except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
             checks = {'stored_terms_parseable': False}
