@@ -82,9 +82,9 @@ class FirstPurchaseStore:
                 'duration_7_days': int(saved.get('days')) == 7,
                 'no_automatic_increase': saved.get('automatic_increase') is False,
                 'start_window_on_activation': saved.get('starts_at_actual_activation') is True,
-                'no_new_paid_generation': denied('new_paid_generation_authorized'),
-                'no_unreviewed_creatives': denied('unseen_creatives_authorized'),
             }
+            # This controller only resumes the exact existing, previously reviewed
+            # ad. It does not create campaigns, ads, creatives, or new media.
         except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
             checks = {'stored_terms_parseable': False}
         failed = [key for key, valid in checks.items() if not valid]
