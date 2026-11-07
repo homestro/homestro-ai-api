@@ -71,20 +71,22 @@ class FirstPurchaseStore:
             return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CAMPAIGN_SCOPE_MISMATCH'}
         try:
             saved = json.loads(current.get('terms') or '')
-            saved_caps_match = (
-                set(saved.get('markets', [])) == {'DE', 'AT'}
-                and Decimal(str(saved.get('daily_eur'))) == Decimal('5.00')
-                and Decimal(str(saved.get('total_eur'))) == Decimal('35.00')
-                and int(saved.get('days')) == 7
-                and saved.get('automatic_increase') is False
-                and saved.get('starts_at_actual_activation') is True
-                and saved.get('new_paid_generation_authorized') is False
-                and saved.get('unseen_creatives_authorized') is False
-            )
+            checks = {
+                'markets_de_at': set(saved.get('markets', [])) == {'DE', 'AT'},
+                'daily_cap_5_eur': Decimal(str(saved.get('daily_eur'))) == Decimal('5.00'),
+                'total_cap_35_eur': Decimal(str(saved.get('total_eur'))) == Decimal('35.00'),
+                'duration_7_days': int(saved.get('days')) == 7,
+                'no_automatic_increase': saved.get('automatic_increase') is False,
+                'start_window_on_activation': saved.get('starts_at_actual_activation') is True,
+                'no_new_paid_generation': saved.get('new_paid_generation_authorized') is False,
+                'no_unreviewed_creatives': saved.get('unseen_creatives_authorized') is False,
+            }
         except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
-            saved_caps_match = False
-        if not saved_caps_match:
-            return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CONSENT_TERMS_MISMATCH'}
+            checks = {'stored_terms_parseable': False}
+        failed = [key for key, valid in checks.items() if not valid]
+        if failed:
+            return {'state': 'blocked', 'authorization_blocker': 'PERSISTED_CONSENT_TERMS_MISMATCH',
+                    'mismatched_terms': failed}
         # Keep the existing consent record unchanged. Formatting/source metadata
         # may evolve, but its account scope, campaign and spending terms must match.
         return current
@@ -170,6 +172,7 @@ class FirstPurchaseController:
         consent = self.store.authorize(campaign, now)
         if consent.get('state') == 'blocked':
             return {'status': 'blocked', 'reason': consent['authorization_blocker'],
+                    'mismatched_terms': consent.get('mismatched_terms', []),
                     'campaign_id': campaign, 'consent_recorded': True,
                     'activation_performed': False, 'prior_purchase_required': False}
         account, token, pixel, page = (env.get(k, '') for k in ('META_AD_ACCOUNT_ID', 'META_ACCESS_TOKEN', 'META_PIXEL_ID', 'META_PAGE_ID'))
