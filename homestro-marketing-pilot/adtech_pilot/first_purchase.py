@@ -444,10 +444,10 @@ class FirstPurchaseController:
                     elif cap == target_cap:
                         self.store.confirm_envelope(envelope['day'], target_cap)
                     snapshot['native_spend_cap_readback_cents'] = int(cap)
-                else:
-                    snapshot['native_spend_cap_readback_cents'] = int(cap)
-                    if Decimal(spends['maximum'])*100 >= cap:
-                        return await pause('EXISTING_LOWER_TOTAL_CAP_REACHED', latch=True)
+            if native_lifetime:
+                snapshot['native_spend_cap_readback_cents'] = int(cap)
+                if Decimal(spends['maximum'])*100 >= cap:
+                    return await pause('EXISTING_LOWER_TOTAL_CAP_REACHED', latch=True)
             if remote.get('status') == 'ACTIVE':
                 if consent['state'] == 'activation_intent':
                     updated = instant(remote['updated_time'])
