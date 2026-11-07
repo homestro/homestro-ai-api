@@ -75,8 +75,9 @@ export class Worker {
         const count=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE
           (status='published' AND published_at>now()-interval '24 hours') OR (status IN ('publishing','recovery_required') AND COALESCE(attempted_at,updated_at)>now()-interval '24 hours')`)).rows[0].count);
         // Only recent attempts consume daily quota. Same-product uncertainty remains blocked below.
-        if(count>=this.cfg.maxDailyPosts){
-          log('PUBLISH_BLOCKED',{reason:'DAILY_TOTAL_LIMIT',publishedOrUncertainLast24h:count,limit:this.cfg.maxDailyPosts});
+        const dailyLimit=this.cfg.autonomyEnabled?Math.max(this.cfg.maxDailyPosts,8):this.cfg.maxDailyPosts;
+        if(count>=dailyLimit){
+          log('PUBLISH_BLOCKED',{reason:'DAILY_TOTAL_LIMIT',publishedOrUncertainLast24h:count,limit:dailyLimit});
           return;
         }
         await autoApproveVerifiedDrafts({client,store:this.store,freshSnapshot:this.freshSnapshot,cfg:this.cfg});
