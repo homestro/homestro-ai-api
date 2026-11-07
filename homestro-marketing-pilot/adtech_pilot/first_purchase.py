@@ -43,7 +43,9 @@ class FirstPurchaseStore:
               day TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500),
               provider_acknowledged INTEGER NOT NULL DEFAULT 0);
               CREATE TABLE IF NOT EXISTS pilot_first_purchase_lifetime_cap(
-              adset TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500));''')
+              adset TEXT PRIMARY KEY,cap_cents INTEGER NOT NULL CHECK(cap_cents>0 AND cap_cents<=3500));
+              CREATE TABLE IF NOT EXISTS pilot_first_purchase_meta_backoff(
+              singleton INTEGER PRIMARY KEY CHECK(singleton=1),until TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0);''')
 
     def lifetime_cap(self, adset, proposed=None):
         with closing(self.audit._connect()) as db, db:
@@ -51,6 +53,23 @@ class FirstPurchaseStore:
                 db.execute('INSERT INTO pilot_first_purchase_lifetime_cap VALUES(?,?) ON CONFLICT(adset) DO NOTHING', (adset, proposed))
             row = db.execute('SELECT cap_cents FROM pilot_first_purchase_lifetime_cap WHERE adset=?', (adset,)).fetchone()
             return row[0] if row else None
+
+    def meta_backoff(self):
+        with closing(self.audit._connect()) as db:
+            db.row_factory = __import__('sqlite3').Row
+            row = db.execute('SELECT until,attempts FROM pilot_first_purchase_meta_backoff WHERE singleton=1').fetchone()
+        return dict(row) if row else None
+
+    def extend_meta_backoff(self, now):
+        with closing(self.audit._connect()) as db, db:
+            row = db.execute('SELECT attempts FROM pilot_first_purchase_meta_backoff WHERE singleton=1').fetchone()
+            attempts = (row[0] if row else 0) + 1
+            seconds = min(900 * (2 ** min(attempts - 1, 2)), 3600)
+            until = (now + timedelta(seconds=seconds)).isoformat()
+            db.execute('INSERT INTO pilot_first_purchase_meta_backoff(singleton,until,attempts) VALUES(1,?,?) '
+                       'ON CONFLICT(singleton) DO UPDATE SET until=excluded.until,attempts=excluded.attempts',
+                       (until, attempts))
+        return until
 
     def authorize(self, campaign, now):
         terms = {'markets': ['DE', 'AT'], 'daily_eur': '5.00', 'total_eur': '35.00', 'days': 7,
@@ -207,6 +226,11 @@ class FirstPurchaseController:
         version = env.get('META_API_VERSION', 'v26.0')
         if not re.fullmatch(r'act_\d{4,30}', account) or not token or not re.fullmatch(r'v\d+\.\d+', version):
             return {'status': 'blocked', 'reason': 'META_CONFIGURATION_INVALID', 'consent_recorded': True}
+        backoff = self.store.meta_backoff()
+        if backoff and now < instant(backoff['until']):
+            return {'status': 'deferred', 'reason': 'META_API_RATE_LIMIT_COOLDOWN',
+                    'retry_at': backoff['until'], 'activation_performed': False,
+                    'campaign_id': campaign, 'consent_recorded': True, 'prior_purchase_required': False}
         client = self.client or httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5), follow_redirects=False)
         base, headers = 'https://graph.facebook.com/' + version + '/', {'Authorization': 'Bearer ' + token}
         stage = 'campaign'
@@ -518,6 +542,10 @@ class FirstPurchaseController:
                                 detail[key] = value[:800]
                 except (ValueError, TypeError, AttributeError):
                     pass
+            if detail.get('code') in {17, 80004} or detail.get('error_subcode') == 2446079:
+                retry_at = self.store.extend_meta_backoff(now)
+                return {**snapshot, 'status': 'deferred', 'reason': 'META_API_RATE_LIMITED',
+                        'retry_at': retry_at, 'activation_performed': False, **detail}
             try:
                 return {**await pause('ACQUISITION_READINESS_OR_CONTROL_FAILED'), **detail}
             except Exception:
