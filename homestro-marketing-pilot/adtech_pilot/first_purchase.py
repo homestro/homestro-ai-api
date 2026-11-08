@@ -404,17 +404,28 @@ class FirstPurchaseController:
                 return await pause('AD_OR_CREATIVE_ID_NOT_VERIFIED')
             creative = await get(creative_id, 'id,object_story_spec')
             story = creative.get('object_story_spec') or {}
-            if str(story.get('page_id')) != page or not isinstance(story.get('link_data'), dict):
+            link_data = story.get('link_data')
+            template_data = story.get('template_data')
+            data = link_data if isinstance(link_data, dict) else template_data if isinstance(template_data, dict) else None
+            cards = (data.get('child_attachments') or [data]) if isinstance(data, dict) else []
+            has_verified_shape = (
+                isinstance(cards, list)
+                and 1 <= len(cards) <= 10
+                and all(isinstance(row, dict) and isinstance(row.get('link'), str) and row['link'].strip()
+                        for row in cards)
+            )
+            if str(story.get('page_id')) != page or not has_verified_shape:
                 snapshot['creative_destination_diagnostics'] = {
                     'expected_page_id': page,
                     'actual_page_id': str(story.get('page_id') or ''),
-                    'link_data_present': isinstance(story.get('link_data'), dict),
+                    'link_data_present': isinstance(link_data, dict),
+                    'template_data_present': isinstance(template_data, dict),
+                    'destination_shape_valid': has_verified_shape,
+                    'destination_count': len(cards) if isinstance(cards, list) else 0,
                     'object_story_spec_keys': sorted(story.keys()),
                 }
                 return await pause('EXISTING_CREATIVE_PAGE_OR_WEBSITE_DESTINATION_UNVERIFIED')
             revision = hashlib.sha256(json.dumps(story, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-            data = story['link_data']
-            cards = data.get('child_attachments') or [data]
             if not isinstance(cards, list) or not 1 <= len(cards) <= 10:
                 return await pause('CREATIVE_CARD_SCOPE_INVALID')
             snapshot.update(ad_id=str(ad['id']), ad_status=ad.get('status'), ad_effective_status=ad.get('effective_status'), creative_id=creative_id, creative_revision=revision,
