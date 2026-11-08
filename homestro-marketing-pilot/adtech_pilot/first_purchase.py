@@ -405,6 +405,12 @@ class FirstPurchaseController:
             creative = await get(creative_id, 'id,object_story_spec')
             story = creative.get('object_story_spec') or {}
             if str(story.get('page_id')) != page or not isinstance(story.get('link_data'), dict):
+                snapshot['creative_destination_diagnostics'] = {
+                    'expected_page_id': page,
+                    'actual_page_id': str(story.get('page_id') or ''),
+                    'link_data_present': isinstance(story.get('link_data'), dict),
+                    'object_story_spec_keys': sorted(story.keys()),
+                }
                 return await pause('EXISTING_CREATIVE_PAGE_OR_WEBSITE_DESTINATION_UNVERIFIED')
             revision = hashlib.sha256(json.dumps(story, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             data = story['link_data']
