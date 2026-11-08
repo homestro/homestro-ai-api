@@ -45,12 +45,23 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
             "drafts": [],
         }
 
-    try:
-        stages["tiktok_publisher"] = await tiktok_publisher.run_once(candidates, env=env)
-    except Exception as exc:
+    # A content-ready event carries only product IDs whose grounded draft was
+    # actually produced. Downstream media preparation must consume that event,
+    # rather than independently processing the full Hunter selection.
+    content_product_ids = {
+        str(draft.get("product_id"))
+        for draft in stages["creative_seo"].get("drafts", [])
+        if isinstance(draft, dict) and draft.get("product_id")
+    }
+    media_inputs = [
+        product for product in candidates
+        if str(product.get("id") or "") in content_product_ids
+    ]
+    if not media_inputs:
         stages["tiktok_publisher"] = {
-            "status": "failed",
-            "error_type": type(exc).__name__,
+            "status": "blocked",
+            "reason": "CONTENT_READY_EVENT_EMPTY",
+            "candidate_count": 0,
             "prepared_count": 0,
             "ready_count": 0,
             "review_count": 0,
@@ -58,6 +69,24 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
             "publication_performed": False,
             "ad_mutations_performed": False,
         }
+    else:
+        try:
+            stages["tiktok_publisher"] = await tiktok_publisher.run_once(media_inputs, env=env)
+            stages["tiktok_publisher"]["input_event"] = "content_ready"
+            stages["tiktok_publisher"]["input_product_ids"] = [
+                str(product.get("id")) for product in media_inputs
+            ]
+        except Exception as exc:
+            stages["tiktok_publisher"] = {
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "prepared_count": 0,
+                "ready_count": 0,
+                "review_count": 0,
+                "drafts": [],
+                "publication_performed": False,
+                "ad_mutations_performed": False,
+            }
 
     try:
         stages["media_buyer"] = await media_buyer.run_once(env=env)
