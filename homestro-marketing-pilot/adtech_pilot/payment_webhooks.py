@@ -22,7 +22,7 @@ from typing import Any, Mapping
 
 from fastapi import HTTPException
 
-TOPICS = {"orders-paid": "orders/paid", "orders-cancelled": "orders/cancelled",
+TOPICS = {"orders-paid": "orders/paid", "orders-created": "orders/create", "orders-cancelled": "orders/cancelled",
           "refunds-created": "refunds/create", "orders-updated": "orders/updated"}
 MAX_BODY = 1_048_576
 
