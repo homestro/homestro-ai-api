@@ -46,7 +46,6 @@ const CRAFT_CATEGORIES = Object.freeze([
   { name: 'Trockenbau', pattern: /trockenbau|drywall|innenausbau/i, msSupported: true },
   { name: 'Badsanierung', pattern: /bad.?sanierung|bad.?modernisierung|badsanierung/i, msSupported: false },
   { name: 'Elektriker', pattern: /elektriker|elektroarbeiten|elektro.?installation/i, msSupported: false },
-  { name: 'Malerarbeiten', pattern: /malerarbeiten|innenanstrich|streichen/i, msSupported: true },
   { name: 'Bodenverlegung', pattern: /bodenverlegung|vinylboden|laminatboden/i, msSupported: true },
   { name: 'Kleinreparaturen', pattern: /kleinreparaturen|reparaturarbeiten/i, msSupported: true }
 ]);

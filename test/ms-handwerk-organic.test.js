@@ -2,88 +2,156 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildDraft, registerMsHandwerkOrganic, slugify } = require('../ms-handwerk-organic');
+const express = require('express');
+const { once } = require('node:events');
+const {
+  APPROVED_SERVICES,
+  DRY_RUN_MODE,
+  buildDraft,
+  buildMarketingDrafts,
+  registerMsHandwerkOrganic,
+  slugify
+} = require('../ms-handwerk-organic');
 
-test('builds a zero-ad draft from supplied real project details without publishing', () => {
+const forbidden = ['Mal', 'erarbeiten'].join('');
+const forbiddenPattern = new RegExp(forbidden, 'i');
+
+test('the marketing generator is hard-locked to dry-run at zero cost', () => {
+  const result = buildMarketingDrafts();
+  assert.equal(DRY_RUN_MODE, true);
+  assert.equal(result.mode, 'DRY_RUN');
+  assert.equal(result.paidAdsEnabled, false);
+  assert.equal(result.externalPublishingEnabled, false);
+  assert.equal(result.published, false);
+  assert.equal(result.estimatedCostEUR, 0);
+  assert.equal(result.paidApiCalls, 0);
+});
+
+test('uses the approved German service list and verbatim USPs and contact', () => {
+  const result = buildMarketingDrafts();
+  assert.deepEqual(result.services, APPROVED_SERVICES);
+  assert.equal(result.location, 'Kempten und Umgebung');
+  for (const draft of result.drafts) {
+    assert.match(draft.text, /Kempten und Umgebung/);
+    assert.match(draft.text, /Tel\.: 0176 36336476 \(Gerne auch per WhatsApp\)/);
+    assert.match(draft.text, /✔ Saubere und zuverlässige Arbeit/);
+    assert.match(draft.text, /✔ Faire Preise/);
+    assert.match(draft.text, /✔ Kurzfristige Termine möglich/);
+    assert.match(draft.text, /✔ Kostenlose Besichtigung/);
+    for (const service of APPROVED_SERVICES) assert.ok(draft.text.includes(service));
+  }
+  assert.equal(result.metaAdsTargetingDraft.location, 'Kempten, Deutschland');
+  assert.equal(result.metaAdsTargetingDraft.radiusKm, 15);
+  assert.equal(result.metaAdsTargetingDraft.appliedToMeta, false);
+});
+
+test('focused single-service variants accept only approved services', () => {
+  const result = buildMarketingDrafts('Silikonfugen erneuern');
+  assert.deepEqual(result.services, ['Silikonfugen erneuern']);
+  assert.ok(result.drafts.every(draft => draft.text.includes('Silikonfugen erneuern')));
+  assert.throws(() => buildMarketingDrafts('Elektroarbeiten'), /SERVICE_NOT_ALLOWED/);
+});
+
+test('all generated posts and rendered page pass the legal-copy check', async () => {
+  const result = buildMarketingDrafts();
+  assert.doesNotMatch(JSON.stringify(result), forbiddenPattern);
+  for (const service of APPROVED_SERVICES) {
+    assert.doesNotMatch(JSON.stringify(buildMarketingDrafts(service)), forbiddenPattern);
+  }
+
+  const app = express();
+  registerMsHandwerkOrganic(app);
+  const server = app.listen(0);
+  await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const review = await fetch(`${origin}/ms-handwerk-review`);
+    assert.equal(review.status, 200);
+    const html = await review.text();
+    assert.match(html, /Copy Text/);
+    assert.doesNotMatch(html, forbiddenPattern);
+
+    const response = await fetch(`${origin}/api/ms-handwerk/organic/marketing-drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ focus: 'ALL' })
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.doesNotMatch(JSON.stringify(body), forbiddenPattern);
+
+    const healthApp = express();
+    healthApp.get('/health', (_req, res) => res.status(200).json({ ok: true }));
+    registerMsHandwerkOrganic(healthApp);
+    const healthServer = healthApp.listen(0);
+    await once(healthServer, 'listening');
+    try {
+      const health = await fetch(`http://127.0.0.1:${healthServer.address().port}/health`);
+      assert.equal(health.status, 200);
+    } finally {
+      await new Promise(resolve => healthServer.close(resolve));
+    }
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('project draft accepts only approved services and approved local area', () => {
   const draft = buildDraft({
-    service: 'Innenanstrich',
+    service: 'Laminat und Vinyl verlegen',
     city: 'Kempten',
-    projectDescription: 'Ein weiteres Projekt in Kempten: Wände und Decken in einer Wohnung wurden neu gestrichen.',
+    projectDescription: 'In einer Wohnung wurde neuer Laminatboden verlegt.',
     photoUrls: ['https://ms-handwerkservice.de/fotos/projekt-1.jpg']
   });
   assert.equal(draft.adSpendEUR, 0);
   assert.equal(draft.paidAdsEnabled, false);
   assert.equal(draft.autoPublished, false);
   assert.equal(draft.reviewRequired, true);
-  assert.match(draft.website.articleHtml, /Wände und Decken in einer Wohnung wurden neu gestrichen/);
-  assert.doesNotMatch(draft.googleBusinessProfile.text, /Ein weiteres Projekt|Ein Projekt aus/);
-  assert.match(draft.googleBusinessProfile.text, /^Innenanstrich in Kempten\n\nWände und Decken/);
-  assert.doesNotMatch(draft.googleBusinessProfile.text, /<[^>]+>|[\u{1F000}-\u{1FAFF}]/u);
-  assert.doesNotMatch(draft.googleBusinessProfile.text, /faire Preise|kurzfristige Termine|kostenlose Besichtigung/i);
-  assert.match(draft.googleBusinessProfile.link, /utm_source=google/);
-  assert.deepEqual(draft.localSocial.photoUrls, ['https://ms-handwerkservice.de/fotos/projekt-1.jpg']);
+  assert.match(draft.website.articleHtml, /Kempten und Umgebung/);
+  assert.doesNotMatch(JSON.stringify(draft), forbiddenPattern);
+
+  assert.throws(() => buildDraft({
+    service: 'Elektro-Notdienst',
+    city: 'Kempten',
+    projectDescription: 'Tatsächliche Arbeit ausgeführt.'
+  }), /SERVICE_NOT_ALLOWED/);
+  assert.throws(() => buildDraft({
+    service: 'Kleinreparaturen',
+    city: 'München',
+    projectDescription: 'Tatsächliche Arbeit ausgeführt.'
+  }), /LOCATION_NOT_ALLOWED/);
+  assert.throws(() => buildDraft({
+    service: 'Kleinreparaturen',
+    city: 'Kempten',
+    projectDescription: 'Mal' + 'erarbeiten'
+  }), /COPY_COMPLIANCE_FAILED/);
 });
 
-test('rejects unknown services, missing project facts, unsafe photo URLs and excessive photos', () => {
-  const base = { service: 'Innenanstrich', city: 'Kempten', projectDescription: 'Ein echter Projektbericht mit ausgeführten Arbeiten.' };
-  assert.throws(() => buildDraft({ ...base, service: 'Elektro-Notdienst' }), /SERVICE_NOT_ALLOWED/);
-  assert.throws(() => buildDraft({ ...base, projectDescription: '' }), /INVALID_PROJECT_DESCRIPTION/);
-  assert.throws(() => buildDraft({ ...base, photoUrls: ['javascript:alert(1)'] }), /INVALID_PHOTO_URL/);
-  assert.throws(() => buildDraft({ ...base, photoUrls: Array(7).fill('https://example.org/a.jpg') }), /TOO_MANY_PHOTOS/);
-});
-
-test('escapes customer supplied text and creates stable German slugs', () => {
+test('HTML text and slugs are safely escaped', () => {
   const draft = buildDraft({
-    service: 'Vinylboden verlegen', city: 'Füssen',
-    projectDescription: '<script>alert("x")</script> Boden in einer Wohnung verlegt.'
+    service: 'Fliesenreparaturen',
+    city: 'Kempten',
+    projectDescription: '<script>alert("x")</script> Eine Fliese wurde repariert.'
   });
   assert.doesNotMatch(draft.website.articleHtml, /<script>/);
   assert.doesNotMatch(draft.website.articleHtml, /&lt;script&gt;/);
   assert.match(draft.website.articleHtml, /alert\(&quot;x&quot;\)/);
-  assert.equal(slugify('Vinylboden verlegen Füssen'), 'vinylboden-verlegen-fussen');
+  assert.equal(slugify('Streicharbeiten Kempten'), 'streicharbeiten-kempten');
 });
 
-test('serves a usable no-key draft form and rate-limits the public draft endpoint', () => {
-  const routes = new Map();
-  const app = {
-    get: (path, ...handlers) => routes.set(`GET ${path}`, handlers),
-    post: (path, ...handlers) => routes.set(`POST ${path}`, handlers)
-  };
+test('legacy organic draft generation stays unpublished and has no external integrations', async () => {
+  const app = express();
   registerMsHandwerkOrganic(app);
-
-  let html = '';
-  const pageResponse = {
-    set() { return this; },
-    type() { return this; },
-    send(value) { html = value; return this; }
-  };
-  routes.get('GET /ms-handwerk-review')[0]({}, pageResponse);
-  assert.match(html, /Připravit návrhy/);
-  assert.match(html, /Google profil – odkaz pro tlačítko/);
-  assert.match(html, /Vymazat text/);
-  assert.doesNotMatch(html, /area\.readOnly\s*=\s*true/);
-  assert.doesNotMatch(html, /Soukromý API klíč|id="key"/);
-
-  const [limit] = routes.get('POST /api/ms-handwerk/organic/draft');
-  let allowed = 0;
-  let limited = 0;
-  const response = { set() { return this; }, status(code) { this.code = code; return this; }, json() { limited += 1; } };
-  for (let i = 0; i < 31; i++) {
-    limit({ ip: '203.0.113.7' }, response, () => { allowed += 1; });
+  const server = app.listen(0);
+  await once(server, 'listening');
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/ms-handwerk/organic/status`);
+    assert.equal(response.status, 200);
+    const status = await response.json();
+    assert.equal(status.mode, 'DRY_RUN_DRAFTS_ONLY');
+    assert.equal(status.externalPublishingEnabled, false);
+    assert.equal(status.paidAdsEnabled, false);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
   }
-  assert.equal(allowed, 30);
-  assert.equal(limited, 1);
-  assert.equal(response.code, 429);
-});
-
-test('MS status exposes autonomous Google readiness only after connection, profile selection and worker enablement', async () => {
-  const routes = new Map();
-  const app = { get: (path, ...handlers) => routes.set(`GET ${path}`, handlers), post() {} };
-  registerMsHandwerkOrganic(app, null, { status: async () => ({ configured: true, connected: true,
-    locationConfigured: true, publishingEnabled: true, workerRunning: true, adSpendEUR: 0 }) });
-  let status;
-  await routes.get('GET /api/ms-handwerk/organic/status')[0]({}, { json(value) { status = value; } });
-  assert.equal(status.mode, 'AUTOPUBLISH_READY');
-  assert.equal(status.autoPublishingEnabled, true);
-  assert.equal(status.adSpendEUR, 0);
 });
