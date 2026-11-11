@@ -23,7 +23,8 @@ export function prepareExistingInputs(raw) {
   }
   const explicitBrand=String(raw.brandMetafield?.value||'').trim();
   const vendor=String(raw.vendor||'').trim();
-  const brand=explicitBrand || (vendor && !/^(homestro|aliexpress|dsers)$/i.test(vendor) ? vendor : null);
+  const vendorIsManufacturer=vendor && !/^(homestro|aliexpress|dsers)$/i.test(vendor) && String(raw.title||'').toLocaleLowerCase('de-DE').includes(vendor.toLocaleLowerCase('de-DE'));
+  const brand=explicitBrand || (vendorIsManufacturer ? vendor : null);
   const unbranded=String(raw.unbrandedMetafield?.value||'').toLowerCase()==='true' || tags.includes('homestro-unbranded');
   return {supplierReference:raw.supplierId?.jsonValue||null,landedCost:null,
     previouslyPublished:{facebook:raw.publishedFacebook?.jsonValue||null,instagram:raw.publishedInstagram?.jsonValue||null},
