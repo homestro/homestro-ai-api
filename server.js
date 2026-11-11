@@ -1376,7 +1376,13 @@ if(process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false'){
 }
 if(process.env.HOMESTRO_AUTOPILOT_RUN_ONCE==='true') setTimeout(()=>draftAutopilotRun(1).catch(e=>console.error('DRAFT AUTOPILOT RUN ONCE FAILED',e.message)),15000);
 // One-time visual QA safety net: runs independently of the text autopilot flag and is idempotent via homestro-ai-images-checked.
-if(process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false')setTimeout(()=>runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA AUTO FAILED',e.message)),20000);
+if(process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false'){
+ const schedulePendingDraftImageQA=()=>setTimeout(async()=>{
+  try{const result=await runDraftImageQA();if(result?.busy)schedulePendingDraftImageQA();}
+  catch(e){console.error('DRAFT IMAGE QA AUTO FAILED',e.message);}
+ },20000);
+ schedulePendingDraftImageQA();
+}
 
 
 const homestroRecommendationState={running:false,lastRun:null,lastError:null,processed:0,updated:0};
