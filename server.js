@@ -377,11 +377,42 @@ async function discoverImages(input){
  const supplied=[...(Array.isArray(input?.image_urls)?input.image_urls:[]),...(Array.isArray(input?.imageUrls)?input.imageUrls:[])].map(String);
  return{urls:[...new Set([...found.image_urls,...supplied])].slice(0,20),pageContext:(found.page_title+' '+found.page_text).slice(0,4000),details:found};
 }
+let imageVisionQueue=Promise.resolve(),imageVisionLastAt=0;
+function imageVisionRequest(task){
+ const queued=imageVisionQueue.then(async()=>{
+  const wait=Math.max(0,1000-(Date.now()-imageVisionLastAt));
+  if(wait)await new Promise(resolve=>setTimeout(resolve,wait));
+  imageVisionLastAt=Date.now();
+  return task();
+ });
+ imageVisionQueue=queued.catch(()=>{});
+ return queued;
+}
 async function imageIsRelevant(url,input,pageContext){
  if(!process.env.OPENAI_API_KEY)return false;
  const model=process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||'gpt-5-mini';
  const prompt='Prüfe dieses konkrete Produktbild für Homestro extrem streng. Freigabe NUR wenn exakt das Produkt aus dem Produktnamen/der Beschreibung gezeigt wird und das Bild für einen deutschen Online-Shop geeignet ist. ABLEHNEN bei anderem Produkt, Zubehör statt Hauptprodukt, Banner, Logo, Wasserzeichen, Verpackung als Hauptmotiv, chinesischen/japanischen/koreanischen Schriftzeichen, fremdsprachigem Werbetext, irreführenden Angaben, starker Unschärfe oder schlechter Qualität. Wenn du unsicher bist, ABLEHNEN. Produkt: '+String(input?.title||'')+'. Kategorie: '+String(input?.category||input?.productType||'')+'. Beschreibung: '+homestroPlain(input?.description||'').slice(0,1500)+'. Quellkontext: '+String(pageContext||'').slice(0,3000)+'. Antworte nur JSON {"relevant":true/false,"confidence":0-1,"hasForeignText":true/false,"lowQuality":true/false}.';
- try{const r=await fetch('https://api.openai.com/v1/responses',{signal:AbortSignal.timeout(25000),method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});const raw=await r.text();const d=JSON.parse(raw);if(!r.ok){console.error('IMAGE VISION HTTP',r.status,raw.slice(0,500));return false;}const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;}catch{return false;}
+ return imageVisionRequest(async()=>{
+  for(let attempt=0;attempt<3;attempt++){
+   try{
+    const r=await fetch('https://api.openai.com/v1/responses',{signal:AbortSignal.timeout(25000),method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});
+    const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{console.error('IMAGE VISION INVALID RESPONSE','status='+r.status);return false;}
+    if(r.status===429){
+     const error=d?.error||{},code=String(error.code||''),type=String(error.type||'');
+     console.error('IMAGE VISION RATE LIMITED','code='+code,'type='+type);
+     if(code==='insufficient_quota'||type==='insufficient_quota'||attempt===2)return false;
+     const retryAfter=Number(r.headers.get('retry-after'));
+     const delay=Number.isFinite(retryAfter)&&retryAfter>0?Math.min(30000,retryAfter*1000):Math.min(15000,3000*(attempt+1));
+     await new Promise(resolve=>setTimeout(resolve,delay));
+     continue;
+    }
+    if(!r.ok){console.error('IMAGE VISION HTTP','status='+r.status,'code='+String(d?.error?.code||''),'type='+String(d?.error?.type||''));return false;}
+    const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');
+    return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;
+   }catch(e){console.error('IMAGE VISION REQUEST FAILED',String(e?.name||'Error'));return false;}
+  }
+  return false;
+ });
 }
 
 async function generateHomestroImage(input,title,pageContext){
@@ -1169,8 +1200,9 @@ async function runDraftImageQA(){
   const token=await getClientToken();
   // Erazer XP6 is already ACTIVE, so inspect its existing gallery first without
   // editing its live listing or changing its status.
-  const activeData=await shopifyGraphQL('query{products(first:10,query:"status:active AND title:Erazer"){nodes{id title status description productType media(first:50){pageInfo{hasNextPage} nodes{id mediaContentType status alt ... on MediaImage{image{url width height}}}}}}}',{},token);
-  for(const active of (activeData.products.nodes||[]).filter(x=>/erazer\s*xp6/i.test(String(x.title||'')))){
+  const activeData=await shopifyGraphQL('query($id:ID!){product(id:$id){id title status description productType media(first:50){pageInfo{hasNextPage} nodes{id mediaContentType status alt ... on MediaImage{image{url width height}}}}}}}',{id:'gid://shopify/Product/16104466776446'},token);
+  const active=activeData.product;
+  if(active&&/erazer\s*xp6/i.test(String(active.title||''))&&String(active.status)==='ACTIVE'){
    const images=(active.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
    const review=await checkGallery(images,m=>imageIsRelevant(m.image.url,{title:active.title,category:active.productType,description:active.description},''),{hasNextPage:active.media?.pageInfo?.hasNextPage===true});
    console.log('ACTIVE ERAZER XP6 IMAGE QA',active.id,'status='+active.status,JSON.stringify(review));
@@ -1196,7 +1228,7 @@ async function runDraftImageQA(){
  finally{draftAutopilotState.imageRunning=false;}
 }
 async function draftAutopilotRun(limit=50){
- if(draftAutopilotState.running)return;
+ if(draftAutopilotState.running||draftAutopilotState.imageRunning)return;
  draftAutopilotState.running=true;
  try{
   const token=await getClientToken();
