@@ -19,6 +19,7 @@ import {Ingestion,snapshot} from './ingestion.js';
 import {MetaOrganic} from './meta.js';
 import {Worker} from './worker.js';
 import {generateFeed} from './feed.js';
+import {GoogleTrends} from './trends.js';
 import {createFeedRefresh} from './feed-refresh.js';
 import {publishProductSeo,syncSeoCatalogBatch} from './seo-publication.js';
 import {queueEditorial} from './editorial.js';
@@ -51,12 +52,22 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
   try {
     if(!apiKeyMiddleware && (!cfg.adminKey || cfg.adminKey.length<32))fail('PILOT_ADMIN_KEY_REQUIRED');
     const store=new Store(pool);await store.migrate();
+    const googleTrends=new GoogleTrends();
     if(process.env.PILOT_OPENAI_DIAGNOSTIC_ONCE==='true')try{log('OPENAI_ACCESS_DIAGNOSTIC',await checkOpenAiAccess(cfg));}
     catch(e){log('OPENAI_ACCESS_DIAGNOSTIC',{status:'unavailable',reason:codeOf(e),generationPerformed:false});}
     const renderer=new MediaRenderer(cfg), meta=new MetaOrganic(cfg);
     const ingestion=new Ingestion({store,renderer,localizer,feeRate:cfg.feeRate,cfg});
     const extras=async(id,raw)=>({...((prepareInputs && raw)?await prepareInputs(raw):{}),
       ...((await pool.query('SELECT inputs FROM marketing_inputs WHERE product_id=$1',[id])).rows[0]?.inputs||{})});
+    const enrichStoredWithTrends=async stored=>{
+      if(!stored?.document?.localized)return stored;
+      const optimized=await googleTrends.optimize(stored.document,stored.document.localized);
+      if(!optimized.changed)return stored;
+      const document={...stored.document,localized:optimized.copy};
+      await store.saveProduct(document,stored.status,stored.reasons||[]);
+      log('GOOGLE_TRENDS_PRODUCT_OPTIMIZED',{productId:document.id});
+      return {...stored,document};
+    };
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
     const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,dataDir:cfg.dataDir,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
     await generated.migrate();
@@ -89,18 +100,20 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
           if(previous?.status==='ready'&&previous.document.revision===source.revision&&previous.document.localized&&previous.document.localizationPrepared===true&&previous.document.asset&&!previous.document.asset.previewOnly){
             await ensureApprovedAssets({job:{id:'catalog-brain',payload:{...previous.document.asset,productRevision:source.revision}},source,cfg,renderer:freeRenderer});
             let queued=0;
-            const prepared={...source,localized:previous.document.localized,asset:previous.document.asset};
+            const optimizedPrevious=await enrichStoredWithTrends(previous);
+            const prepared={...source,localized:optimizedPrevious.document.localized,asset:previous.document.asset};
             for(const channel of ['facebook','instagram']){
               if(prepared.previouslyPublished?.[channel])continue;
               const payload=compilePost(prepared,channel,prepared.asset,cfg);
               if(await store.queue(id,channel,hash(payload),payload))queued++;
             }
+            try{await publishProductSeo(graphql,raw,prepared.localized);}catch(e){log('PRODUCT_SEO_SYNC_FAILED',{productId:id,reason:codeOf(e)});}
             return {processed:1,status:'draft_queued',queued,assetFormat:prepared.asset.format,existingAssetReused:true};
           }
         }
         const result=await (freeOnly?freeIngestion:ingestion).process(raw,inputs);
         if(result.status==='draft_queued' && result.processed) {
-          const prepared=await store.product(id);
+          const prepared=await enrichStoredWithTrends(await store.product(id));
           try {
             const seo=await publishProductSeo(graphql,raw,prepared?.document?.localized);
             if(seo.updated)log('PRODUCT_SEO_SYNCED',{productId:id,fields:seo.fields});
