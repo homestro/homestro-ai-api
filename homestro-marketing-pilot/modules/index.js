@@ -52,7 +52,8 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
   try {
     if(!apiKeyMiddleware && (!cfg.adminKey || cfg.adminKey.length<32))fail('PILOT_ADMIN_KEY_REQUIRED');
     const store=new Store(pool);await store.migrate();
-    const googleTrends=new GoogleTrends();
+    const trendGeos=String(process.env.GOOGLE_TRENDS_GEOS||'DE,AT').split(',').map(x=>x.trim()).filter(Boolean);
+    const googleTrends=new GoogleTrends({geos:trendGeos});
     if(process.env.PILOT_OPENAI_DIAGNOSTIC_ONCE==='true')try{log('OPENAI_ACCESS_DIAGNOSTIC',await checkOpenAiAccess(cfg));}
     catch(e){log('OPENAI_ACCESS_DIAGNOSTIC',{status:'unavailable',reason:codeOf(e),generationPerformed:false});}
     const renderer=new MediaRenderer(cfg), meta=new MetaOrganic(cfg);
@@ -62,14 +63,21 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     const enrichStoredWithTrends=async stored=>{
       if(!stored?.document?.localized)return stored;
       const optimized=await googleTrends.optimize(stored.document,stored.document.localized);
-      if(!optimized.changed)return stored;
+      if(!optimized.changed){log('GOOGLE_TRENDS_PRODUCT_NO_MATCH',{productId:stored.document.id});return stored;}
       const document={...stored.document,localized:optimized.copy};
       await store.saveProduct(document,stored.status,stored.reasons||[]);
-      log('GOOGLE_TRENDS_PRODUCT_OPTIMIZED',{productId:document.id});
+      log('GOOGLE_TRENDS_PRODUCT_OPTIMIZED',{productId:document.id,matchedQuery:optimized.matchedQuery,country:optimized.country});
       return {...stored,document};
     };
     const fresh=async id=>{const raw=await fetchProduct(graphql,id);return snapshot(raw,await extras(id,raw),cfg.feeRate);};
-    const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,dataDir:cfg.dataDir,key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',dailyCents:25}});
+    const dailyLimit=Number.parseInt(process.env.VIDEO_GENERATION_DAILY_LIMIT_CENTS||'60',10);
+    const generated=new GeneratedVideoDrafts({pool,fresh,cfg:{publicOrigin:cfg.publicOrigin,dataDir:cfg.dataDir,
+      key:process.env.RUNWAY_API_KEY||'',enabled:process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',
+      videoGenerationEnabled:process.env.VIDEO_GENERATION_ENABLED==='true',
+      dailyCents:Number.isInteger(dailyLimit)&&dailyLimit>=25&&dailyLimit<=10000?dailyLimit:60}});
+    log('VIDEO_STUDIO_READY',{enabled:process.env.VIDEO_GENERATION_ENABLED==='true'&&process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true',
+      dailyLimitCents:Number.isInteger(dailyLimit)&&dailyLimit>=25&&dailyLimit<=10000?dailyLimit:60,
+      providerConfigured:Boolean(process.env.RUNWAY_API_KEY),publishingEnabled:false});
     await generated.migrate();
     let social=null,importedMedia=null;
     try{
@@ -296,6 +304,17 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       if(!importedMedia)fail('MEDIA_IMPORT_NOT_CONFIGURED');
       res.json(await generated.handoff(req.params.key,req.body,importedMedia));
     }));
+    router.get('/video-studio/status',route(async(req,res)=>{
+      const videoEnabled=process.env.VIDEO_GENERATION_ENABLED==='true'&&process.env.PILOT_GENERATIVE_VIDEO_ENABLED==='true';
+      const spent=Number((await pool.query(`SELECT COALESCE(sum(cost_cents),0)::int AS spent FROM marketing_generated_videos
+        WHERE created_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`)).rows[0]?.spent||0);
+      res.json({enabled:videoEnabled,generationLock:videoEnabled?'armed':'locked',
+        spendTodayUSD:spent/100,dailyLimitUSD:generated.cfg.dailyCents/100,providerConfigured:Boolean(generated.cfg.key),
+        modes:['real','cartoon'],aspectRatios:['9:16','16:9'],generationPerformed:false,publishingEnabled:false});
+    }));
+    router.post('/video-studio/quote',route(async(req,res)=>res.json(await generated.quote(req.body))));
+    router.post('/video-studio/start',route(async(req,res)=>res.json(await generated.start(req.body))));
+    router.get('/video-studio/jobs/:key',route(async(req,res)=>res.json(await generated.poll(req.params.key))));
     router.get('/posts',route(async(req,res)=>res.json(await store.list(req.query.status||'draft_queued'))));
     router.get('/pending-products',route(async(req,res)=>res.json(await store.pending())));
     router.get('/seo/articles/drafts',route(async(req,res)=>{

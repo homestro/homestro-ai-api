@@ -1,6 +1,6 @@
 import {log} from './core.js';
 
-const endpoint='https://trends.google.com/trending/rss?geo=DE';
+const endpoint=geo=>'https://trends.google.com/trending/rss?geo='+encodeURIComponent(geo);
 const decode=value=>String(value||'').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1')
   .replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>')
   .replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
@@ -16,23 +16,34 @@ function fit(base,term,max) {
   return (prefix+tail).slice(0,max);
 }
 export class GoogleTrends {
-  constructor({fetchImpl=fetch,ttlMs=10*60*1000}={}){this.fetchImpl=fetchImpl;this.ttlMs=ttlMs;this.items=[];this.updatedAt=0;this.flight=null;}
+  constructor({fetchImpl=fetch,ttlMs=10*60*1000,geos=['DE','AT']}={}){
+    this.fetchImpl=fetchImpl;this.ttlMs=ttlMs;
+    this.geos=[...new Set(geos.map(x=>String(x).toUpperCase()).filter(x=>/^[A-Z]{2}$/.test(x)))];
+    if(!this.geos.length)this.geos=['DE'];
+    this.items=[];this.updatedAt=0;this.flight=null;
+  }
   async refresh(force=false){
     if(!force&&Date.now()-this.updatedAt<this.ttlMs)return this.items;
     if(this.flight)return this.flight;
     this.flight=(async()=>{
       try{
-        const response=await this.fetchImpl(endpoint,{headers:{accept:'application/rss+xml, application/xml, text/xml'},signal:AbortSignal.timeout(10000)});
-        if(!response.ok)throw new Error('GOOGLE_TRENDS_HTTP_'+response.status);
-        const xml=await response.text(),items=[...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)].map(m=>{
-          const title=decode(m[1].match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
-          const traffic=decode(m[1].match(/<ht:approx_traffic\b[^>]*>([\s\S]*?)<\/ht:approx_traffic>/i)?.[1]);
-          const pubDate=decode(m[1].match(/<pubDate\b[^>]*>([\s\S]*?)<\/pubDate>/i)?.[1]);
-          return {query:title,traffic,pubDate};
-        }).filter(x=>x.query);
+        const results=await Promise.all(this.geos.map(async country=>{
+          try{
+            const response=await this.fetchImpl(endpoint(country),{headers:{accept:'application/rss+xml, application/xml, text/xml'},signal:AbortSignal.timeout(10000)});
+            if(!response.ok)throw new Error('HTTP_'+response.status);
+            const xml=await response.text();
+            return [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)].map(m=>{
+              const title=decode(m[1].match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
+              const traffic=decode(m[1].match(/<ht:approx_traffic\b[^>]*>([\s\S]*?)<\/ht:approx_traffic>/i)?.[1]);
+              const pubDate=decode(m[1].match(/<pubDate\b[^>]*>([\s\S]*?)<\/pubDate>/i)?.[1]);
+              return {query:title,traffic,pubDate,country};
+            }).filter(x=>x.query);
+          }catch(e){log('GOOGLE_TRENDS_GEO_UNAVAILABLE',{country,reason:String(e?.message||'FETCH_FAILED').slice(0,50)});return [];}
+        }));
+        const items=results.flat();
         if(!items.length)throw new Error('GOOGLE_TRENDS_EMPTY');
         this.items=items;this.updatedAt=Date.now();
-        log('GOOGLE_TRENDS_REFRESHED',{country:'DE',count:items.length,source:'public_rss'});
+        log('GOOGLE_TRENDS_REFRESHED',{countries:this.geos,count:items.length,source:'public_rss'});
       }catch(e){
         log('GOOGLE_TRENDS_UNAVAILABLE',{reason:String(e?.message||'FETCH_FAILED').slice(0,60),usingCached:this.items.length>0});
       }finally{this.flight=null;}
@@ -48,7 +59,7 @@ export class GoogleTrends {
       const overlap=queryWords.filter(word=>contextWords.has(word));
       return {...item,queryWords,overlap,score:overlap.length/queryWords.length};
     }).filter(x=>x.queryWords.length>=2&&x.overlap.length>=2&&x.score>=0.66)
-      .sort((a,b)=>b.score-a.score)[0];
+      .sort((a,b)=>b.score-a.score||String(a.traffic).localeCompare(String(b.traffic),'en',{numeric:true}))[0];
     if(!match)return {copy,matchedQuery:null,changed:false};
     const next={...copy,searchTitle:fit(copy.searchTitle||copy.title,match.query,150),
       seoTitle:fit(copy.seoTitle||copy.title,match.query,70)};
@@ -59,6 +70,6 @@ export class GoogleTrends {
       next.seoDescription=(base?base+'. ':'')+phrase;
     }
     const changed=['searchTitle','seoTitle','seoDescription'].some(k=>next[k]!==copy[k]);
-    return {copy:next,matchedQuery:match.query,changed};
+    return {copy:next,matchedQuery:match.query,country:match.country,changed};
   }
 }
