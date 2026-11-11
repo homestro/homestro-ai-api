@@ -21,10 +21,14 @@ export function prepareExistingInputs(raw) {
       benefits:facts.map(f=>({factId:f.id,text:f.text}))};
     try{germanCopy=validateLocalized(candidate,facts);}catch{}
   }
+  const explicitBrand=String(raw.brandMetafield?.value||'').trim();
+  const vendor=String(raw.vendor||'').trim();
+  const brand=explicitBrand || (vendor && !/^(homestro|aliexpress|dsers)$/i.test(vendor) ? vendor : null);
+  const unbranded=String(raw.unbrandedMetafield?.value||'').toLowerCase()==='true' || tags.includes('homestro-unbranded');
   return {supplierReference:raw.supplierId?.jsonValue||null,landedCost:null,
     previouslyPublished:{facebook:raw.publishedFacebook?.jsonValue||null,instagram:raw.publishedInstagram?.jsonValue||null},
     // Owner previously confirmed existing DSers prices; never recalculate from zero cost.
-    priceReviewed:true,contentReviewed:Boolean(germanCopy),
+    priceReviewed:true,contentReviewed:Boolean(germanCopy),brand,unbranded,
     rightsVerified:tags.includes('homestro-media-rights-verified'),germanCopy,facts,productType,
-    categoryKey:/küch|kitchen|aufbewahr/i.test(productType||raw.title)?'kitchen':'home'};
+    categoryKey:/kopfhörer|kopfhoerer|headset|bluetooth|erazer|elektronik/i.test((productType||'')+' '+raw.title)?'electronics':/küch|kitchen|aufbewahr/i.test(productType||raw.title)?'kitchen':'home'};
 }
