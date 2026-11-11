@@ -4,7 +4,7 @@ const endpoint='https://trends.google.com/trending/rss?geo=DE';
 const decode=value=>String(value||'').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1')
   .replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>')
   .replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
-const stop=new Set('der die das ein eine und oder mit fur für von im in aus zu zum zur ohne bei den dem des auf an uber über bluetooth kopfhörer kopfhoerer shop produkt'.split(' '));
+const stop=new Set('der die das ein eine und oder mit fur für von im in aus zu zum zur ohne bei den dem des auf an uber über shop produkt'.split(' '));
 const words=value=>String(value||'').toLocaleLowerCase('de-DE').normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
   .match(/[a-z0-9]{2,}/g)?.filter(x=>!stop.has(x))||[];
 function fit(base,term,max) {
