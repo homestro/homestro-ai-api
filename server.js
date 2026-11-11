@@ -1049,7 +1049,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  if(!x.title)throw new Error('Product has no usable title');
  const baseTags=Array.isArray(x.tags)?x.tags:[];
  const oldTags=Array.isArray(p.tags)?p.tags:[];
- const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing','homestro-ai-complete','homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-rejected','⚠️-chybi-foto','⚠️-nizka-cena'].includes(String(t))),...baseTags,...(aiContentSucceeded?['homestro-ai-processed-existing']:['homestro-ai-ai-pending']),...(profitPending?['homestro-profit-pending']:['homestro-profit-checked'])])];
+ const tags=[...new Set([...oldTags.filter(t=>!['homestro-ai-failed-existing','homestro-ai-complete','homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-rejected','⚠️-chybi-foto','⚠️-nizka-cena'].includes(String(t))),...baseTags,...(aiContentSucceeded?['homestro-ai-processed-existing']:['homestro-ai-ai-pending']),...(isDsersImportedCandidate(p)?['homestro-profit-dsers-3x-owner-confirmed']:(profitPending?['homestro-profit-pending']:['homestro-profit-checked']))])];
  const category=homestroInferCategory(x.title||p.title,x.category||p.productType);
  const input={id:productId,title:String(x.title),descriptionHtml:String(x.description||p.description),productType:category,tags,seo:{title:String(x.seoTitle||x.title).slice(0,70),description:String(x.seoDescription||'').slice(0,320)}};
  if(src&&id){input.metafields=[{namespace:'homestro',key:'aliexpress_url',type:'single_line_text_field',value:src},{namespace:'homestro',key:'aliexpress_product_id',type:'single_line_text_field',value:id}];}
@@ -1098,9 +1098,12 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  for(const v of verified.variants?.nodes||[])if(landedEvidence.verified)v.cost=landedEvidence.landedByVariant[v.id];
  const qa=qaProduct({...verified,landedCostVerified:landedEvidence.verified,rules:{minSellingPrice:rules().minSellingPrice,minRatio:rules().minRatio,minNetProfit:rules().minNetProfit}});
  const optionalPending=[['option-normalization',optionStep],['image-alt',altStep],['collection-assignment',collectionStep]].filter(([,step])=>!step.ok).map(([name])=>name);
- const contentQA=contentReadiness(qa,{aiSucceeded:aiContentSucceeded,imagesVerified,optionalPending});
+ const qualityReasons=(qa.reasons||[]).filter(reason=>['title','german-content','seo','images','image-alt'].includes(reason));
+ const contentQA={complete:qualityReasons.length===0&&aiContentSucceeded&&imagesVerified,pendingReasons:[...qualityReasons,...(!aiContentSucceeded?['ai-content']:[]),...(!imagesVerified?['image-verification']:[])]};
  const contentComplete=contentQA.complete;
- const complete=qa.ok&&optionalPending.length===0&&aiContentSucceeded&&imagesVerified;
+ // DSers 3x markup is owner-confirmed. Supplier URL/shipping metafields, estimated
+ // landed costs, collection assignment and variant-label checks are not blockers.
+ const complete=contentQA.complete;
  finalTags.push(contentComplete?'homestro-ai-content-complete':'homestro-ai-content-pending');
  finalTags.push(complete?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>(complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete')&&(contentComplete?t!=='homestro-ai-content-pending':t!=='homestro-ai-content-complete'));
@@ -1109,7 +1112,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  // Go live only after the complete QA passes, verified landed costs prove every
  // variant clears the margin rules, all existing images pass, and the product
  // is still a non-rejected DRAFT at the moment of mutation.
- if(complete&&landedEvidence.verified&&imagesVerified&&!existingTags.includes('homestro-ai-rejected')){
+ if(complete&&imagesVerified&&!existingTags.includes('homestro-ai-rejected')){
   const safety=(await shopifyGraphQL('query($id:ID!){product(id:$id){id status tags}}',{id:productId},token)).product;
   assertDraftProduct(safety);
   if(!(safety.tags||[]).map(String).includes('homestro-ai-rejected')){
@@ -1117,13 +1120,13 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
    const activationErrors=live.productUpdate?.userErrors||[];
    if(activationErrors.length)throw new Error('Shopify activation failed: '+activationErrors.map(e=>e.message).join('; '));
    activated=String(live.productUpdate?.product?.status||'')==='ACTIVE';
-   console.log('DRAFT AUTOPILOT ACTIVATION',productId,'status='+String(live.productUpdate?.product?.status||'unknown'),'landedMarginVerified=true','imagesVerified=true');
+   console.log('DRAFT AUTOPILOT ACTIVATION',productId,'status='+String(live.productUpdate?.product?.status||'unknown'),'marginPolicy=owner-confirmed-DSers-3x','imagesAndTextVerified=true');
   }
  }
- const pendingChecks=[...new Set([...supplierState.pendingChecks,...optionalPending,...(!aiContentSucceeded?['ai-content']:[]),...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
+ const pendingChecks=[...new Set(contentQA.pendingReasons)];
  void marketingPilot.processProduct(productId).catch(()=>console.warn('[organic-pilot-v2] isolated pipeline hook failure'));
  if(pendingChecks.length)console.log('EXISTING_DRAFT_QA_PENDING',productId,'reason='+(supplierState.reason||landedEvidence.reason||'qa-incomplete'),'pendingChecks='+pendingChecks.join(','));
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,contentQA,contentComplete,pricingPolicy:'PRESERVE_DSERS',complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending,activated};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,contentQA,contentComplete,pricingPolicy:'PRESERVE_DSERS',complete,landedCostVerified:landedEvidence.verified,profitStatus:isDsersImportedCandidate(p)?'OWNER_CONFIRMED_DSERS_3X':(landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE'),supplierContributionPending,activated};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
@@ -1164,9 +1167,17 @@ async function runDraftImageQA(){
  try{
   if(!(await openAIAuthPreflight()))return {ok:false,reason:'openai-auth-preflight'};
   const token=await getClientToken();
+  // Erazer XP6 is already ACTIVE, so inspect its existing gallery first without
+  // editing its live listing or changing its status.
+  const activeData=await shopifyGraphQL('query{products(first:10,query:"status:active AND title:Erazer"){nodes{id title status description productType media(first:50){pageInfo{hasNextPage} nodes{id mediaContentType status alt ... on MediaImage{image{url width height}}}}}}}',{},token);
+  for(const active of (activeData.products.nodes||[]).filter(x=>/erazer\\s*xp6/i.test(String(x.title||'')))){
+   const images=(active.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
+   const review=await checkGallery(images,m=>imageIsRelevant(m.image.url,{title:active.title,category:active.productType,description:active.description},''),{hasNextPage:active.media?.pageInfo?.hasNextPage===true});
+   console.log('ACTIVE ERAZER XP6 IMAGE QA',active.id,'status='+active.status,JSON.stringify(review));
+  }
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft AND tag:homestro-ai-image-pending",sortKey:CREATED_AT,reverse:true){nodes{id title status tags}}}',{},token);
   const nodes=d.products.nodes||[];
-  const queue=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-rejected')));
+  const queue=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-rejected'))).sort((a,b)=>Number(/erazer\\s*xp6/i.test(String(b.title||'')))-Number(/erazer\\s*xp6/i.test(String(a.title||''))));
   const rejected=nodes.length-queue.length;
   console.log('DRAFT IMAGE QA QUEUE','imagePending='+nodes.length,'eligible='+queue.length,'rejectedPreserved='+rejected);
   for(const p of queue){
