@@ -55,8 +55,8 @@ export class GoogleTrends {
     const phrase='Aktuell gesucht: '+match.query+'.';
     if(!String(next.seoDescription||'').toLocaleLowerCase('de-DE').includes(match.query.toLocaleLowerCase('de-DE'))){
       const desc=String(next.seoDescription||copy.description||'').trim();
-      next.seoDescription=(desc?desc.replace(/[.!?]?\s*$/,'')+'. ':'')+phrase;
-      next.seoDescription=next.seoDescription.slice(0,160).replace(/[\s,;:–—-]+$/,'');
+      const base=desc.slice(0,Math.max(0,160-phrase.length-2)).replace(/[\s.!?,;:–—-]+$/,'');
+      next.seoDescription=(base?base+'. ':'')+phrase;
     }
     const changed=['searchTitle','seoTitle','seoDescription'].some(k=>next[k]!==copy[k]);
     return {copy:next,matchedQuery:match.query,changed};
