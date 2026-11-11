@@ -84,7 +84,12 @@ class Ledger:
         db.execute("PRAGMA journal_mode=WAL")
         return db
 
-    def choose_product(self, candidates: list[dict[str, Any]], requested_id: str) -> dict[str, Any] | None:
+    def choose_product(
+        self,
+        candidates: list[dict[str, Any]],
+        requested_id: str,
+        priority_query: str = "Lenovo Erazer XP6",
+    ) -> dict[str, Any] | None:
         with closing(self.connect()) as db:
             prior = db.execute(
                 "SELECT product_id,state,updated_at FROM product_runs ORDER BY updated_at DESC"
@@ -92,26 +97,48 @@ class Ledger:
         by_id = {p["id"]: p for p in candidates}
         now = datetime.now(UTC)
         completed = set()
+        retryable_ids = set()
         for product_id, state, updated_at in prior:
             try:
                 age = (now - datetime.fromisoformat(updated_at)).total_seconds()
             except (TypeError, ValueError):
                 age = 0
             retryable = state == "retryable" or (state == "reserved" and age >= 60)
-            if retryable and product_id in by_id and (not requested_id or product_id == requested_id):
-                return by_id[product_id]
-            if not retryable:
+            if retryable:
+                retryable_ids.add(product_id)
+            else:
                 completed.add(product_id)
 
-        available = [p for p in candidates
-                     if p["id"] not in completed and (not requested_id or p["id"] == requested_id)]
+        available = [p for p in candidates if p["id"] not in completed]
         if not available:
             return None
-        def rank(product: dict[str, Any]) -> tuple[int, str]:
+
+        query = priority_query.casefold().strip()
+        priority_matches = [
+            p for p in available
+            if query and query in f"{p.get('title', '')} {p.get('link', '')}".casefold()
+        ]
+        # An explicit product ID remains a fallback, while the requested XP6
+        # priority takes precedence over stale or unrelated pinned IDs.
+        if priority_matches:
+            available = priority_matches
+        elif requested_id and requested_id in by_id:
+            requested = by_id[requested_id]
+            if requested not in available:
+                return None
+            available = [requested]
+        else:
+            available = [
+                p for p in available
+                if p["id"] in retryable_ids
+            ] or available
+
+        def rank(product: dict[str, Any]) -> tuple[int, int, str]:
             tags = product.get("tags") or []
             normalized = {str(tag).casefold().replace("-", "_") for tag in tags}
             bestseller = int(bool(normalized & {"bestseller", "best_seller", "top seller"}))
-            return (-bestseller, product["id"])
+            return (0 if product["id"] in retryable_ids else 1, -bestseller, product["id"])
+
         return sorted(available, key=rank)[0]
 
     def has_completed_today(self) -> bool:
@@ -674,7 +701,7 @@ async def run_once() -> dict[str, Any]:
                     "campaign_id": campaign_id, "adset_id": adset_id}
 
     feed = await hunt_one()
-    product = ledger.choose_product(feed["products"], os.getenv("FRANKENSTEIN_PRODUCT_ID", "").strip())
+    product = ledger.choose_product(\n        feed["products"],\n        os.getenv("FRANKENSTEIN_PRODUCT_ID", "").strip(),\n        os.getenv("FRANKENSTEIN_PRIORITY_PRODUCT_QUERY", "Lenovo Erazer XP6").strip(),\n    )
     if product is None:
         return {"status": "complete", "reason": "NO_UNPROCESSED_ELIGIBLE_PRODUCT",
                 "products_checked": feed["products_checked"], "openai_called": False, "meta_called": False}
