@@ -31,7 +31,7 @@ const {normalizeOptionName,normalizeVariantValue,priceForCost,categoryKey,varian
 const app=express();
 const PORT=Number(process.env.PORT||8080);
 app.use(cors({origin:true}));
-app.use(express.json({limit:'4mb'}));
+app.use(express.json({limit:'4mb',verify:(req,_res,buf)=>{req.rawBody=Buffer.from(buf);}}));
 function cfg(){const domain=String(process.env.SHOPIFY_STORE_DOMAIN||'').trim().replace(/^https?:\/\//,'').replace(/\/$/,'');return{domain,token:String(process.env.SHOPIFY_ACCESS_TOKEN||'').trim(),clientId:String(process.env.SHOPIFY_CLIENT_ID||'').trim(),clientSecret:String(process.env.SHOPIFY_CLIENT_SECRET||'').trim()};}
 let cached={token:'',expires:0};
 async function getClientToken(){const c=cfg();if(!c.domain)throw Object.assign(new Error('Shopify is not configured.'),{status:503});if(cached.token&&Date.now()<cached.expires-60000)return cached.token;const direct=String(process.env.SHOPIFY_ACCESS_TOKEN||process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN||'').trim();if(direct)return direct;if(!c.clientId||!c.clientSecret)throw Object.assign(new Error('Shopify credentials are not configured.'),{status:503});const body=new URLSearchParams({client_id:c.clientId,client_secret:c.clientSecret,grant_type:'client_credentials'});const r=await fetch(`https://${c.domain}/admin/oauth/access_token`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'},body});const text=await r.text();let d={};try{d=JSON.parse(text);}catch{throw Object.assign(new Error(`Shopify token endpoint returned HTTP ${r.status} instead of JSON (content-type: ${r.headers.get('content-type')||'unknown'}). Check Shopify app credentials/installation.`),{status:502});}if(!r.ok||!d.access_token)throw Object.assign(new Error(d.error_description||d.error||`Shopify token request failed (HTTP ${r.status})`),{status:502});cached={token:d.access_token,expires:Date.now()+Number(d.expires_in||86400)*1000};return cached.token;}
@@ -46,6 +46,30 @@ const metaAccess={getCredentials:()=>metaConnection.credentials(),onCredentialEr
 registerMetaOrganic(app,apiKey,metaAccess);
 if(process.env.PILOT_V2_ENABLED!=='true')registerOrganicCatalog(app,apiKey,shopifyGraphQL,metaAccess);
 const marketingPilot=registerMarketingPilot(app,{graphql:shopifyGraphQL,apiKey,...metaAccess});
+const shopifyProductWebhookSeen=new Map();
+app.post('/webhooks/shopify/products',(req,res)=>{
+  const secret=cfg().clientSecret,signature=String(req.get('x-shopify-hmac-sha256')||''),raw=req.rawBody;
+  const suppliedShop=String(req.get('x-shopify-shop-domain')||'').toLowerCase();
+  const expectedShop=cfg().domain.toLowerCase();
+  if(!secret||!raw||!signature||suppliedShop!==expectedShop)return res.status(401).send('Unauthorized');
+  const expected=crypto.createHmac('sha256',secret).update(raw).digest();
+  let received;try{received=Buffer.from(signature,'base64');}catch{return res.status(401).send('Unauthorized');}
+  if(received.length!==expected.length||!crypto.timingSafeEqual(received,expected))return res.status(401).send('Unauthorized');
+  const topic=String(req.get('x-shopify-topic')||'');
+  if(!['products/create','products/update'].includes(topic))return res.status(404).send('Unsupported topic');
+  const delivery=String(req.get('x-shopify-webhook-id')||'');
+  if(delivery&&shopifyProductWebhookSeen.has(delivery))return res.status(200).send('Already accepted');
+  if(delivery){
+    shopifyProductWebhookSeen.set(delivery,Date.now());
+    if(shopifyProductWebhookSeen.size>2000)for(const [key,seenAt] of shopifyProductWebhookSeen)if(Date.now()-seenAt>3600000)shopifyProductWebhookSeen.delete(key);
+  }
+  const productId=String(req.body?.admin_graphql_api_id||'');
+  if(!/^gid:\/\/shopify\/Product\/\d+$/.test(productId))return res.status(400).send('Invalid product id');
+  res.status(202).send('Accepted');
+  void marketingPilot.processProduct(productId).then(result=>{
+    console.log('[shopify-product-webhook] '+JSON.stringify({topic,productId,status:result?.status||'unknown'}));
+  }).catch(()=>console.warn('[shopify-product-webhook] PROCESSING_FAILED'));
+});
 const msMetaBusiness=registerMsMetaBusiness(app,{apiKey});
 const googleBusiness=registerMsGoogleBusiness(app,{apiKey,buildDraft});
 registerMsHandwerkOrganic(app,apiKey,{googleBusiness,metaBusiness:msMetaBusiness});
