@@ -12,6 +12,7 @@ const {registerMetaConnection}=require('./meta-connection');
 const {registerOrganicCatalog}=require('./organic-catalog');
 const {registerMarketingPilot}=require('./homestro-marketing-pilot/runtime.cjs');
 const {registerMsHandwerkOrganic,buildDraft}=require('./ms-handwerk-organic');
+const {registerMsHandwerkLeadsDryRun}=require('./ms-handwerk-leads-dry-run');
 const {registerMsGoogleBusiness}=require('./ms-google-business');
 const {registerMsMetaBusiness}=require('./ms-meta-business');
 const {registerGoogleOrganicFeed}=require('./google-organic-feed');
@@ -77,6 +78,7 @@ app.post('/webhooks/shopify/products',(req,res)=>{
 const msMetaBusiness=registerMsMetaBusiness(app,{apiKey});
 const googleBusiness=registerMsGoogleBusiness(app,{apiKey,buildDraft});
 registerMsHandwerkOrganic(app,apiKey,{googleBusiness,metaBusiness:msMetaBusiness});
+registerMsHandwerkLeadsDryRun(app);
 registerGoogleOrganicFeed(app,shopifyGraphQL,{getPilotFeed:async()=>{const pilot=await marketingPilot.ready;if(!pilot?.enabled||!pilot.feedXML)throw new Error('Pilot feed unavailable');return pilot.feedXML();}});
 registerSupplierQuoteBridge(app,{apiKey,graphql:shopifyGraphQL,getToken:getClientToken});
 async function sidekick(req,res,next){try{req.sidekick=await getRequestToken(req);next();}catch(e){res.set('X-Shopify-Retry-Invalid-Session-Request','1');res.status(e.status||401).json({ok:false,error:e.message});}}
