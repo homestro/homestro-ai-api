@@ -580,7 +580,7 @@ class MetaBuyer:
                                activate: bool) -> dict[str, Any]:
         if not 0 < daily_eur <= HARD_META_DAILY_EUR:
             raise RuntimeError("FRANKENSTEIN_DAILY_BUDGET_OUT_OF_POLICY")
-        if not 0 < total_eur <= HARD_META_TOTAL_EUR or total_eur > daily_eur * 7:
+        if not 0 < total_eur <= HARD_META_TOTAL_EUR or total_eur > daily_eur * 10:
             raise RuntimeError("FRANKENSTEIN_TOTAL_BUDGET_OUT_OF_POLICY")
         remaining_cap = await self._remaining_account_cap_eur()
         effective_total = min(total_eur, remaining_cap)
