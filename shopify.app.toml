@@ -6,6 +6,13 @@ embedded = true
 [access_scopes]
 scopes = "read_products,read_reports,write_products,write_files,write_content"
 
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["products/create", "products/update"]
+uri = "/webhooks/shopify/products"
+
 [auth]
 redirect_urls = [
   "https://homestro-ai-api-fixed-current-production.up.railway.app/auth/callback",
