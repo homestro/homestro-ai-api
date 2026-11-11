@@ -377,7 +377,7 @@ async function discoverImages(input){
  const supplied=[...(Array.isArray(input?.image_urls)?input.image_urls:[]),...(Array.isArray(input?.imageUrls)?input.imageUrls:[])].map(String);
  return{urls:[...new Set([...found.image_urls,...supplied])].slice(0,20),pageContext:(found.page_title+' '+found.page_text).slice(0,4000),details:found};
 }
-let imageVisionQueue=Promise.resolve(),imageVisionLastAt=0;
+let imageVisionQueue=Promise.resolve(),imageVisionLastAt=0,imageVisionQuotaBlocked=false;
 function imageVisionRequest(task){
  const queued=imageVisionQueue.then(async()=>{
   const wait=Math.max(0,1000-(Date.now()-imageVisionLastAt));
@@ -389,7 +389,7 @@ function imageVisionRequest(task){
  return queued;
 }
 async function imageIsRelevant(url,input,pageContext){
- if(!process.env.OPENAI_API_KEY)return false;
+ if(imageVisionQuotaBlocked||!process.env.OPENAI_API_KEY)return false;
  const model=process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||'gpt-5-mini';
  const prompt='Prüfe dieses konkrete Produktbild für Homestro extrem streng. Freigabe NUR wenn exakt das Produkt aus dem Produktnamen/der Beschreibung gezeigt wird und das Bild für einen deutschen Online-Shop geeignet ist. ABLEHNEN bei anderem Produkt, Zubehör statt Hauptprodukt, Banner, Logo, Wasserzeichen, Verpackung als Hauptmotiv, chinesischen/japanischen/koreanischen Schriftzeichen, fremdsprachigem Werbetext, irreführenden Angaben, starker Unschärfe oder schlechter Qualität. Wenn du unsicher bist, ABLEHNEN. Produkt: '+String(input?.title||'')+'. Kategorie: '+String(input?.category||input?.productType||'')+'. Beschreibung: '+homestroPlain(input?.description||'').slice(0,1500)+'. Quellkontext: '+String(pageContext||'').slice(0,3000)+'. Antworte nur JSON {"relevant":true/false,"confidence":0-1,"hasForeignText":true/false,"lowQuality":true/false}.';
  return imageVisionRequest(async()=>{
@@ -400,7 +400,7 @@ async function imageIsRelevant(url,input,pageContext){
     if(r.status===429){
      const error=d?.error||{},code=String(error.code||''),type=String(error.type||'');
      console.error('IMAGE VISION RATE LIMITED','code='+code,'type='+type);
-     if(code==='insufficient_quota'||type==='insufficient_quota'||attempt===2)return false;
+     if(code==='insufficient_quota'||type==='insufficient_quota'){imageVisionQuotaBlocked=true;return false;} if(attempt===2)return false;
      const retryAfter=Number(r.headers.get('retry-after'));
      const delay=Number.isFinite(retryAfter)&&retryAfter>0?Math.min(30000,retryAfter*1000):Math.min(15000,3000*(attempt+1));
      await new Promise(resolve=>setTimeout(resolve,delay));
