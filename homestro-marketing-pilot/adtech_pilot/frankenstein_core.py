@@ -650,7 +650,10 @@ async def run_once() -> dict[str, Any]:
         )
 
     ledger = Ledger(os.getenv("FRANKENSTEIN_DB_PATH", "/data/frankenstein/ledger.sqlite3"))
-    if ledger.has_completed_today():
+    # One-off owner override: skips the daily lock only on the exact Berlin date set.
+    bypass_date = os.getenv("FRANKENSTEIN_BYPASS_DAILY_LOCK_DATE", "").strip()
+    bypass_today = bypass_date == datetime.now(UTC).astimezone(ZoneInfo("Europe/Berlin")).date().isoformat()
+    if ledger.has_completed_today() and not bypass_today:
         return {"status": "complete", "reason": "DAILY_PRODUCT_RUN_ALREADY_COMPLETED",
                 "openai_called": False, "meta_called": False}
 
