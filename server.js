@@ -980,7 +980,7 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  });
  const profitability=ebayProfitability({selling_price:price,landed_cost_eur:cost});
  const supplierContributionPending=variantEconomics.length===0||variantEconomics.some(v=>!Number.isFinite(v.cost)||v.cost<=0||!v.economics.valid);
- const profitPending=!landedEvidence.verified||supplierContributionPending;
+ const profitPending=!isDsersImportedCandidate(p)&&(!landedEvidence.verified||supplierContributionPending);
  let x=null;
  const aiInput={
   title:details.page_title||p.title,
