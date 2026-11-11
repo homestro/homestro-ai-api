@@ -5,7 +5,7 @@ import {extractMedia} from './media.js';
 export function snapshot(raw,extras={},feeRate=0) {
   const variants=(raw.variants||[]).map(v=>({id:v.id,title:v.title,price:Number(v.price),
     available:typeof v.availableForSale==='boolean'?v.availableForSale:
-      Number(v.inventoryQuantity)>0 || v.inventoryPolicy==='CONTINUE',barcode:v.barcode||null}));
+      Number(v.inventoryQuantity)>0 || v.inventoryPolicy==='CONTINUE',barcode:v.barcode||null,mpn:v.mpnMetafield?.value||null}));
   const p={preparationVersion:5,rejected:(raw.tags||[]).some(t=>/^homestro-(?:ai|qa)-rejected$/i.test(String(t).trim())),id:raw.id,title:raw.title,description:raw.description,status:raw.status,
     url:raw.onlineStoreUrl,variants,media:raw.media||[],currency:'EUR',
     supplierReference:extras.supplierReference||null,landedCost:extras.landedCost??null,
