@@ -1098,10 +1098,25 @@ async function processExistingDraftProduct(productId,token){ const d=await shopi
  finalTags.push(complete?'homestro-ai-complete':'homestro-ai-qa-pending');
  const cleanFinal=finalTags.filter(t=>(complete?t!=='homestro-ai-qa-pending':t!=='homestro-ai-complete')&&(contentComplete?t!=='homestro-ai-content-pending':t!=='homestro-ai-content-complete'));
  await setProductTags(productId,[...new Set(cleanFinal)],token);
+ let activated=false;
+ // Go live only after the complete QA passes, verified landed costs prove every
+ // variant clears the margin rules, all existing images pass, and the product
+ // is still a non-rejected DRAFT at the moment of mutation.
+ if(complete&&landedEvidence.verified&&imagesVerified&&!existingTags.includes('homestro-ai-rejected')){
+  const safety=(await shopifyGraphQL('query($id:ID!){product(id:$id){id status tags}}',{id:productId},token)).product;
+  assertDraftProduct(safety);
+  if(!(safety.tags||[]).map(String).includes('homestro-ai-rejected')){
+   const live=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id status}userErrors{field message}}}',{input:{id:productId,status:'ACTIVE'}},token);
+   const activationErrors=live.productUpdate?.userErrors||[];
+   if(activationErrors.length)throw new Error('Shopify activation failed: '+activationErrors.map(e=>e.message).join('; '));
+   activated=String(live.productUpdate?.product?.status||'')==='ACTIVE';
+   console.log('DRAFT AUTOPILOT ACTIVATION',productId,'status='+String(live.productUpdate?.product?.status||'unknown'),'landedMarginVerified=true','imagesVerified=true');
+  }
+ }
  const pendingChecks=[...new Set([...supplierState.pendingChecks,...optionalPending,...(!aiContentSucceeded?['ai-content']:[]),...(!landedEvidence.verified&&supplierState.available?['variant-landed-cost','destination-shipping','matched-market-price']:[]),...(qa.reasons||[])])];
  void marketingPilot.processProduct(productId).catch(()=>console.warn('[organic-pilot-v2] isolated pipeline hook failure'));
  if(pendingChecks.length)console.log('EXISTING_DRAFT_QA_PENDING',productId,'reason='+(supplierState.reason||landedEvidence.reason||'qa-incomplete'),'pendingChecks='+pendingChecks.join(','));
- return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,contentQA,contentComplete,pricingPolicy:'PRESERVE_DSERS',complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending};
+ return {id:productId,title:x.title,source_url:src||null,source_product_id:id||null,images:media.count,variants:(p.variants?.nodes||[]).length,optionsUpdated,variantsUpdated,variantImages,collection,optionalOperations:{options:optionStep,collection:collectionStep},price,cost:supplierState.available&&Number.isFinite(cost)?cost:null,supplierCost,ratio:supplierState.available&&Number.isFinite(ratio)?ratio:null,profitPending,estimatedProfitEur:supplierState.available?profitability.estimatedProfitEur:null,pricingChanged:pricing.changed,processed:true,skipped:false,reason:supplierState.reason,pendingChecks,contentUpdated:contentNeedsWork,mediaValidation:media.validation,imagesVerified,qa,contentQA,contentComplete,pricingPolicy:'PRESERVE_DSERS',complete,landedCostVerified:landedEvidence.verified,profitStatus:landedEvidence.verified?'VERIFIED_LANDED_COST':'PENDING_SUPPLIER_EVIDENCE',supplierContributionPending,activated};
 }
 async function processExistingDrafts(limit,token){
  const d=await shopifyGraphQL('query($first:Int!,$query:String){products(first:$first,query:$query,sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor tags metafields(first:20){nodes{key value}}}}}',{first:50,query:'status:draft'},token);
@@ -1123,44 +1138,45 @@ async function processExistingDrafts(limit,token){
 }
 const draftAutopilotState={running:false,imageRunning:false,lastRun:null,lastError:null,processed:0,skipped:0,pending:0,lastResult:null};
 function draftAutopilotInterval(){const n=Number(process.env.HOMESTRO_AUTOPILOT_INTERVAL_MS||300000);return Number.isFinite(n)&&n>=60000?n:300000;}
-async function runDraftImageQA(){
- if(process.env.HOMESTRO_IMAGE_QA_ENABLED==='false'){console.log('DRAFT IMAGE QA DISABLED');return {disabled:true};}
- if(draftAutopilotState.imageRunning)return;
- draftAutopilotState.imageRunning=true;
+async function openAIAuthPreflight(){
+ const key=String(process.env.OPENAI_API_KEY||'').trim();
+ if(!key){console.error('OPENAI_KEY_PREFLIGHT_FAILED reason=missing');return false;}
  try{
-  const token=await getClientToken();
-  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft",sortKey:CREATED_AT,reverse:true){nodes{id title status description vendor productType tags metafields(first:20,namespace:"homestro"){nodes{key value}} media(first:20){nodes{id mediaContentType status alt ... on MediaImage { image { url } }}}}}}',{},token);
-  const nodes=d.products.nodes||[];
-  const imageEligible=nodes.filter(p=>{const mf=Object.fromEntries((p.metafields?.nodes||[]).map(m=>[m.key,m.value]));return !p.tags?.includes('homestro-ai-rejected')&&Boolean(aliExpressReference({url:mf.aliexpress_url,description:p.description}).url)&&String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-images-verified'))&&!((p.tags||[]).map(String).includes('homestro-ai-image-pending'));}).slice(0,50);
-  console.log('DRAFT IMAGE QA QUEUE','drafts='+nodes.length,'eligible='+imageEligible.length);
-  for(const p of imageEligible){
-   try{
-    const result=await repairExistingDraftImages(p.id,p,token);
-    const safety=await shopifyGraphQL('query($id:ID!){product(id:$id){status}}',{id:p.id},token);
-    assertDraftProduct(safety.product);
-    const tags=[...(p.tags||[]).map(String)].filter(t=>!['homestro-ai-images-checked','homestro-ai-image-pending','homestro-ai-complete','homestro-ai-images-verified'].includes(t));
-    // Image QA is only one stage. It must never independently declare the
-    // complete product ready (content, variants, pricing and collection may fail).
-    tags.push('homestro-ai-images-verified');
-    const u=await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{field message}}}',{input:{id:p.id,tags:[...new Set(tags)]}},token);
-    const errs=u.productUpdate?.userErrors||[];
-    if(errs.length)throw new Error(errs.map(x=>x.message).join('; '));
-    console.log('DRAFT IMAGE REPAIR COMPLETE',p.id,'checked='+result.checked,'kept='+result.kept,'removed='+result.removed,'generated='+result.generated);
-   }catch(e){
-    try{
-      const current=await shopifyGraphQL('query($id:ID!){product(id:$id){status tags}}',{id:p.id},token);
-      assertDraftProduct(current.product);
-      const tags=[...(current.product?.tags||[]).map(String)].filter(t=>!['homestro-ai-complete','homestro-ai-images-verified','homestro-ai-images-checked'].includes(t));
-      tags.push('homestro-ai-image-pending');
-      await shopifyGraphQL('mutation($input:ProductInput!){productUpdate(input:$input){product{id tags}userErrors{message}}}',{input:{id:p.id,tags:[...new Set(tags)]}},token);
-    }catch{}
-    console.error('DRAFT IMAGE REPAIR FAILED',p.id,e.message);
-   }
-  }
- }catch(e){console.error('DRAFT IMAGE QA FAILED',e.message);}
- finally{draftAutopilotState.imageRunning=false;}
+  const response=await fetch('https://api.openai.com/v1/models',{method:'GET',headers:{Authorization:'Bearer '+key},signal:AbortSignal.timeout(15000)});
+  if(!response.ok){console.error('OPENAI_KEY_PREFLIGHT_FAILED status='+response.status);return false;}
+  console.log('OPENAI_KEY_PREFLIGHT_OK');
+  return true;
+ }catch(e){console.error('OPENAI_KEY_PREFLIGHT_FAILED reason=network');return false;}
 }
 
+async function runDraftImageQA(){
+ if(process.env.HOMESTRO_IMAGE_QA_ENABLED==='false'){console.log('DRAFT IMAGE QA DISABLED');return {disabled:true};}
+ if(draftAutopilotState.imageRunning||draftAutopilotState.running)return {busy:true};
+ draftAutopilotState.imageRunning=true;
+ let processed=0,activated=0,pending=0,skipped=0;
+ try{
+  if(!(await openAIAuthPreflight()))return {ok:false,reason:'openai-auth-preflight'};
+  const token=await getClientToken();
+  const d=await shopifyGraphQL('query{products(first:50,query:"status:draft AND tag:homestro-ai-image-pending",sortKey:CREATED_AT,reverse:true){nodes{id title status tags}}}',{},token);
+  const nodes=d.products.nodes||[];
+  const queue=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-rejected')));
+  const rejected=nodes.length-queue.length;
+  console.log('DRAFT IMAGE QA QUEUE','imagePending='+nodes.length,'eligible='+queue.length,'rejectedPreserved='+rejected);
+  for(const p of queue){
+   try{
+    const result=await processExistingDraftProduct(p.id,token);
+    if(result.processed)processed++;
+    if(result.complete&&result.activated===true)activated++;
+    if(!result.complete)pending++;
+    if(result.skipped)skipped++;
+    console.log('DRAFT IMAGE QA PRODUCT',p.id,'imagesVerified='+Boolean(result.imagesVerified),'complete='+Boolean(result.complete),'activated='+Boolean(result.activated));
+   }catch(e){pending++;console.error('DRAFT IMAGE QA PRODUCT FAILED',p.id,String(e?.message||e));}
+  }
+  console.log('DRAFT IMAGE QA COMPLETE','queued='+queue.length,'processed='+processed,'activated='+activated,'pending='+pending,'rejectedPreserved='+rejected);
+  return {queued:queue.length,processed,activated,pending,rejectedPreserved:rejected};
+ }catch(e){console.error('DRAFT IMAGE QA FAILED',String(e?.message||e));return {ok:false,error:String(e?.message||e)};}
+ finally{draftAutopilotState.imageRunning=false;}
+}
 async function draftAutopilotRun(limit=50){
  if(draftAutopilotState.running)return;
  draftAutopilotState.running=true;
