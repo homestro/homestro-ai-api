@@ -380,6 +380,7 @@ async function discoverImages(input){
 let imageVisionQueue=Promise.resolve(),imageVisionLastAt=0,imageVisionQuotaBlocked=false;
 function imageVisionRequest(task){
  const queued=imageVisionQueue.then(async()=>{
+  if(imageVisionQuotaBlocked)return false;
   const wait=Math.max(0,1000-(Date.now()-imageVisionLastAt));
   if(wait)await new Promise(resolve=>setTimeout(resolve,wait));
   imageVisionLastAt=Date.now();
