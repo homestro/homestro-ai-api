@@ -1170,14 +1170,14 @@ async function runDraftImageQA(){
   // Erazer XP6 is already ACTIVE, so inspect its existing gallery first without
   // editing its live listing or changing its status.
   const activeData=await shopifyGraphQL('query{products(first:10,query:"status:active AND title:Erazer"){nodes{id title status description productType media(first:50){pageInfo{hasNextPage} nodes{id mediaContentType status alt ... on MediaImage{image{url width height}}}}}}}',{},token);
-  for(const active of (activeData.products.nodes||[]).filter(x=>/erazer\\s*xp6/i.test(String(x.title||'')))){
+  for(const active of (activeData.products.nodes||[]).filter(x=>/erazer\s*xp6/i.test(String(x.title||'')))){
    const images=(active.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
    const review=await checkGallery(images,m=>imageIsRelevant(m.image.url,{title:active.title,category:active.productType,description:active.description},''),{hasNextPage:active.media?.pageInfo?.hasNextPage===true});
    console.log('ACTIVE ERAZER XP6 IMAGE QA',active.id,'status='+active.status,JSON.stringify(review));
   }
   const d=await shopifyGraphQL('query{products(first:50,query:"status:draft AND tag:homestro-ai-image-pending",sortKey:CREATED_AT,reverse:true){nodes{id title status tags}}}',{},token);
   const nodes=d.products.nodes||[];
-  const queue=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-rejected'))).sort((a,b)=>Number(/erazer\\s*xp6/i.test(String(b.title||'')))-Number(/erazer\\s*xp6/i.test(String(a.title||''))));
+  const queue=nodes.filter(p=>String(p.status)==='DRAFT'&&!((p.tags||[]).map(String).includes('homestro-ai-rejected'))).sort((a,b)=>Number(/erazer\s*xp6/i.test(String(b.title||'')))-Number(/erazer\s*xp6/i.test(String(a.title||''))));
   const rejected=nodes.length-queue.length;
   console.log('DRAFT IMAGE QA QUEUE','imagePending='+nodes.length,'eligible='+queue.length,'rejectedPreserved='+rejected);
   for(const p of queue){
