@@ -37,8 +37,8 @@ export function generateFeed(products,cfg) {
       const mpn=String(v.mpn||'').trim();
       if(brand)content+=tag('brand',brand);
       if(gtin)content+=tag('gtin',gtin);
-      else if(mpn)content+=tag('mpn',mpn);
-      else if(p.unbranded)content+=tag('identifier_exists','no');
+      if(mpn)content+=tag('mpn',mpn);
+      if(!gtin&&!mpn&&p.unbranded)content+=tag('identifier_exists','no');
       if(p.productType)content+=tag('product_type',p.productType);
       for(const s of cfg.shipping){
         const price=Number.isFinite(s.freeFrom) && v.price>=s.freeFrom?0:s.price;
