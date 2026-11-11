@@ -2,7 +2,9 @@ import {fail} from './core.js';
 
 export const PRODUCT_QUERY=`query PilotProduct($id:ID!, $mediaAfter:String, $variantsAfter:String) {
   product(id:$id) {
-    id title description descriptionHtml status handle updatedAt onlineStoreUrl tags productType
+    id title description descriptionHtml status handle updatedAt onlineStoreUrl tags productType vendor
+    brandMetafield: metafield(namespace:"homestro",key:"brand") { value }
+    unbrandedMetafield: metafield(namespace:"homestro",key:"unbranded") { value }
     seo { title description }
     seoTitleTag: metafield(namespace:"global",key:"title_tag") { id value }
     seoDescriptionTag: metafield(namespace:"global",key:"description_tag") { id value }
@@ -16,7 +18,9 @@ export const PRODUCT_QUERY=`query PilotProduct($id:ID!, $mediaAfter:String, $var
       } pageInfo { hasNextPage endCursor }
     }
     variants(first:50, after:$variantsAfter) {
-      nodes { id title price availableForSale inventoryQuantity inventoryPolicy barcode }
+      nodes { id title price availableForSale inventoryQuantity inventoryPolicy barcode
+        mpnMetafield: metafield(namespace:"homestro",key:"mpn") { value }
+      }
       pageInfo { hasNextPage endCursor }
     }
   }
