@@ -177,14 +177,21 @@ async function aiProduct(input){
  const request=async(messages)=>{
   const attempts=[
    {max_output_tokens:8000,reasoning:{effort:'low'}},
-   {max_output_tokens:12000,reasoning:{effort:'minimal'}}
+   {max_output_tokens:12000,reasoning:{effort:'minimal'}},
+   {max_output_tokens:8000}
   ];
   let lastError=null;
   for(let attempt=0;attempt<attempts.length;attempt++){
    const settings=attempts[attempt];
    const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:messages,text:{format:{type:'json_object'}},...settings})});
    const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{lastError=new Error('OpenAI returned non-JSON HTTP '+r.status);if(attempt+1<attempts.length)continue;throw lastError;}
-   if(!r.ok){lastError=new Error(d?.error?.message||'OpenAI request failed');if(attempt+1<attempts.length&&r.status>=500)continue;throw lastError;}
+   if(!r.ok){
+    const message=String(d?.error?.message||'OpenAI request failed');
+    lastError=new Error(message);
+    const unsupportedReasoning=/reasoning\.effort.*not supported|unsupported.*reasoning\.effort/i.test(message);
+    if(attempt+1<attempts.length&&(r.status>=500||unsupportedReasoning))continue;
+    throw lastError;
+   }
    try{
     const text=extractOpenAiResponseText(d,{httpStatus:r.status});
     const parsed=cleanJson(text);
