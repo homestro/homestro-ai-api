@@ -82,7 +82,7 @@ function parseStaticListings(sourceKey, html) {
   if (!source) throw new Error('UNKNOWN_FIXTURE_SOURCE');
   if (typeof html !== 'string') throw new Error('INVALID_FIXTURE_HTML');
 
-  const blocks = html.match(/<article\\b[^>]*>[\\s\\S]*?<\\/article>/gi) || [];
+  const blocks = html.match(/<article\b[^>]*>[\s\S]*?<\/article>/gi) || [];
   return blocks.flatMap(block => {
     const attrs = {};
     for (const match of block.matchAll(/([a-z][a-z0-9-]*)=["']([^"']*)["']/gi)) attrs[match[1].toLowerCase()] = decodeHtml(match[2]);
