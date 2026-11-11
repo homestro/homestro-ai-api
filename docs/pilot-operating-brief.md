@@ -1,3 +1,9 @@
+## XP6 selection priority — 11 November 2026
+
+The owner asked why the Frankenstein worker selected the dog toothbrush instead of the Lenovo Erazer XP6. Source review confirmed the worker ranked eligible variants only by Bestseller tags and Shopify variant ID; it had no XP6 preference. Updated `homestro-marketing-pilot/adtech_pilot/frankenstein_core.py` so the default priority query is `Lenovo Erazer XP6` (configurable as `FRANKENSTEIN_PRIORITY_PRODUCT_QUERY`). Matching unprocessed XP6 variants are selected before unrelated candidates; once none remain, processing falls back to other products. An explicit legacy product ID is now only a fallback behind this priority.
+
+Commit `f82ce38f57e5ef58e7b8c9cb57c17cdf8d4d3200` deployed to the existing `frankenstein-worker` Railway service as deployment `6c9e671c-44a0-4f6f-a3ee-ac7a26940c32` (SUCCESS). The next scheduled worker execution is the first live verification of its new choice; no XP6 selection or Shopify product update is claimed yet. The SEO artifact is still local to the worker's mounted volume unless a separate publisher step confirms publication. Preserve existing campaign/account spending limits; do not treat this selection change as approval to increase them.
+
 ## Meta account binding and exact permission denial — 1 November 2026
 
 The paused-concept worker previously ignored Railway's `META_AD_ACCOUNT_ID` and used the retired hardcoded account `322742110630620`. The worker now reads the configured account ID, and the approved account constant is `313767293442442`. The account-binding fix deployed successfully as Railway deployment `75a9a2b0-e410-44c6-9f42-88aac0a74164`.
