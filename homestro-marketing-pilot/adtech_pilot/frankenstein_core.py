@@ -40,7 +40,7 @@ OPENAI_MAX_CALL_USD = (24_000 * OPENAI_INPUT_USD_PER_MILLION
                        + OPENAI_MAX_OUTPUT_TOKENS * OPENAI_OUTPUT_USD_PER_MILLION) / 1_000_000
 HARD_OPENAI_BUDGET_USD = 5.00
 HARD_META_DAILY_EUR = 5.00
-HARD_META_TOTAL_EUR = 35.00
+HARD_META_TOTAL_EUR = 50.00
 ALLOWED_FEED_HOSTS = {
     "homestro.de",
     "www.homestro.de",
@@ -507,7 +507,7 @@ class MetaBuyer:
         except (TypeError, ValueError):
             raise RuntimeError("META_ACCOUNT_SPEND_CAP_UNVERIFIED") from None
         if cap_cents <= 0 or cap_cents > int(HARD_META_TOTAL_EUR * 100):
-            raise RuntimeError("META_ACCOUNT_SPEND_CAP_OUTSIDE_35_EUR_LIMIT")
+            raise RuntimeError("META_ACCOUNT_SPEND_CAP_OUTSIDE_50_EUR_LIMIT")
         return max(0.0, (cap_cents - spent_cents) / 100.0)
 
     async def existing_adset_readiness(self, campaign_id: str, adset_id: str) -> dict[str, Any]:
@@ -587,7 +587,7 @@ class MetaBuyer:
         if effective_total <= 0:
             raise RuntimeError("META_ACCOUNT_SPEND_CAP_EXHAUSTED")
         # Meta receives the approved €5/day ad-set budget. The existing account
-        # spend cap is read back above and bounds total account spend to €35.
+        # spend cap is read back above and bounds total account spend to €50.
         start = datetime.now(UTC) + timedelta(minutes=15)
         end = start + timedelta(days=7)
         campaign = await self._post(f"{self.account}/campaigns", {
