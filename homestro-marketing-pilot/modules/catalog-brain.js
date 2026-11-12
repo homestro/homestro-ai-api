@@ -21,6 +21,7 @@ export function catalogDecision(product,{demand=null,demandUpdatedAt=null,now=ne
   return {productId:product.id,revision:product.revision,eligible:blockers.length===0,blockers,
     sourceImageCount:media.images.length,nativeVideoAvailable:Boolean(media.videoURL),
     priority:(flagship?2000:0)+Math.min(1000,checkouts*100+carts*20+Math.min(sessions,50)),
+    score:(flagship?2000:0)+Math.min(1000,checkouts*100+carts*20+Math.min(sessions,50)),
     priorityProduct:flagship,
     demandEvidence:fresh?'shopify_human_landing_aggregate':'unavailable',
     tasks:{copy:product.localizationPrepared&&product.localized?'prepared':'prepare_from_existing_facts',

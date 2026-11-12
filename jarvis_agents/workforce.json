@@ -1,0 +1,22 @@
+{
+  "system": "JARVIS",
+  "executionMode": "dry_run_only",
+  "adSpendEUR": 0,
+  "pillarOrder": ["homestro", "ms_handwerk", "kids_youtube", "ai_influencers"],
+  "activePillar": "homestro",
+  "pillars": [
+    {"id":"homestro","order":1,"name":"Homestro E-Shop","status":"in_progress","mission":"Shopify catalog, Erazer XP6 SEO/Trends priority and review-only ad drafts."},
+    {"id":"ms_handwerk","order":2,"name":"MS Handwerkservice","status":"queued","mission":"Kempten & Allgäu local drafts using the approved service wording."},
+    {"id":"kids_youtube","order":3,"name":"Kids YouTube","status":"planned","mission":"Short-form animation pipeline; no publishing enabled."},
+    {"id":"ai_influencers","order":4,"name":"AI Influencers","status":"planned","mission":"Virtual character and hook research; no generation or publishing enabled."}
+  ],
+  "agents": [
+    {"id":"orchestrator","role":"Coordinator","pillar":"all","status":"ready","mission":"Route JSON tasks in pillar order and apply risk checks before every handoff."},
+    {"id":"homestro","role":"E-Commerce Specialist","pillar":"homestro","status":"ready","mission":"Shopify product ranking, DE/AT trend matching, SEO and dry-run campaign drafts."},
+    {"id":"handwerk","role":"Kempten Local Specialist","pillar":"ms_handwerk","status":"ready","mission":"Legal-safe local service drafts; no route or account mutations."},
+    {"id":"risk_guard","role":"Compliance & Budget Controller","pillar":"all","status":"ready","mission":"Block paid, publish, campaign-write and legally noncompliant actions."},
+    {"id":"comms","role":"WhatsApp Reporter","pillar":"all","status":"ready","mission":"Format owner-ready summaries; WhatsApp delivery stays disabled."}
+  ],
+  "communication": {"protocol":"AgentMessage v1 JSON","status":"available_in_process","externalDelivery":"disabled"},
+  "campaignPolicy": {"newCampaignWrites":"blocked","existingLiveCampaigns":"read_only_untouched"}
+}

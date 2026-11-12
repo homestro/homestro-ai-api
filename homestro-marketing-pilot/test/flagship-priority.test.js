@@ -5,8 +5,22 @@ import {buildSalesPlan} from '../modules/ads-sales-plan.js';
 import {GoogleTrends} from '../modules/trends.js';
 import {GeneratedVideoDrafts} from '../modules/generative-video.js';
 import {carouselAssetKey} from '../modules/media.js';
+import {isPriorityProduct} from '../modules/flagship.js';
+import {snapshot} from '../modules/ingestion.js';
 
 const shopifyVideo='https://cdn.shopify.com/s/files/1/1/products/erazer-xp6.mp4';
+const flagshipHandle='lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5';
+
+test('canonical Erazer XP6 handle is recognized and Shopify snapshot maps its handle and video',()=>{
+  assert.equal(isPriorityProduct({handle:flagshipHandle,title:'Kabellose Kopfhörer'}),true);
+  const productSnapshot=snapshot({id:'gid://shopify/Product/1',title:'Erazer XP6',handle:flagshipHandle,
+    status:'ACTIVE',onlineStoreUrl:`https://homestro.de/products/${flagshipHandle}`,score:42,
+    variants:[{price:'47.99',availableForSale:true}],media:[{mediaContentType:'VIDEO',status:'READY',
+      sources:[{url:shopifyVideo,mimeType:'video/mp4'}]}]});
+  assert.equal(productSnapshot.handle,flagshipHandle);
+  assert.equal(productSnapshot.video_url,shopifyVideo);
+  assert.equal(productSnapshot.score,42);
+});
 const product=(id,title,url,mediaVideo=null,overrides={})=>({status:'ready',document:{
   id,title,status:'ACTIVE',url,handle:url.split('/').pop(),categoryKey:'electronics',
   variants:[{available:true,price:id.endsWith('XP6')?'47.99':'59.99'}],

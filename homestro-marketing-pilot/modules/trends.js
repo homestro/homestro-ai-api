@@ -1,5 +1,5 @@
 import {log} from './core.js';
-import {isPriorityProduct,PRIORITY_PRODUCT_TITLE} from './flagship.js';
+import {isPriorityProduct,PRIORITY_PRODUCT_TITLE,PRIORITY_PRODUCT_CONFIG} from './flagship.js';
 
 const endpoint=geo=>'https://trends.google.com/trending/rss?geo='+encodeURIComponent(geo);
 const decode=value=>String(value||'').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1')
@@ -8,12 +8,7 @@ const decode=value=>String(value||'').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1'
 const stop=new Set('der die das ein eine und oder mit fur für von im in aus zu zum zur ohne bei den dem des auf an uber über shop produkt'.split(' '));
 const words=value=>String(value||'').toLocaleLowerCase('de-DE').normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
   .match(/[a-z0-9]{2,}/g)?.filter(x=>!stop.has(x))||[];
-const flagshipTrendGroups=[
-  ['audio','kopfhoerer','kopfhorer','headphones','headset','audio','earbuds','ohrhoerer','ohrhorer'],
-  ['translation','uebersetzer','ubersetzer','uebersetzung','ubersetzung','translator','translate','sprachuebersetzer','sprachubersetzer'],
-  ['tech','technik','elektronik','bluetooth','gadget','digital','geraet','gerat'],
-  ['gift','geschenk','geschenke','geschenkidee','geburtstag','weihnachten','vatertag','muttertag']
-];
+const flagshipTrendGroups=Object.entries(PRIORITY_PRODUCT_CONFIG.trendGroups);
 function fit(base,term,max) {
   const suffix=term.trim(); if(!suffix)return String(base||'').slice(0,max);
   const current=String(base||'').trim();
@@ -65,9 +60,10 @@ export class GoogleTrends {
       const queryWords=[...new Set(words(item.query))];
       const overlap=queryWords.filter(word=>contextWords.has(word));
       const exactFlagship=queryWords.includes('erazer')&&queryWords.includes('xp6');
-      const groups=flagship?flagshipTrendGroups.filter(group=>group.some(term=>queryWords.includes(term))).map(group=>group[0]):[];
+      const groups=flagship?flagshipTrendGroups.filter(([,terms])=>terms.some(term=>queryWords.includes(term))).map(([name])=>name):[];
       const baseScore=queryWords.length?overlap.length/queryWords.length:0;
-      const boost=exactFlagship?2:groups.length?Math.min(0.45,groups.length*0.15):0;
+      const boost=exactFlagship?PRIORITY_PRODUCT_CONFIG.exactMatchBoost:
+        groups.length?Math.min(PRIORITY_PRODUCT_CONFIG.trendBoost*groups.length,0.6):0;
       return {...item,queryWords,overlap,score:baseScore+boost,baseScore,flagshipBoost:boost,trendGroups:groups};
     }).filter(x=>x.queryWords.length>=2&&(
       x.overlap.length>=2&&x.baseScore>=0.66 || flagship&&(x.flagshipBoost>0||x.overlap.length>=1&&x.baseScore>=0.5)

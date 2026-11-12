@@ -1,0 +1,14 @@
+{
+  "title": "Erazer XP6",
+  "handle": "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5",
+  "legacyHandles": ["erazer-xp6"],
+  "referencePriceEUR": 47.99,
+  "trendGroups": {
+    "audio": ["kopfhoerer", "kopfhorer", "headphones", "headset", "audio", "earbuds", "ohrhoerer", "ohrhorer"],
+    "translation": ["uebersetzer", "ubersetzer", "uebersetzung", "ubersetzung", "translator", "translate", "sprachuebersetzer", "sprachubersetzer"],
+    "tech": ["technik", "elektronik", "bluetooth", "gadget", "digital", "geraet", "gerat"],
+    "gift": ["geschenk", "geschenke", "geschenkidee", "geburtstag", "weihnachten", "vatertag", "muttertag"]
+  },
+  "trendBoost": 0.15,
+  "exactMatchBoost": 2
+}

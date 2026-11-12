@@ -6,8 +6,11 @@ export function snapshot(raw,extras={},feeRate=0) {
   const variants=(raw.variants||[]).map(v=>({id:v.id,title:v.title,price:Number(v.price),
     available:typeof v.availableForSale==='boolean'?v.availableForSale:
       Number(v.inventoryQuantity)>0 || v.inventoryPolicy==='CONTINUE',barcode:v.barcode||null,mpn:v.mpnMetafield?.value||null}));
-  const p={preparationVersion:5,rejected:(raw.tags||[]).some(t=>/^homestro-(?:ai|qa)-rejected$/i.test(String(t).trim())),id:raw.id,title:raw.title,description:raw.description,status:raw.status,
-    url:raw.onlineStoreUrl,variants,media:raw.media||[],currency:'EUR',
+  const media=Array.isArray(raw.media)?raw.media:[];
+  const videoURL=extractMedia(media).videoURL;
+  const sourceScore=raw.score===null||raw.score===undefined||raw.score===''?null:Number(raw.score);
+  const p={preparationVersion:5,rejected:(raw.tags||[]).some(t=>/^homestro-(?:ai|qa)-rejected$/i.test(String(t).trim())),id:raw.id,title:raw.title,handle:raw.handle||null,description:raw.description,status:raw.status,
+    url:raw.onlineStoreUrl,variants,media,video_url:videoURL,score:Number.isFinite(sourceScore)?sourceScore:null,currency:'EUR',
     supplierReference:extras.supplierReference||null,landedCost:extras.landedCost??null,
     priceReviewed:extras.priceReviewed===true,rightsVerified:extras.rightsVerified===true,
     contentReviewed:extras.contentReviewed===true,germanCopy:extras.germanCopy||null,
