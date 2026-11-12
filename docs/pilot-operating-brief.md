@@ -1,3 +1,9 @@
+## Frankenstein worker repair and live pilot check — 12 November 2026
+
+The production `frankenstein-worker` had failed at startup with a Python SyntaxError caused by literal escaped newlines in the `ledger.choose_product` call. Commit `6969990d5afa9764157b2685a8eef14302c889c1` fixed that syntax, lowered the worker's hard Meta account cap from EUR50 to EUR35, and made the worker draft-only so it cannot create or activate Meta objects outside the central adtech pilot. Railway deployment `e747d037-c51a-400f-b95f-38aad2f3982b` completed with status SUCCESS on 12 November. The worker's next cron window is 06:00 UTC on 13 November; a post-fix execution is not yet confirmed.
+
+The central pilot's latest readback on 12 November shows the authorized exact campaign `120254564749740274` in PAUSED state with reason `TEST_EXPIRED`. Its persisted seven-day authorization expired on 9 November; no activation or campaign writes occurred. The pilot log reports 0 signed-attributed paid orders, with full order-cost/net-profit verification incomplete. Do not report sales, profit, or active paid delivery until a fresh owner authorization exists and the exact campaign is read back active. No new campaign was created.
+
 ## XP6 selection priority — 11 November 2026
 
 The owner asked why the Frankenstein worker selected the dog toothbrush instead of the Lenovo Erazer XP6. Source review confirmed the worker ranked eligible variants only by Bestseller tags and Shopify variant ID; it had no XP6 preference. Updated `homestro-marketing-pilot/adtech_pilot/frankenstein_core.py` so the default priority query is `Lenovo Erazer XP6` (configurable as `FRANKENSTEIN_PRIORITY_PRODUCT_QUERY`). Matching unprocessed XP6 variants are selected before unrelated candidates; once none remain, processing falls back to other products. An explicit legacy product ID is now only a fallback behind this priority.
