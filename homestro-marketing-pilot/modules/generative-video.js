@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {handoffGeneratedVideo} from './generated-video-handoff.js';
 import {hash,fail,codeOf,log} from './core.js';
 import {extractMedia,carouselAssetKey} from './media.js';
+import {isPriorityProduct} from './flagship.js';
 const uuid=v=>/^[a-f0-9-]{36}$/.test(v||'');
 const view=r=>({jobKey:r.job_key,state:r.state,taskId:r.task_id||null,videoURL:r.video_url||null,
   estimatedUSD:r.cost_cents/100,error:r.error_code||null,requiresReview:true});
@@ -47,6 +48,10 @@ export class GeneratedVideoDrafts {
       if(product.status!=='ACTIVE'||product.rejected||product.revision!==revision)fail('SOCIAL_REVIEW_STALE');
       if(!extractMedia(product.media).images.some(image=>u.pathname.endsWith('/'+carouselAssetKey(image)+'.jpg')))fail('GENERATIVE_SOURCE_MISMATCH');
       const nativeVideo=extractMedia(product.media).videoURL;
+      if(isPriorityProduct(product)){
+        if(!nativeVideo)fail('FLAGSHIP_EXISTING_SHOPIFY_VIDEO_REQUIRED');
+        return {style,productId,revision,nativeVideo,priorityProduct:true};
+      }
       const body={model:'gen4_turbo',promptImage:u.href,ratio,duration,
         promptText:'Photorealistic product video. '+text+
           ' Keep the referenced product shape, color, proportions and branding unchanged. Show natural product movement and lighting, not only camera zoom. Do not invent specifications, people endorsements, text, logos, reviews or product claims.'};
@@ -86,6 +91,7 @@ export class GeneratedVideoDrafts {
     if(!this.cfg.videoGenerationEnabled||!this.cfg.enabled)fail('VIDEO_GENERATION_DISABLED');
     if(!this.cfg.key)fail('RUNWAY_API_KEY_REQUIRED');
     const spec=await this.specification(input),{productId,revision,body,key,nativeVideo}=spec;
+    if(spec.priorityProduct)fail('FLAGSHIP_RUNWAY_GENERATION_FORBIDDEN');
     let client,locked=false;
     try{
       client=await this.pool.connect();locked=(await client.query('SELECT pg_try_advisory_lock(73341009) AS locked')).rows[0]?.locked;

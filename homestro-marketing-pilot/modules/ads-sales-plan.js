@@ -1,5 +1,7 @@
 import {ACCESS_SCOPES} from './performance.js';
 import {productURL} from './core.js';
+import {extractMedia} from './media.js';
+import {isPriorityProduct,PRIORITY_PRODUCT_TITLE} from './flagship.js';
 
 const SALES_QUERY = `query PilotProductSales($query: String!) {
   shopifyqlQuery(query: $query) {
@@ -90,7 +92,7 @@ export function buildSalesPlan({products=[],productSales={status:'unavailable',b
     else keyed.set(k,{...productSales.byTitle?.[k],ambiguous:false});
   }
   const rows=products.map(row=>{
-    const p=row?.document||{}, reasons=[];
+    const p=row?.document||{}, reasons=[],priorityProduct=isPriorityProduct(p);
     if(row?.status!=='ready')reasons.push('MARKETING_CONTENT_NOT_READY');
     if(p.status!=='ACTIVE')reasons.push('PRODUCT_NOT_ACTIVE');
     if(p.rejected===true)reasons.push('PRODUCT_REJECTED');
@@ -98,6 +100,8 @@ export function buildSalesPlan({products=[],productSales={status:'unavailable',b
     if(!variants.length)reasons.push('NO_AVAILABLE_VARIANT');
     if(!shopUrl(p.url))reasons.push('NO_PUBLIC_PRODUCT_URL');
     const media=(p.media||[]).filter(m=>m?.mediaContentType==='IMAGE' && m?.status==='READY' && m?.image?.url);
+    const existingVideoURL=extractMedia(Array.isArray(p.media)?p.media:[]).videoURL;
+    if(priorityProduct&&!existingVideoURL)reasons.push('FLAGSHIP_EXISTING_SHOPIFY_VIDEO_REQUIRED');
     const hasImage=media.length>0 || Boolean(p.asset?.imageURLs?.length);
     if(!hasImage)reasons.push('PRODUCT_IMAGE_MISSING');
     const pricing=p.pricing||{};
@@ -125,6 +129,7 @@ export function buildSalesPlan({products=[],productSales={status:'unavailable',b
       cta:'Jetzt bei Homestro kaufen',
       destination:p.url,
       imageURL:media[0]?.image?.url||p.asset?.imageURLs?.[0]||null,
+      ...(priorityProduct?{videoURL:existingVideoURL,videoAssetSource:existingVideoURL?'shopify':null}:{}),
       factualBasis:facts.slice(0,2)
     }:null;
     const demandEvidence=orders>0?'confirmed_orders':checkouts>0?'checkout_sessions':carts>0?'cart_sessions':sessions>=10?'qualified_human_product_sessions':null;
@@ -135,14 +140,24 @@ export function buildSalesPlan({products=[],productSales={status:'unavailable',b
       orders90d:sales&&!sales.ambiguous&&Number.isFinite(Number(sales.orders))?orders:null,sessions90d:demand?sessions:null,
       cartSessions90d:demand?carts:null,checkoutSessions90d:demand?checkouts:null,
       netSales90dEUR:sales&&!sales.ambiguous&&Number.isFinite(Number(sales.netSalesEUR))?Number(sales.netSalesEUR):null,
+      priorityProduct,priorityRank:priorityProduct?1:null,
       eligibleForTest,blockedBy:[...new Set(reasons)],adCopy};
   });
-  rows.sort((a,b)=>Number(b.orders90d||0)-Number(a.orders90d||0)||Number(b.checkoutSessions90d||0)-Number(a.checkoutSessions90d||0)||Number(b.cartSessions90d||0)-Number(a.cartSessions90d||0)||Number(b.sessions90d||0)-Number(a.sessions90d||0)||Number(b.verifiedMarginEUR||0)-Number(a.verifiedMarginEUR||0));
+  rows.sort((a,b)=>Number(b.priorityProduct)-Number(a.priorityProduct)||Number(b.orders90d||0)-Number(a.orders90d||0)||Number(b.checkoutSessions90d||0)-Number(a.checkoutSessions90d||0)||Number(b.cartSessions90d||0)-Number(a.cartSessions90d||0)||Number(b.sessions90d||0)-Number(a.sessions90d||0)||Number(b.verifiedMarginEUR||0)-Number(a.verifiedMarginEUR||0));
   const eligible=rows.filter(x=>x.eligibleForTest);
+  const flagship=rows.find(x=>x.priorityProduct)||null;
+  const flagshipDraft=flagship?{
+    status:flagship.eligibleForTest&&flagship.adCopy?.videoURL?'draft_only':'blocked',
+    featuredProductId:flagship.id,featuredProductTitle:flagship.title||PRIORITY_PRODUCT_TITLE,
+    creative:flagship.adCopy?.videoURL?{format:'existing_shopify_video',videoURL:flagship.adCopy.videoURL,assetSource:'shopify'}:null,
+    reason:flagship.adCopy?.videoURL?null:'FLAGSHIP_EXISTING_SHOPIFY_VIDEO_REQUIRED',
+    dryRun:true,executionEnabled:false,adSpendEUR:0
+  }:null;
   return {mode:'read_only_sales_plan',checkedAt:checkedAt instanceof Date?checkedAt.toISOString():new Date(checkedAt).toISOString(),
     salesWindowDays:productSales.days||90,productSalesStatus:productSales.status||'unavailable',
     productCounts:{catalog:products.length,eligibleForTest:eligible.length,blocked:rows.length-eligible.length},
     recommendedProductId:eligible[0]?.id||null,recommendedProduct:eligible[0]||null,
+    primaryFeaturedProduct:flagship,frankensteinAdDraft:flagshipDraft,
     products:rows,executionEnabled:false,adSpendEUR:0,
     budgetPolicy:{maxDailyEUR:5,maxDays:7,maxCampaigns:1,automaticScalingAboveCap:false},
     blockers:eligible.length?[]:['NO_PRODUCT_HAS_VERIFIED_DEMAND_AND_MARGIN'],

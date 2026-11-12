@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {GeneratedVideoDrafts} from '../modules/generative-video.js';
 import {carouselAssetKey} from '../modules/media.js';
 const image='https://cdn.shopify.com/real.jpg',origin='https://pilot.example',task='12e3a630-4f0c-4135-bc67-ff4378aa9c14';
-const input={productId:'p',revision:'r',promptImage:origin+'/marketing-assets/'+carouselAssetKey(image)+'.jpg',promptText:'A hand gently uses the referenced brush while the cat naturally moves.'};
+const input={productId:'gid://shopify/Product/123',revision:'r',promptImage:origin+'/marketing-assets/'+carouselAssetKey(image)+'.jpg',promptText:'A hand gently uses the referenced brush while the cat naturally moves.'};
 function fixture({enabled=true,key='test',spent=0,lost=false,imported=false,native=false}={}){
  let row=null,calls=0,quote=null;const query=async(sql,args=[])=>{
   if(sql.includes('pg_try'))return {rows:[{locked:true}]};
@@ -20,7 +20,7 @@ function fixture({enabled=true,key='test',spent=0,lost=false,imported=false,nati
   return {rows:[]};
  };
  const pool={query,connect:async()=>({query,release(){}})};
- const worker=new GeneratedVideoDrafts({pool,cfg:{enabled,key,publicOrigin:origin,dailyCents:25},fresh:async()=>({status:'ACTIVE',revision:'r',media:[{mediaContentType:'IMAGE',status:'READY',image:{url:image}},...(native?[{mediaContentType:'VIDEO',status:'READY',sources:[{url:'https://cdn.shopify.com/existing.mp4',mimeType:'video/mp4'}]}]:[])]}),fetchImpl:async(url,options)=>{
+ const worker=new GeneratedVideoDrafts({pool,cfg:{enabled,videoGenerationEnabled:enabled,key,publicOrigin:origin,dailyCents:25},fresh:async()=>({id:input.productId,title:'Cat brush',status:'ACTIVE',revision:'r',media:[{mediaContentType:'IMAGE',status:'READY',image:{url:image}},...(native?[{mediaContentType:'VIDEO',status:'READY',sources:[{url:'https://cdn.shopify.com/existing.mp4',mimeType:'video/mp4'}]}]:[])]}),fetchImpl:async(url,options)=>{
   if(options.method==='GET')return new Response(JSON.stringify({id:task,status:'SUCCEEDED',output:['https://cdn.runwayml.com/clip.mp4']}),{status:200});
   calls++;assert.equal(url,'https://api.dev.runwayml.com/v1/image_to_video');const body=JSON.parse(options.body);
   assert.equal(body.duration,5);assert.equal(body.model,'gen4_turbo');assert.equal(body.ratio,'720:1280');
@@ -97,7 +97,8 @@ test('quote is a persisted no-charge step; unquoted, expired or mismatched appro
 });
 
 test('native/imported video or another in-flight prompt for the same source is reused before any new charge',async()=>{
- const native=fixture({native:true});await assert.rejects(()=>native.worker.quote(input),{code:'EXISTING_NATIVE_VIDEO_AVAILABLE'});assert.equal(native.calls,0);
+ const native=fixture({native:true});const nativeReuse=await native.worker.quote(input);
+ assert.equal(nativeReuse.reuseExisting,true);assert.equal(nativeReuse.existingVideoURL,'https://cdn.shopify.com/existing.mp4');assert.equal(native.calls,0);
  const imported=fixture({imported:true});const reuse=await imported.worker.quote(input);
  assert.equal(reuse.reuseExisting,true);assert.equal(reuse.importedJobId,task);assert.equal(imported.calls,0);
  const f=fixture();await f.worker.start(await approvedInput(f.worker));

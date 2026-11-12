@@ -1,16 +1,18 @@
 import {codeOf,fail,log,productURL} from './core.js';
 import {extractMedia} from './media.js';
+import {isPriorityProduct} from './flagship.js';
 
 const sourceMedia=p=>extractMedia(Array.isArray(p.media)?p.media.filter(n=>n&&typeof n==='object'):[]);
 const pathOf=value=>{try{return decodeURIComponent(productURL(value).pathname).normalize('NFKC').toLocaleLowerCase('de-DE').replace(/\/$/,'');}catch{return null;}};
 export function catalogDecision(product,{demand=null,demandUpdatedAt=null,now=new Date(),excludedProductIds=[]}={}){
-  const media=sourceMedia(product),blockers=[];
+  const media=sourceMedia(product),blockers=[],flagship=isPriorityProduct(product);
   if(product.rejected===true)blockers.push('PRODUCT_REJECTED');
   if(excludedProductIds.includes(product.id))blockers.push('PRODUCT_EXCLUDED_BY_POLICY');
   if(product.status!=='ACTIVE')blockers.push('PRODUCT_NOT_ACTIVE');
   if(!Array.isArray(product.variants)||!product.variants.some(v=>v?.available&&Number(v.price)>0))blockers.push('NO_AVAILABLE_VARIANT');
   if(!pathOf(product.url))blockers.push('NO_PUBLIC_PRODUCT_URL');
   if(!media.images.length&&!media.videoURL)blockers.push('NO_MARKETING_MEDIA');
+  if(flagship&&!media.videoURL)blockers.push('FLAGSHIP_EXISTING_SHOPIFY_VIDEO_REQUIRED');
   const age=now.getTime()-new Date(demandUpdatedAt||0).getTime();
   const fresh=Boolean(demand&&['connected','partial'].includes(demand.status)&&age>=0&&age<=2*3600000);
   const signal=fresh?demand.byPath?.[pathOf(product.url)]:null;
@@ -18,16 +20,18 @@ export function catalogDecision(product,{demand=null,demandUpdatedAt=null,now=ne
   const checkouts=numeric(signal?.checkouts),carts=numeric(signal?.carts),sessions=numeric(signal?.sessions);
   return {productId:product.id,revision:product.revision,eligible:blockers.length===0,blockers,
     sourceImageCount:media.images.length,nativeVideoAvailable:Boolean(media.videoURL),
-    priority:Math.min(1000,checkouts*100+carts*20+Math.min(sessions,50)),
+    priority:(flagship?2000:0)+Math.min(1000,checkouts*100+carts*20+Math.min(sessions,50)),
+    priorityProduct:flagship,
     demandEvidence:fresh?'shopify_human_landing_aggregate':'unavailable',
     tasks:{copy:product.localizationPrepared&&product.localized?'prepared':'prepare_from_existing_facts',
       image:media.images.length?'reuse_existing_product_photos':'no_source',
-      video:media.videoURL?'reuse_native_product_footage':'MOTION_VIDEO_COST_APPROVAL_REQUIRED',
+      video:media.videoURL?'reuse_native_product_footage':flagship?'EXISTING_SHOPIFY_VIDEO_REQUIRED':'MOTION_VIDEO_COST_APPROVAL_REQUIRED',
       publication:'existing_channel_workers_and_verified_receipts',
       paidAds:'PURCHASE_HARD_LOCK_AND_NO_NEW_SPEND_AUTHORIZATION'},
     creativeBrief:{language:'de',title:product.localized?.title||null,hook:product.localized?.hook||null,
       benefits:(Array.isArray(product.localized?.benefits)?product.localized.benefits:[]).filter(b=>b&&Array.isArray(product.facts)&&product.facts.some(f=>f?.id===b.factId)).map(b=>({factId:b.factId,text:b.text})),
       sourceProductURL:product.url||null,portraitRatio:'9:16',productFidelityRequired:true,
+      ...(flagship?{priorityProduct:true,existingVideoURL:media.videoURL,videoSource:media.videoURL?'shopify':'missing'}:{}),
       generatedMotionReviewRequired:true,syntheticTestimonialsAllowed:false},
     paidGenerationAuthorized:false,adSpendEUR:0};
 }
