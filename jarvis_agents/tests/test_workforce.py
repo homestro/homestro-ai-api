@@ -9,8 +9,10 @@ from jarvis_agents.erazer_priority import HANDLE, is_erazer_xp6, rank_products, 
 from jarvis_agents.handwerk_agent import APPROVED_SERVICES, HandwerkAgent, validate_legal_copy
 from jarvis_agents.homestro_agent import HomestroAgent
 from jarvis_agents.orchestrator import JarvisOrchestrator, PILLAR_ORDER
-from jarvis_agents.protocol import AgentMessage, MessageValidationError
+from jarvis_agents.protocol import AgentMessage, InMemoryMessageBus, MessageValidationError
 from jarvis_agents.risk_guard_agent import RiskGuardAgent
+from jarvis_agents.kids_youtube_agent import KidsYouTubeAgent
+from jarvis_agents.ai_influencer_agent import AIInfluencerAgent
 
 
 VIDEO = "https://cdn.shopify.com/s/files/1/1/products/erazer-xp6.mp4"
@@ -75,15 +77,31 @@ def test_risk_guard_blocks_costly_writes_and_preserves_existing_campaigns():
     assert guard.validate("rank_products", {}, 0.01)["reason"] == "UNAPPROVED_SPEND_BLOCKED"
     assert guard.validate("campaign_read", {"existing_campaign_mutation": True})["reason"] == "EXISTING_CAMPAIGNS_READ_ONLY"
     assert guard.validate("video_generate", {"product": FLAGSHIP})["reason"] == "FLAGSHIP_RUNWAY_GENERATION_FORBIDDEN"
+    prohibited = "Ma" + "ler"
+    assert guard.validate("draft_local_services", {"copy": f"{prohibited} in Kempten"},
+                          pillar="ms_handwerk")["reason"] == "LEGAL_SERVICE_WORDING_BLOCKED"
 
 
 def test_agent_message_json_protocol_round_trip_and_validation():
     message = AgentMessage(sender="orchestrator", recipient="homestro", task_type="rank_products",
                            payload={"products": []})
-    assert json.loads(json.dumps(message.to_dict()))["budget_impact_eur"] == 0.0
+    serialized = json.loads(json.dumps(message.to_dict()))
+    assert serialized["budget_eur"] == 0.0
+    assert serialized["pillar"] == "homestro"
+    assert serialized["status"] == "queued"
     assert AgentMessage.from_dict(message.to_dict()) == message
     with pytest.raises(MessageValidationError):
         AgentMessage.from_dict({"sender": "x"})
+
+
+def test_bus_records_handoffs_and_status_transitions():
+    bus = InMemoryMessageBus()
+    message = AgentMessage(sender="orchestrator", recipient="homestro", pillar="homestro",
+                           task_type="prepare_pillar_brief", payload={})
+    record = bus.publish(message)
+    bus.set_status(record, "completed")
+    assert bus.messages[0]["status"] == "completed"
+    assert bus.last_for("homestro")["recipient"] == "homestro"
 
 
 def test_orchestrator_routes_read_only_work_and_blocks_external_writes():
@@ -96,15 +114,41 @@ def test_orchestrator_routes_read_only_work_and_blocks_external_writes():
     blocked = orchestrator.dispatch(AgentMessage(
         sender="owner", recipient="homestro", task_type="campaign_activate", payload={}))
     assert blocked["status"] == "blocked"
-    assert len(orchestrator.handoffs) == 2
+    assert len(orchestrator.handoffs) == 6
 
 
 def test_workforce_pillar_order_and_status_reporter_are_explicit():
     assert PILLAR_ORDER == ("homestro", "ms_handwerk", "kids_youtube", "ai_influencers")
     orchestrator = JarvisOrchestrator()
     assert orchestrator.dispatch(AgentMessage(
-        sender="owner", recipient="handwerk", task_type="draft_local_services",
+        sender="owner", recipient="handwerk", pillar="ms_handwerk", task_type="draft_local_services",
         payload={"pillar": "ms_handwerk"})) ["reason"] == "PILLAR_ORDER_BLOCKED"
     report = CommsAgent().format_status(orchestrator.status())
     assert report["sent"] is False
     assert report["spend_eur"] == 0.0
+
+
+def test_kids_and_virtual_persona_workers_only_return_zero_cost_drafts():
+    kids = KidsYouTubeAgent().handle("draft_kids_short", {"episode": 1})
+    persona = AIInfluencerAgent().handle("draft_virtual_persona", {})
+    assert kids["library_target"] == 1000
+    assert kids["video_api_called"] is False and kids["published"] is False
+    assert kids["cost_eur"] == 0.0
+    assert persona["persona"]["age"] >= 18
+    assert persona["persona"]["identity"] == "fictional virtual creator"
+    assert persona["image_or_video_api_called"] is False and persona["published"] is False
+    assert persona["cost_eur"] == 0.0
+
+
+def test_full_workforce_cycle_runs_all_four_pillars_and_logs_audits():
+    orchestrator = JarvisOrchestrator()
+    result = orchestrator.cycle()
+    assert result["status"] == "completed"
+    assert [item["pillar"] for item in result["pillar_results"]] == list(PILLAR_ORDER)
+    assert all(item["status"] == "completed" for item in result["pillar_results"])
+    assert result["budget_eur"] == result["ad_spend_eur"] == 0.0
+    assert result["video_generation_performed"] is False
+    assert result["external_writes_performed"] is False
+    assert any(item["task_type"] == "risk_audit" for item in result["communication_log"])
+    assert result["summary_report"]["sent"] is False
+    assert len(orchestrator.bus.messages) >= 13

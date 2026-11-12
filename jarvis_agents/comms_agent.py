@@ -14,6 +14,15 @@ class CommsAgent:
                 "Stávající kampaně zůstávají beze změny.")
         return {"text": text, "channel": "whatsapp_ready", "sent": False, "spend_eur": 0.0}
 
+    def format_cycle(self, cycle: Mapping[str, Any]) -> dict[str, Any]:
+        pillars = cycle.get("pillar_results", [])
+        completed = sum(item.get("status") == "completed" for item in pillars if isinstance(item, Mapping))
+        total = len(pillars)
+        return {"text": (f"JARVIS cyklus {cycle.get('status', 'unknown')}: {completed}/{total} pilíře, "
+                          "režim dry-run, náklady 0 €. Žádná kampaň, publikace ani video nebyly spuštěny."),
+                "channel": "whatsapp_ready", "sent": False, "spend_eur": 0.0,
+                "completed_pillars": completed, "total_pillars": total}
+
     def handle(self, task_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         if task_type != "format_status":
             raise ValueError("COMMS_TASK_NOT_SUPPORTED")

@@ -37,11 +37,21 @@ class HomestroAgent:
                 "price_eur": price, "creative": {"source": "shopify", "video_url": video} if video else None,
                 "dry_run": True, "execution_enabled": False, "spend_eur": 0.0}
 
+    def cycle_brief(self) -> dict[str, Any]:
+        return {"status": "review_draft", "priority_product": "Erazer XP6",
+                "priority_handle": HANDLE, "reference_price_eur": REFERENCE_PRICE_EUR,
+                "market_scope": ["DE", "AT"],
+                "video_policy": "reuse_existing_shopify_asset_only",
+                "live_shopify_reads_performed": False, "campaign_writes": False,
+                "dry_run": True, "cost_eur": 0.0}
+
     def handle(self, task_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         if task_type == "rank_products":
             return {"products": self.rank(payload.get("products", [])), "priority_handle": HANDLE}
         if task_type == "ad_draft":
             return self.ad_draft(payload.get("product") or {})
+        if task_type == "prepare_pillar_brief":
+            return self.cycle_brief()
         if task_type == "trend_match":
             return {"trends": self.match_trends(payload.get("product") or {}, payload.get("trends", []))}
         raise ValueError("HOMESTRO_TASK_NOT_SUPPORTED")

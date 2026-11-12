@@ -1,22 +1,36 @@
 {
   "system": "JARVIS",
   "executionMode": "dry_run_only",
+  "dryRun": true,
   "adSpendEUR": 0,
+  "vision": {
+    "ultimateGoal": "Build automated passive income streams to buy and rent out 50 apartments in Germany and reach 1,000,000 EUR within 3 years.",
+    "ownerPrinciple": "money while sleeping",
+    "strictRules": [
+      "DRY_RUN is true for all new modules; no unapproved spending.",
+      "Never create, pause, delete, or overwrite an existing live Meta Ads campaign.",
+      "Erazer XP6 stays Homestro priority one and uses an existing Shopify video only.",
+      "MS Handwerk copy uses approved local service wording and blocks restricted trade labels.",
+      "No paid video, image, or influencer API calls; no publishing or external messaging."
+    ]
+  },
+  "systemPrompt": "You are JARVIS, the owner's dry-run business workforce. Work toward the 50-apartment and 1,000,000 EUR goal within 3 years. Follow pillar order exactly: Homestro, MS Handwerk Kempten, Kids YouTube, AI Influencers. Spend 0 EUR unless owner approval is explicitly recorded; this workforce remains dry-run and performs no external writes. Never mutate existing live Meta campaigns. Erazer XP6 is Homestro priority one and reuses only its existing Shopify video. MS Handwerk local copy must pass the legal phrase filter before returning.",
   "pillarOrder": ["homestro", "ms_handwerk", "kids_youtube", "ai_influencers"],
   "activePillar": "homestro",
   "pillars": [
-    {"id":"homestro","order":1,"name":"Homestro E-Shop","status":"in_progress","mission":"Shopify catalog, Erazer XP6 SEO/Trends priority and review-only ad drafts."},
-    {"id":"ms_handwerk","order":2,"name":"MS Handwerkservice","status":"queued","mission":"Kempten & Allgäu local drafts using the approved service wording."},
-    {"id":"kids_youtube","order":3,"name":"Kids YouTube","status":"planned","mission":"Short-form animation pipeline; no publishing enabled."},
-    {"id":"ai_influencers","order":4,"name":"AI Influencers","status":"planned","mission":"Virtual character and hook research; no generation or publishing enabled."}
+    {"id":"homestro","order":1,"name":"Homestro E-Shop","status":"in_progress","mission":"Shopify product readiness, Erazer XP6 priority one, DE/AT Trends and review-only drafts."},
+    {"id":"ms_handwerk","order":2,"name":"MS Handwerkservice Kempten & Allgäu","status":"queued","mission":"Local inbound copy using approved German service phrases and the owner's contact number."},
+    {"id":"kids_youtube","order":3,"name":"Kids YouTube Channel","status":"planned","mission":"Build a library plan for 1,000 animated shorts; concepts and scripts only."},
+    {"id":"ai_influencers","order":4,"name":"AI Influencers","status":"planned","mission":"Fictional adult persona profiles and short-form hooks; drafts only."}
   ],
   "agents": [
-    {"id":"orchestrator","role":"Coordinator","pillar":"all","status":"ready","mission":"Route JSON tasks in pillar order and apply risk checks before every handoff."},
-    {"id":"homestro","role":"E-Commerce Specialist","pillar":"homestro","status":"ready","mission":"Shopify product ranking, DE/AT trend matching, SEO and dry-run campaign drafts."},
-    {"id":"handwerk","role":"Kempten Local Specialist","pillar":"ms_handwerk","status":"ready","mission":"Legal-safe local service drafts; no route or account mutations."},
-    {"id":"risk_guard","role":"Compliance & Budget Controller","pillar":"all","status":"ready","mission":"Block paid, publish, campaign-write and legally noncompliant actions."},
-    {"id":"comms","role":"WhatsApp Reporter","pillar":"all","status":"ready","mission":"Format owner-ready summaries; WhatsApp delivery stays disabled."}
+    {"id":"orchestrator","role":"JARVIS Boss","pillar":"all","status":"ready","mission":"Assign work in four-pillar order; audit and log every handoff."},
+    {"id":"homestro","role":"Pillar 1 E-Commerce Specialist","pillar":"homestro","status":"ready","mission":"Keep Erazer XP6 first, align DE/AT trends and flag Shopify product/media readiness."},
+    {"id":"handwerk","role":"Pillar 2 Kempten Local Specialist","pillar":"ms_handwerk","status":"ready","mission":"Create legally filtered local drafts for Kempten and Allgäu; never publish."},
+    {"id":"kids_youtube","role":"Pillar 3 Kids YouTube Specialist","pillar":"kids_youtube","status":"ready","mission":"Draft structured animated short concepts, scripts and metadata for a 1,000-video goal."},
+    {"id":"ai_influencers","role":"Pillar 4 AI Influencer Specialist","pillar":"ai_influencers","status":"ready","mission":"Draft clearly fictional adult persona profiles and viral short-video hooks."},
+    {"id":"risk_guard","role":"Compliance & Budget Controller","pillar":"all","status":"ready","mission":"Audit each message; block spending, publishing, campaign changes and illegal local copy."}
   ],
-  "communication": {"protocol":"AgentMessage v1 JSON","status":"available_in_process","externalDelivery":"disabled"},
+  "communication": {"protocol":"AgentMessage v2 JSON","status":"available_in_process","externalDelivery":"disabled","lastMessage":null},
   "campaignPolicy": {"newCampaignWrites":"blocked","existingLiveCampaigns":"read_only_untouched"}
 }
