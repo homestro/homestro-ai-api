@@ -40,7 +40,7 @@ OPENAI_MAX_CALL_USD = (24_000 * OPENAI_INPUT_USD_PER_MILLION
                        + OPENAI_MAX_OUTPUT_TOKENS * OPENAI_OUTPUT_USD_PER_MILLION) / 1_000_000
 HARD_OPENAI_BUDGET_USD = 5.00
 HARD_META_DAILY_EUR = 5.00
-HARD_META_TOTAL_EUR = 50.00
+HARD_META_TOTAL_EUR = 35.00
 ALLOWED_FEED_HOSTS = {
     "homestro.de",
     "www.homestro.de",
@@ -534,7 +534,7 @@ class MetaBuyer:
         except (TypeError, ValueError):
             raise RuntimeError("META_ACCOUNT_SPEND_CAP_UNVERIFIED") from None
         if cap_cents <= 0 or cap_cents > int(HARD_META_TOTAL_EUR * 100):
-            raise RuntimeError("META_ACCOUNT_SPEND_CAP_OUTSIDE_50_EUR_LIMIT")
+            raise RuntimeError("META_ACCOUNT_SPEND_CAP_OUTSIDE_35_EUR_LIMIT")
         return max(0.0, (cap_cents - spent_cents) / 100.0)
 
     async def existing_adset_readiness(self, campaign_id: str, adset_id: str) -> dict[str, Any]:
@@ -684,8 +684,10 @@ async def run_once() -> dict[str, Any]:
         return {"status": "complete", "reason": "DAILY_PRODUCT_RUN_ALREADY_COMPLETED",
                 "openai_called": False, "meta_called": False}
 
-    reuse_existing = os.getenv("FRANKENSTEIN_REUSE_EXISTING_ADSET", "false").strip().lower() == "true"
-    live = os.getenv("FRANKENSTEIN_META_LIVE_ENABLED", "false").strip().lower() == "true"
+    # Paid Meta mutations are owned exclusively by the central adtech pilot.
+    # Keep this worker draft-only even if legacy live-write variables remain set.
+    reuse_existing = False
+    live = False
     buyer = None
     if reuse_existing:
         if not live:
@@ -701,7 +703,11 @@ async def run_once() -> dict[str, Any]:
                     "campaign_id": campaign_id, "adset_id": adset_id}
 
     feed = await hunt_one()
-    product = ledger.choose_product(\n        feed["products"],\n        os.getenv("FRANKENSTEIN_PRODUCT_ID", "").strip(),\n        os.getenv("FRANKENSTEIN_PRIORITY_PRODUCT_QUERY", "Lenovo Erazer XP6").strip(),\n    )
+    product = ledger.choose_product(
+        feed["products"],
+        os.getenv("FRANKENSTEIN_PRODUCT_ID", "").strip(),
+        os.getenv("FRANKENSTEIN_PRIORITY_PRODUCT_QUERY", "Lenovo Erazer XP6").strip(),
+    )
     if product is None:
         return {"status": "complete", "reason": "NO_UNPROCESSED_ELIGIBLE_PRODUCT",
                 "products_checked": feed["products_checked"], "openai_called": False, "meta_called": False}
