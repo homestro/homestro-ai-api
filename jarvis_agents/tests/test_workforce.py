@@ -34,6 +34,7 @@ def test_canonical_flagship_is_recognized_and_ranked_first():
 
 def test_shopify_video_is_reused_and_missing_video_blocks_ad_draft():
     assert shopify_video_url(FLAGSHIP) == VIDEO
+    assert shopify_video_url({"video_url": "https://example.org/duplicate.mp4"}) is None
     agent = HomestroAgent()
     draft = agent.ad_draft(FLAGSHIP)
     assert draft["status"] == "draft_only"
