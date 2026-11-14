@@ -10,6 +10,7 @@ function database(){let row=null;const states=new Map();return {get row(){return
   if(sql.startsWith('DELETE FROM meta_oauth_states WHERE state_hash')){const v=states.get(p[0]);if(!v||v.browser!==p[1])return {rows:[]};states.delete(p[0]);return {rows:[{state_hash:p[0]}]};}
   if(sql.startsWith('SELECT * FROM meta_connections'))return {rows:row?[row]:[]};
   if(sql.startsWith('INSERT INTO meta_connections')){row={encrypted_credentials:p[0],status:'connected',expires_at:p[1],data_access_expires_at:p[2],revision:p[3],checked_at:new Date(),last_error:null};return {rows:[]};}
+  if(sql.startsWith('UPDATE meta_connections SET encrypted_credentials')){if(row?.revision!==p[2])return {rowCount:0};row.encrypted_credentials=p[0];row.revision=p[1];return {rowCount:1};}
   if(sql.includes("SET status='reauth_required'")){if(row?.revision===p[0]){row.status='reauth_required';row.last_error='META_REAUTH_REQUIRED';}return {rows:[]};}
   if(sql.includes('SET status=$1')){if(row?.revision===p[2]){row.status=p[0];row.last_error=p[1];}return {rows:[]};}
   if(sql.includes('SET expires_at=$1')){if(row?.revision===p[2]){row.expires_at=p[0];row.data_access_expires_at=p[1];row.last_error=null;}return {rows:[]};}
@@ -21,18 +22,43 @@ function fixture({wrongApp=false,missingScope=false,wrongPage=false}={}){
     if(path==='oauth/access_token')return response({access_token:u.searchParams.has('code')?'short-user':'long-user'});
     if(path==='debug_token'){const token=u.searchParams.get('input_token');return response({data:{is_valid:true,app_id:wrongApp?'999':'123',user_id:'42',type:token==='page-secret'?'PAGE':'USER',profile_id:token==='page-secret'?'456':undefined,scopes:missingScope?SCOPES.filter(s=>s!=='pages_manage_posts'):SCOPES,expires_at:0,data_access_expires_at:0}});}
     if(path==='me/accounts')return response({data:[{id:wrongPage?'111':'456',access_token:'page-secret',tasks:['CREATE_CONTENT'],instagram_business_account:{id:'789'}}]});
+    if(path==='me/adaccounts')return response({data:[{id:'act_111',name:'Other Account',currency:'EUR',account_status:1},{id:'act_999',name:'Homestro Ads',currency:'EUR',account_status:1}]});
+    if(path==='120254762990220274')return response({id:'120254762990220274',name:'Homestro Frankenstein 3a5dac2f68',account_id:'999',status:'PAUSED',effective_status:'PAUSED'});
+    if(path==='act_999/campaigns')return response({data:[
+      {id:'120254762990220274',name:'Homestro Frankenstein 3a5dac2f68',status:'PAUSED',effective_status:'PAUSED'},
+      {id:'active-1',name:'Active XP6 campaign',status:'ACTIVE',effective_status:'ACTIVE'},
+      {id:'inactive-1',name:'Paused campaign',status:'PAUSED',effective_status:'PAUSED'}]});
     if(path==='456')return response({id:'456',instagram_business_account:{id:'789'}});
     if(path==='789')return response({id:'789'});
     throw Error('Unexpected Graph path: '+path);
   };return {connection:new MetaConnection({env,pool,fetchImpl}),pool,calls};
 }
-async function connected(f){const start=await f.connection.begin();await f.connection.complete({state:new URL(start.authorizationUrl).searchParams.get('state'),browser:start.browser,code:'code'});return f;}
+async function connected(f){const start=await f.connection.begin();f.connectedResult=await f.connection.complete({state:new URL(start.authorizationUrl).searchParams.get('state'),browser:start.browser,code:'code'});return f;}
 test('OAuth derives and encrypts Page access; status never exposes secrets',async()=>{
-  const f=await connected(fixture());assert.equal(f.pool.row.status,'connected');assert(!f.pool.row.encrypted_credentials.includes('page-secret'));
-  const c=await f.connection.credentials();assert.equal(c.token,'page-secret');assert.equal(c.pageId,'456');assert.equal(c.instagramId,'789');assert(c.appsecretProof);
-  assert(!JSON.stringify(await f.connection.status()).includes('page-secret'));assert.equal(f.calls.filter(c=>c.url.includes('/oauth/access_token')).length,2);
+  const f=await connected(fixture());assert.equal(f.pool.row.status,'connected');assert(!f.pool.row.encrypted_credentials.includes('page-secret'));assert(!f.pool.row.encrypted_credentials.includes('long-user'));
+  const c=await f.connection.credentials();assert.equal(c.token,'page-secret');assert.equal(c.userToken,'long-user');assert.equal(c.pageId,'456');assert.equal(c.instagramId,'789');assert(c.appsecretProof);
+  const status=await f.connection.status();assert.equal(status.adAccountId,'act_999');assert.deepEqual(status.activeCampaigns.map(x=>x.id),['active-1']);
+  assert(!JSON.stringify(status).includes('page-secret'));assert(!JSON.stringify(status).includes('long-user'));assert.equal(f.calls.filter(c=>c.url.includes('/oauth/access_token')).length,2);
 });
 test('a restarted process reloads stored access',async()=>{const f=await connected(fixture());assert.equal((await new MetaConnection({env,pool:f.pool}).credentials()).token,'page-secret');});
+test('OAuth requests Ads scopes and resolves the target campaign account plus active campaigns',async()=>{
+  const f=fixture(),start=await f.connection.begin(),url=new URL(start.authorizationUrl);
+  assert.equal(url.searchParams.get('scope').includes('ads_read'),true);
+  assert.equal(url.searchParams.get('scope').includes('ads_management'),true);
+  const result=await f.connection.complete({state:url.searchParams.get('state'),browser:start.browser,code:'code'});
+  assert.equal(result.adAccountId,'act_999');
+  assert.equal(result.targetCampaign.id,'120254762990220274');
+  assert.equal(result.targetCampaign.effectiveStatus,'PAUSED');
+  assert.deepEqual(result.activeCampaigns.map(x=>x.id),['active-1']);
+  assert.equal((await f.connection.adAccountStatus()).adAccountId,'act_999');
+});
+test('manual ad account selection accepts only the account containing the target campaign',async()=>{
+  const f=await connected(fixture());
+  await assert.rejects(f.connection.selectAdAccount('act_111'),{code:'META_TARGET_CAMPAIGN_ACCOUNT_MISMATCH'});
+  const selected=await f.connection.selectAdAccount('act_999');
+  assert.equal(selected.adAccountId,'act_999');
+  assert.deepEqual(selected.activeCampaigns.map(x=>x.id),['active-1']);
+});
 test('OAuth state is browser-bound and single-use',async()=>{
   const f=fixture(),s=await f.connection.begin(),state=new URL(s.authorizationUrl).searchParams.get('state');
   await assert.rejects(f.connection.complete({state,browser:'x'.repeat(43),code:'code'}),{code:'META_OAUTH_STATE_INVALID'});assert.equal(f.calls.length,0);
@@ -85,18 +111,21 @@ test('connect routes protect setup, bind the callback cookie, and emit valid bro
   const old=Module._load;let connection;
   try{Module._load=function(id,...args){if(id==='express')return {urlencoded:()=> (_q,_r,next)=>next()};return old.call(this,id,...args);};
     connection=registerMetaConnection(app,auth,{env,pool:f.pool,fetchImpl:f.connection.fetch});}finally{Module._load=old;}
-  async function run(method,path,{headers={},query={}}={}){
-    const res={code:200,headers:{},cookieValue:null,status(n){this.code=n;return this;},set(h){Object.assign(this.headers,h);return this;},type(){return this;},json(b){this.body=b;return this;},send(b){this.body=b;return this;},cookie(name,value,options){this.cookieValue={name,value,options};return this;},clearCookie(){return this;}};
-    const req={get:k=>headers[k],query};const handlers=routes.get(method+' '+path);let n=0;
+  async function run(method,path,{headers={},query={},body={}}={}){
+    const res={code:200,headers:{},cookieValue:null,status(n){this.code=n;return this;},set(h){Object.assign(this.headers,h);return this;},type(){return this;},json(b){this.body=b;return this;},send(b){this.body=b;return this;},cookie(name,value,options){this.cookieValue={name,value,options};return this;},clearCookie(){return this;},redirect(code,url){this.code=code;this.redirectUrl=url;return this;}};
+    const req={get:k=>headers[k],query,body};const handlers=routes.get(method+' '+path);let n=0;
     async function next(){if(n<handlers.length)await handlers[n++](req,res,next);}await next();return res;
   }
   try{
     assert.equal((await run('POST','/api/connections/meta/start')).code,401);
+    const launch=await run('GET','/connect/meta/authorize');
+    assert.equal(launch.code,302);assert.equal(new URL(launch.redirectUrl).searchParams.get('scope').includes('ads_management'),true);
     const start=await run('POST','/api/connections/meta/start',{headers:{authorization:'Bearer admin'}});
     assert.equal(start.cookieValue.options.secure,true);assert.equal(start.cookieValue.options.httpOnly,true);assert.equal(start.cookieValue.options.sameSite,'lax');
     const callback=await run('GET','/auth/meta/callback',{headers:{cookie:start.cookieValue.name+'='+start.cookieValue.value},query:{code:'code',state:new URL(start.body.authorizationUrl).searchParams.get('state')}});
-    assert.equal(callback.code,200);assert.equal(f.pool.row.status,'connected');assert(!callback.body.includes('page-secret'));
+    assert.equal(callback.code,200);assert.equal(f.pool.row.status,'connected');assert(callback.body.includes('act_999'));assert(callback.body.includes('active-1'));assert(!callback.body.includes('page-secret'));
     const ui=await run('GET','/connect/meta');assert(ui.headers['Content-Security-Policy'].includes('nonce-'));const script=ui.body.match(/<script nonce="[^"]+">([\s\S]+)<\/script>/)[1];new vm.Script(script);
     assert(!script.includes('localStorage'));assert(!script.includes('sessionStorage'));
   }finally{await connection.stop();}
 });
+
