@@ -1,4 +1,10 @@
 const crypto = require('node:crypto');
+const {
+  createAutopilotScheduler,
+  createRunHistoryStore,
+  executeAndRecord,
+  isAutopilotEnabled,
+} = require('./autopilot');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -8,6 +14,10 @@ const erazer = readJson('erazer_priority.json');
 const asBoolean = value => value === undefined || value === null ? null : String(value).trim().toLowerCase() === 'true';
 const messageBus = [];
 let lastCycle = null;
+const historyPath = process.env.JARVIS_RUN_HISTORY_PATH
+  || (process.env.RAILWAY_SERVICE_ID ? '/data/jarvis-run-history.json' : path.join(__dirname, 'jarvis-run-history.json'));
+const runHistoryStore = createRunHistoryStore(historyPath);
+let autopilotScheduler = null;
 const serviceList = ['Streicharbeiten', 'Spachtelarbeiten', 'Laminat und Vinyl verlegen',
   'Silikonfugen erneuern', 'Fliesenreparaturen', 'Haus- und Wohnungsrenovierungen'];
 const blockedRoot = 'Ma' + 'ler';
@@ -148,7 +158,7 @@ function runDryRunCycle() {
   return lastCycle;
 }
 
-function workforceStatus(env = process.env) {
+function workforceStatus(env = process.env, runtime = {}) {
   const agents = manifest.agents.map(agent => {
     const last = [...messageBus].reverse().find(msg => msg.sender === agent.id || msg.recipient === agent.id);
     return {...agent, communication: manifest.communication.status,
@@ -163,6 +173,13 @@ function workforceStatus(env = process.env) {
     activePillar: manifest.activePillar,
     pillarOrder: manifest.pillarOrder,
     pillars: manifest.pillars,
+    autopilot_active: Boolean(runtime.autopilot_active),
+    last_auto_run_at: [...(runtime.run_history || [])].reverse()
+      .find(item => item.trigger_type === 'AUTO_SCHEDULED')?.timestamp || null,
+    next_scheduled_run_at: runtime.next_scheduled_run_at || null,
+    latest_czech_summary: [...(runtime.run_history || [])].reverse()
+      .find(item => item.comms_agent_summary)?.comms_agent_summary || lastCycle?.summary_report?.text || null,
+    run_history: runtime.run_history || [],
     agents,
     communication: {...manifest.communication, messageCount: messageBus.length,
       lastMessage: messageBus.length ? {...messageBus[messageBus.length - 1], payload: undefined} : null},
@@ -185,11 +202,61 @@ function workforceStatus(env = process.env) {
 }
 
 function registerJarvisWorkforce(app) {
-  app.get('/api/jarvis/v1/workforce', (_req, res) => res.status(200).json(workforceStatus()));
-  app.post('/api/jarvis/v1/workforce/cycle', (_req, res) => {
-    const cycle = runDryRunCycle();
-    return res.status(cycle.status === 'completed' ? 200 : 409).json({ok: cycle.status === 'completed', cycle});
+  if (!autopilotScheduler) {
+    autopilotScheduler = createAutopilotScheduler({
+      enabled: isAutopilotEnabled(process.env),
+      onRun: triggerType => runAndRecord(triggerType),
+    });
+    void runHistoryStore.load().catch(error => {
+      console.error('[jarvis-autopilot] HISTORY_LOAD_FAILED', error?.message || String(error));
+    });
+    const enabled = autopilotScheduler.start();
+    console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
+  }
+
+  app.get('/api/jarvis/v1/workforce', async (_req, res) => {
+    try {
+      const run_history = await runHistoryStore.load();
+      const scheduler = autopilotScheduler?.status() || {};
+      return res.status(200).json(workforceStatus(process.env, {
+        ...scheduler,
+        run_history,
+      }));
+    } catch (error) {
+      return res.status(200).json(workforceStatus(process.env, {
+        autopilot_active: Boolean(autopilotScheduler?.status().autopilot_active),
+        next_scheduled_run_at: autopilotScheduler?.status().next_scheduled_run_at || null,
+        run_history: [],
+        history_error: error?.message || 'HISTORY_UNAVAILABLE',
+      }));
+    }
+  });
+
+  app.post('/api/jarvis/v1/workforce/cycle', async (_req, res) => {
+    const {cycle, entry} = await runAndRecord('MANUAL');
+    return res.status(cycle.status === 'completed' ? 200 : 409).json({
+      ok: cycle.status === 'completed', cycle, run: entry,
+    });
   });
 }
 
+async function runAndRecord(triggerType) {
+  const {cycle, entry} = await executeAndRecord(triggerType, {
+    runCycle: runDryRunCycle,
+    historyStore: runHistoryStore,
+  });
+  lastCycle = cycle;
+  console.log('[jarvis-autopilot] RUN ' + JSON.stringify({
+    trigger_type: triggerType,
+    status: cycle.status,
+    timestamp: entry.timestamp,
+    duration_ms: entry.duration_ms,
+    comms_agent_summary: entry.comms_agent_summary,
+    dry_run: cycle.dry_run !== false,
+    external_writes_performed: cycle.external_writes_performed === true,
+  }));
+  return cycle;
+}
+
 module.exports = {registerJarvisWorkforce, workforceStatus, runDryRunCycle, auditMessage};
+
