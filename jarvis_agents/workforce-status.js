@@ -142,7 +142,7 @@ function runDryRunCycle() {
   }
   const state = results.map(item => ({pillar: item.pillar, status: item.status}));
   const cycleStatus = results.length === plan.length && results.every(item => item.status === 'completed') ? 'completed' : 'blocked';
-  const report = {text: `JARVIS ${cycleStatus}: ${results.filter(item => item.status === 'completed').length}/4 pilíře, dry-run, útrata 0 €. Žádná publikace, kampaň ani video nebyly spuštěny.`,
+  const report = {text: `JARVIS cyklus ${cycleStatus === 'completed' ? 'dokončen' : 'zablokován'}: ${results.filter(item => item.status === 'completed').length}/4 pilíře, režim nanečisto, útrata 0 €. Žádná publikace, kampaň ani video nebyly spuštěny.`,
     channel: 'whatsapp_ready', sent: false, spendEUR: 0, pillarStatus: state};
   const reportMessage = message('comms', 'orchestrator', 'all', 'cycle_summary', report, 'completed');
   const reportAudit = auditMessage(reportMessage);
