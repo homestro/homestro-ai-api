@@ -136,23 +136,47 @@ class LiveMetaExecutor{
     if(!this.shopifyGraphQL)throw Error('SHOPIFY_GRAPHQL_UNAVAILABLE');
     const {GoogleTrends}=await import('../homestro-marketing-pilot/modules/trends.js');
     const service=trends||new GoogleTrends({fetchImpl:this.fetch,geos:['DE','AT']});
-    const updated=[];let after=null;
+    const updated=[];let altTextsUpdated=0,trendsMatchedProducts=0,after=null;
     do{
-      const d=await this.shopifyGraphQL('query($after:String){products(first:50,after:$after,query:"status:active"){nodes{id title handle description productType tags seo{title description}}pageInfo{hasNextPage endCursor}}}',{after});
+      const d=await this.shopifyGraphQL('query($after:String){products(first:50,after:$after,query:"status:active"){nodes{id title handle description productType tags seo{title description} media(first:100){nodes{id alt mediaContentType}}}pageInfo{hasNextPage endCursor}}}',{after});
       const page=d?.products;if(!page||!Array.isArray(page.nodes))throw Error('SHOPIFY_ACTIVE_PRODUCTS_UNAVAILABLE');
       for(const p of page.nodes){
         const current={title:p.seo?.title||p.title,searchTitle:p.title,seoTitle:p.seo?.title||p.title,seoDescription:p.seo?.description||p.description||'',description:p.description||''};
-        const result=await service.optimize(p,current);if(!result.changed||!result.matchedQuery)continue;
-        const term=String(result.matchedQuery).trim().slice(0,80);const tag='trend:'+term;
-        const tags=[...new Set([...(p.tags||[]),tag])].slice(0,250);
-        const input={id:p.id,seo:{title:String(result.copy.seoTitle||'').slice(0,70),description:String(result.copy.seoDescription||'').slice(0,320)},tags};
-        const res=await this.shopifyGraphQL('mutation($product:ProductUpdateInput!){productUpdate(product:$product){product{id}userErrors{field message}}}',{product:input});
-        const errs=res?.productUpdate?.userErrors||[];if(errs.length){const error=Error('SHOPIFY_SEO_UPDATE_REJECTED');error.externalWritesPerformed=updated.length>0;error.result={status:'partial',activeProductsOptimized:updated.length,updated};throw error;}
-        updated.push({id:p.id,matchedTrend:term});await pause(200);
+        const result=await service.optimize(p,current);
+        const matched=Boolean(result?.matchedQuery);
+        const plainDescription=String(p.description||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+        const seoTitle=String((matched&&result.copy?.seoTitle)||p.seo?.title||p.title||'').slice(0,70);
+        const seoDescription=String((matched&&result.copy?.seoDescription)||p.seo?.description||plainDescription||p.title||'').slice(0,320);
+        const tag=matched?'trend:'+String(result.matchedQuery).trim().slice(0,80):null;
+        const tags=[...new Set([...(p.tags||[]),...(tag?[tag]:[])])].slice(0,250);
+        const seoChanged=seoTitle!==String(p.seo?.title||'')||seoDescription!==String(p.seo?.description||'')||(tag&&!(p.tags||[]).includes(tag));
+        let didUpdate=false;
+        if(seoChanged){
+          const res=await this.shopifyGraphQL('mutation($product:ProductUpdateInput!){productUpdate(product:$product){product{id}userErrors{field message}}}',{product:{id:p.id,seo:{title:seoTitle,description:seoDescription},tags}});
+          const errs=res?.productUpdate?.userErrors||[];
+          if(errs.length){const error=Error('SHOPIFY_SEO_UPDATE_REJECTED');error.externalWritesPerformed=updated.length>0;error.result={status:'partial',activeProductsOptimized:updated.length,altTextsUpdated,updated};throw error;}
+          didUpdate=true;if(matched)trendsMatchedProducts++;
+        }
+        const missingAlt=(p.media?.nodes||[]).filter(media=>media.mediaContentType==='IMAGE'&&!String(media.alt||'').trim()).map(media=>({id:media.id,alt:String(p.title||'Homestro Produkt').slice(0,250)}));
+        if(missingAlt.length){
+          const res=await this.shopifyGraphQL('mutation($productId:ID!,$media:[UpdateMediaInput!]!){productUpdateMedia(productId:$productId,media:$media){mediaUserErrors{field message}}}',{productId:p.id,media:missingAlt});
+          const errs=res?.productUpdateMedia?.mediaUserErrors||[];
+          if(errs.length)this.logger.warn?.('[jarvis-autopilot] SHOPIFY_ALT_TEXT_UPDATE_REJECTED '+JSON.stringify({productId:p.id,count:errs.length,errors:errs.slice(0,3)}));
+          else{altTextsUpdated+=missingAlt.length;didUpdate=true;}
+        }
+        if(didUpdate)updated.push({id:p.id,handle:p.handle,trend:matched?String(result.matchedQuery):null,altTextsUpdated:missingAlt.length});
+        await pause(150);
       }
-      if(!page.pageInfo?.hasNextPage)break;after=page.pageInfo.endCursor;if(!after){const error=Error('SHOPIFY_PAGINATION_INCOMPLETE');error.externalWritesPerformed=updated.length>0;error.result={status:'partial',activeProductsOptimized:updated.length,updated};throw error;}
+      if(!page.pageInfo?.hasNextPage)break;after=page.pageInfo.endCursor;if(!after){const error=Error('SHOPIFY_PAGINATION_INCOMPLETE');error.externalWritesPerformed=updated.length>0;error.result={status:'partial',activeProductsOptimized:updated.length,altTextsUpdated,updated};throw error;}
     }while(true);
-    return {status:'completed',activeProductsOptimized:updated.length,updated};
+    return {status:'completed',activeProductsOptimized:updated.length,altTextsUpdated,trendsMatchedProducts,updated};
+  }
+  async activeProductsForOrganic(){
+    if(!this.shopifyGraphQL)throw Error('SHOPIFY_GRAPHQL_UNAVAILABLE');
+    const data=await this.shopifyGraphQL('query{products(first:250,query:"status:active"){nodes{title handle productType}}}');
+    const nodes=data?.products?.nodes;
+    if(!Array.isArray(nodes))throw Error('SHOPIFY_ACTIVE_PRODUCTS_UNAVAILABLE');
+    return nodes.filter(p=>p?.title&&p?.handle).sort((a,b)=>(a.handle===PRODUCT_HANDLE?-1:0)-(b.handle===PRODUCT_HANDLE?-1:0));
   }
   async campaignExists(token){
     const rows=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,account_id,objective,status,effective_status'});
