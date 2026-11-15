@@ -76,7 +76,12 @@ class LiveMetaExecutor{
         return {id:String(pixel.id),lastFiredTime:details.last_fired_time||null,eventTimeMax:details.event_time_max||null};
       }catch(e){return {id:String(pixel.id),activityUnavailable:String(e?.message||'PIXEL_ACTIVITY_UNAVAILABLE'),providerMessage:e?.providerMessage||null};}
     }));
-    const pixelId=pixelIds.length===1?pixelIds[0]:pixelIds.length===0&&available.length===1?String(available[0].id):null;
+    const recentlyFired=pixelActivity.filter(x=>x.lastFiredTime);
+    const pixelId=pixelIds.length===1?pixelIds[0]:pixelIds.length===0&&available.length===1?String(available[0].id):
+      pixelIds.length===0&&recentlyFired.length===1?recentlyFired[0].id:null;
+    const pixelSource=pixelIds.length===1?'ARCHIVED_CAMPAIGN_ADSET':
+      pixelIds.length===0&&available.length===1?'ONLY_AVAILABLE_ACCOUNT_PIXEL':
+      pixelIds.length===0&&recentlyFired.length===1?'ONLY_RECENTLY_FIRED_ACCOUNT_PIXEL':null;
     const campaignBeneficiaries=[...new Set(sets.map(x=>String(x.dsa_beneficiary||'').trim()).filter(Boolean))];
     const campaignPayors=[...new Set(sets.map(x=>String(x.dsa_payor||'').trim()).filter(Boolean))];
     const dsaBeneficiary=String(account.default_dsa_beneficiary||'').trim()|| (campaignBeneficiaries.length===1?campaignBeneficiaries[0]:'');
@@ -89,7 +94,7 @@ class LiveMetaExecutor{
     if(!pixelId||!available.some(x=>String(x.id)===pixelId)||!dsaBeneficiary||!dsaPayor){
       throw Object.assign(Error('META_ARCHIVED_CAMPAIGN_PIXEL_OR_DSA_AMBIGUOUS'),{details:evidence});
     }
-    return {campaignId:String(c.id),campaignName:String(c.name||''),campaignStatus:String(c.effective_status||c.status||''),pixelId,dsaBeneficiary,dsaPayor,adsetCount:sets.length,adCount:ads.length};
+    return {campaignId:String(c.id),campaignName:String(c.name||''),campaignStatus:String(c.effective_status||c.status||''),pixelId,pixelSource,dsaBeneficiary,dsaPayor,adsetCount:sets.length,adCount:ads.length};
   }
   async accountSnapshot(token){
     const account=await this.graph(ACCOUNT_ID,token,{params:{fields:'id,account_status,currency,timezone_name,disable_reason'}});
