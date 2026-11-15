@@ -3,7 +3,7 @@
 const {createHmac}=require('node:crypto');
 const ACCOUNT_ID='act_918741266442442';
 const TARGET_CAMPAIGN_ID='120254762990220274';
-const DAILY_CAP_EUR=10;
+const DAILY_CAP_EUR=Number.isFinite(Number(process.env.MAX_DAILY_AD_SPEND_EUR))?Number(process.env.MAX_DAILY_AD_SPEND_EUR):10;
 const START_BUDGET_EUR=5;
 const CAMPAIGN_NAME='Homestro AI Autopilot - Erazer XP6';
 const PRODUCT_HANDLE='lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5';
@@ -208,6 +208,22 @@ class LiveMetaExecutor{
       return {status:'ACTIVE',campaignId:ids.campaignId,adsetId:ids.adsetId,adId:ids.adId,dailyBudgetEur:START_BUDGET_EUR,targeting:{countries:['DE','AT'],ageMin:20,ageMax:60},creativeSource:'existing_shopify_cdn_video',videoGenerated:false,budgetGuard:finalGate,externalWritesPerformed:true};
     }catch(e){await this.pauseCreated(token,ids);return {status:'blocked',reason:String(e.message||'META_CAMPAIGN_CREATE_FAILED').slice(0,100),providerCode:e.providerCode||null,providerSubcode:e.providerSubcode||null,providerMessage:String(e.providerMessage||'').slice(0,300)||null,providerUserMessage:String(e.providerUserMessage||'').slice(0,300)||null,providerUserTitle:String(e.providerUserTitle||'').slice(0,200)||null,fbtraceId:e.fbtraceId||null,createdIds:ids,externalWritesPerformed:Object.values(ids).some(Boolean)};}
   }
+  async pauseAllActiveCampaigns(){
+    const token=await this.token();
+    const before=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status'});
+    const active=before.filter(c=>String(c.effective_status||c.status).toUpperCase()==='ACTIVE');
+    const paused=[];
+    for(const campaign of active){
+      await this.graph(String(campaign.id),token,{method:'POST',body:{status:'PAUSED'}});
+      paused.push({id:String(campaign.id),name:String(campaign.name||'')});
+    }
+    const after=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status'});
+    const stillActive=after.filter(c=>String(c.effective_status||c.status).toUpperCase()==='ACTIVE').map(c=>String(c.id));
+    const result={accountId:ACCOUNT_ID,paused,stillActive,zeroSpendLock:stillActive.length===0};
+    this.logger.info?.('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK '+JSON.stringify(result));
+    if(stillActive.length)throw Error('META_ACTIVE_CAMPAIGNS_REMAIN_AFTER_PAUSE');
+    return result;
+  }
   async inspect(){
     const token=await this.token();
     const [evidence,snapshot,product]=await Promise.all([this.archivedCampaignEvidence(token),this.accountSnapshot(token),this.product()]);
@@ -216,6 +232,7 @@ class LiveMetaExecutor{
   }
   async preflight(){const token=await this.token();const [evidence,snapshot,product]=await Promise.all([this.archivedCampaignEvidence(token),this.accountSnapshot(token),this.product()]);const result={status:'checked',evidence,snapshot:{accountId:snapshot.accountId,currency:snapshot.currency,timezone:snapshot.timezone,spendTodayEur:snapshot.spendTodayEur,activeDailyBudgetsEur:snapshot.activeDailyBudgetsEur,activeCampaignCount:snapshot.campaigns.filter(x=>String(x.effective_status||x.status).toUpperCase()==='ACTIVE').length},product:{id:product.id,handle:product.handle,videoUrl:product.videoUrl},budgetGuard:accountBudgetDecision(snapshot)};this.logger.info?.('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT '+JSON.stringify(result));return result;}
   async runLiveCycle(){
+    if(String(this.env.PAID_ADS_ENABLED||'').toLowerCase()!=='true'||DAILY_CAP_EUR<=0)return {status:'blocked',reason:'PAID_ADS_ZERO_SPEND_LOCK',dryRun:false,externalWritesPerformed:false,adSpendEUR:0,capEur:DAILY_CAP_EUR};
     if(String(this.env.AUTONOMOUS_LIVE_MODE||'').toLowerCase()!=='true')return {status:'blocked',reason:'AUTONOMOUS_LIVE_MODE_DISABLED',dryRun:true};
     if(this.env.META_AD_ACCOUNT_ID!==ACCOUNT_ID)return {status:'blocked',reason:'META_AD_ACCOUNT_ID_MISMATCH',dryRun:true};
     const token=await this.token();const [evidence,snapshot,product]=await Promise.all([this.archivedCampaignEvidence(token),this.accountSnapshot(token),this.product()]);
