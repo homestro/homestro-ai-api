@@ -146,18 +146,35 @@ class LiveMetaExecutor{
     return {status:'completed',activeProductsOptimized:updated.length,updated};
   }
   async campaignExists(token){
-    const rows=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status'});
+    const rows=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,account_id,objective,status,effective_status'});
     return rows.find(c=>c.name===CAMPAIGN_NAME)||null;
   }
   async write(path,token,body){const r=await this.graph(path,token,{method:'POST',body});if(!r.id)throw Error('META_WRITE_ID_MISSING');return String(r.id);}
   async pauseCreated(token,ids){for(const id of [ids.adId,ids.adsetId,ids.campaignId].filter(Boolean)){try{await this.graph(id,token,{method:'POST',body:{status:'PAUSED'}});}catch{}}}
   async createCampaign(token,p,asset,snapshot,evidence){
-    const existing=await this.campaignExists(token);if(existing){const status=String(existing.effective_status||existing.status||'').toUpperCase();return status==='ACTIVE'?{status:'existing_campaign',campaignId:String(existing.id),effectiveStatus:status}:{status:'blocked',reason:'CAMPAIGN_NAME_ALREADY_EXISTS_NOT_ACTIVE',campaignId:String(existing.id),effectiveStatus:status,externalWritesPerformed:false};}
+    const existing=await this.campaignExists(token);let reuseExisting=false;
+    if(existing){
+      const status=String(existing.effective_status||existing.status||'').toUpperCase();
+      if(status==='ACTIVE')return {status:'existing_campaign',campaignId:String(existing.id),effectiveStatus:status,externalWritesPerformed:false};
+      if(status!=='PAUSED'||String(existing.account_id)!==ACCOUNT_ID.slice(4)||
+          String(this.env.META_AUTOPILOT_CAMPAIGN_ID||'')!==String(existing.id))
+        return {status:'blocked',reason:'CAMPAIGN_NAME_ALREADY_EXISTS_NOT_OWNED_PAUSED',campaignId:String(existing.id),effectiveStatus:status,externalWritesPerformed:false};
+      const [sets,ads]=await Promise.all([
+        this.pages(`${existing.id}/adsets`,token,{fields:'id,status,effective_status'}),
+        this.pages(`${existing.id}/ads`,token,{fields:'id,status,effective_status'}),
+      ]);
+      if(sets.length||ads.length)return {status:'blocked',reason:'OWNED_CAMPAIGN_PARTIAL_OBJECTS_REQUIRE_REVIEW',campaignId:String(existing.id),adsetCount:sets.length,adCount:ads.length,externalWritesPerformed:false};
+      const videoId=String(this.env.META_AUTOPILOT_VIDEO_ID||'');
+      if(!/^\d+$/.test(videoId))return {status:'blocked',reason:'OWNED_CAMPAIGN_VIDEO_ASSET_ID_MISSING',campaignId:String(existing.id),externalWritesPerformed:false};
+      const video=await this.graph(videoId,token,{params:{fields:'id'}});
+      if(String(video.id)!==videoId)return {status:'blocked',reason:'OWNED_CAMPAIGN_VIDEO_ASSET_UNAVAILABLE',campaignId:String(existing.id),externalWritesPerformed:false};
+      reuseExisting=true;
+    }
     const gate=accountBudgetDecision({...snapshot,proposedDailyBudgetEur:START_BUDGET_EUR});if(!gate.allowed)return {status:'blocked',reason:gate.reason,budgetGuard:gate};
     const ids={};
     try{
-      ids.campaignId=await this.write(`${ACCOUNT_ID}/campaigns`,token,{name:CAMPAIGN_NAME,objective:'OUTCOME_SALES',status:'PAUSED',special_ad_categories:'[]',is_adset_budget_sharing_enabled:'false'});
-      ids.videoId=await this.write(`${ACCOUNT_ID}/advideos`,token,{file_url:p.videoUrl,name:'Erazer XP6 Shopify CDN video'});
+      ids.campaignId=reuseExisting?String(existing.id):await this.write(`${ACCOUNT_ID}/campaigns`,token,{name:CAMPAIGN_NAME,objective:'OUTCOME_SALES',status:'PAUSED',special_ad_categories:'[]',is_adset_budget_sharing_enabled:'false'});
+      ids.videoId=reuseExisting?String(this.env.META_AUTOPILOT_VIDEO_ID):await this.write(`${ACCOUNT_ID}/advideos`,token,{file_url:p.videoUrl,name:'Erazer XP6 Shopify CDN video'});
       ids.adsetId=await this.write(`${ACCOUNT_ID}/adsets`,token,{name:'Erazer XP6 Broad DE AT',campaign_id:ids.campaignId,daily_budget:String(START_BUDGET_EUR*100),billing_event:'IMPRESSIONS',optimization_goal:'OFFSITE_CONVERSIONS',bid_strategy:'LOWEST_COST_WITHOUT_CAP',promoted_object:JSON.stringify({pixel_id:evidence.pixelId,custom_event_type:'PURCHASE'}),dsa_beneficiary:evidence.dsaBeneficiary,dsa_payor:evidence.dsaPayor,targeting:JSON.stringify({geo_locations:{countries:['DE','AT']},age_min:20,age_max:60,publisher_platforms:['facebook','instagram']}),status:'PAUSED'});
       const spec={page_id:String(this.env.META_PAGE_ID||''),video_data:{video_id:ids.videoId,message:AD_COPY,title:'Ein Stück Zuhausegefühl – Erazer XP6',link_description:'Entdecke die Erazer XP6 bei Homestro.',call_to_action:{type:'SHOP_NOW',value:{link:PRODUCT_URL}}}};
       if(!/^\d+$/.test(spec.page_id))throw Error('META_PAGE_ID_INVALID');
@@ -166,7 +183,7 @@ class LiveMetaExecutor{
       const fresh=await this.accountSnapshot(token);const finalGate=accountBudgetDecision({...fresh,proposedDailyBudgetEur:START_BUDGET_EUR});if(!finalGate.allowed)throw Error(finalGate.reason);
       for(const id of [ids.adsetId,ids.adId,ids.campaignId])await this.graph(id,token,{method:'POST',body:{status:'ACTIVE'}});
       return {status:'ACTIVE',campaignId:ids.campaignId,adsetId:ids.adsetId,adId:ids.adId,dailyBudgetEur:START_BUDGET_EUR,targeting:{countries:['DE','AT'],ageMin:20,ageMax:60},creativeSource:'existing_shopify_cdn_video',videoGenerated:false,budgetGuard:finalGate,externalWritesPerformed:true};
-    }catch(e){await this.pauseCreated(token,ids);return {status:'blocked',reason:String(e.message||'META_CAMPAIGN_CREATE_FAILED').slice(0,100),createdIds:ids,externalWritesPerformed:Object.values(ids).some(Boolean)};}
+    }catch(e){await this.pauseCreated(token,ids);return {status:'blocked',reason:String(e.message||'META_CAMPAIGN_CREATE_FAILED').slice(0,100),providerMessage:String(e.providerMessage||'').slice(0,300)||null,createdIds:ids,externalWritesPerformed:Object.values(ids).some(Boolean)};}
   }
   async inspect(){
     const token=await this.token();
