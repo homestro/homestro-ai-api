@@ -69,7 +69,7 @@ class LiveMetaExecutor{
     const sets=await this.pages(`${TARGET_CAMPAIGN_ID}/adsets`,token,{fields:'id,name,status,effective_status,daily_budget,promoted_object,dsa_beneficiary,dsa_payor'});
     const ads=await this.pages(`${TARGET_CAMPAIGN_ID}/ads`,token,{fields:'id,name,status,effective_status,creative{object_story_spec,video_id,object_url}'});
     const pixelIds=[...new Set(sets.map(x=>String(x.promoted_object?.pixel_id||'')).filter(Boolean))];
-    const pixels=await this.pages(`${ACCOUNT_ID}/adspixels`,token,{fields:'id,name,is_unavailable'});
+    const pixels=await this.pages(`${ACCOUNT_ID}/adspixels`,token,{fields:'id,name,is_unavailable,last_fired_time,event_time_max,owner_ad_account'});
     const available=pixels.filter(x=>!x.is_unavailable);
     const pixelId=pixelIds.length===1?pixelIds[0]:pixelIds.length===0&&available.length===1?String(available[0].id):null;
     const campaignBeneficiaries=[...new Set(sets.map(x=>String(x.dsa_beneficiary||'').trim()).filter(Boolean))];
@@ -77,7 +77,8 @@ class LiveMetaExecutor{
     const dsaBeneficiary=String(account.default_dsa_beneficiary||'').trim()|| (campaignBeneficiaries.length===1?campaignBeneficiaries[0]:'');
     const dsaPayor=String(account.default_dsa_payor||'').trim()|| (campaignPayors.length===1?campaignPayors[0]:'');
     const evidence={adsetCount:sets.length,adCount:ads.length,pixelCandidates:pixelIds,
-      availablePixels:available.map(x=>({id:String(x.id),name:String(x.name||''),isUnavailable:Boolean(x.is_unavailable)})),
+      availablePixels:available.map(x=>({id:String(x.id),name:String(x.name||''),isUnavailable:Boolean(x.is_unavailable),
+        lastFiredTime:x.last_fired_time||null,eventTimeMax:x.event_time_max||null,ownerAdAccount:x.owner_ad_account?.id||null})),
       campaignBeneficiaryCandidates:campaignBeneficiaries,campaignPayorCandidates:campaignPayors,
       accountDefaultBeneficiary:String(account.default_dsa_beneficiary||''),accountDefaultPayor:String(account.default_dsa_payor||'')};
     if(!pixelId||!available.some(x=>String(x.id)===pixelId)||!dsaBeneficiary||!dsaPayor){
