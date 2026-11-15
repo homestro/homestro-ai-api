@@ -5,6 +5,7 @@ const {
   executeAndRecord,
   isAutopilotEnabled,
 } = require('./autopilot');
+const {LiveMetaExecutor} = require('./live-meta');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -18,6 +19,8 @@ const historyPath = process.env.JARVIS_RUN_HISTORY_PATH
   || (process.env.RAILWAY_SERVICE_ID ? '/data/jarvis-run-history.json' : path.join(__dirname, 'jarvis-run-history.json'));
 const runHistoryStore = createRunHistoryStore(historyPath);
 let autopilotScheduler = null;
+let liveExecutor = null;
+let workforceApiKey = null;
 const serviceList = ['Streicharbeiten', 'Spachtelarbeiten', 'Laminat und Vinyl verlegen',
   'Silikonfugen erneuern', 'Fliesenreparaturen', 'Haus- und Wohnungsrenovierungen'];
 const blockedRoot = 'Ma' + 'ler';
@@ -167,7 +170,7 @@ function workforceStatus(env = process.env, runtime = {}) {
   return {
     ok: true,
     system: manifest.system,
-    executionMode: manifest.executionMode,
+    executionMode: String(env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() === 'true' ? 'autonomous_live' : manifest.executionMode,
     mission: manifest.systemPrompt,
     vision: manifest.vision,
     activePillar: manifest.activePillar,
@@ -190,18 +193,21 @@ function workforceStatus(env = process.env, runtime = {}) {
       runwayForFlagship: 'forbidden',
     },
     safety: {
-      dryRun: true, newAdWrites: false, adSpendEUR: 0, paidVideoGenerationByJarvis: false,
+      dryRun: String(env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() !== 'true', newAdWrites: lastCycle?.external_writes_performed === true, adSpendEUR: lastCycle?.ad_spend_eur || 0, paidVideoGenerationByJarvis: false,
       existingCampaigns: 'read_only_untouched', externalWhatsAppDelivery: false,
       runtimeSwitches: {
         DRY_RUN: asBoolean(env.DRY_RUN),
         PILOT_AD_DRY_RUN: asBoolean(env.PILOT_AD_DRY_RUN),
+        AUTONOMOUS_LIVE_MODE: asBoolean(env.AUTONOMOUS_LIVE_MODE),
         VIDEO_GENERATION_ENABLED: asBoolean(env.VIDEO_GENERATION_ENABLED),
       },
     },
   };
 }
 
-function registerJarvisWorkforce(app) {
+function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} = {}) {
+  workforceApiKey = apiKey || null;
+  liveExecutor = new LiveMetaExecutor({metaConnection, shopifyGraphQL, env: process.env});
   if (!autopilotScheduler) {
     autopilotScheduler = createAutopilotScheduler({
       enabled: isAutopilotEnabled(process.env),
@@ -212,6 +218,12 @@ function registerJarvisWorkforce(app) {
     });
     const enabled = autopilotScheduler.start();
     console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
+    if (metaConnection && shopifyGraphQL) {
+      const timer = setTimeout(() => {
+        void liveExecutor.preflight().catch(error => console.warn('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT_FAILED', error?.message || String(error)));
+      }, 5000);
+      timer.unref?.();
+    }
   }
 
   app.get('/api/jarvis/v1/workforce', async (_req, res) => {
@@ -232,7 +244,7 @@ function registerJarvisWorkforce(app) {
     }
   });
 
-  app.post('/api/jarvis/v1/workforce/cycle', async (_req, res) => {
+  app.post('/api/jarvis/v1/workforce/cycle', ...(workforceApiKey ? [workforceApiKey] : []), async (_req, res) => {
     const {cycle, entry} = await runAndRecord('MANUAL');
     return res.status(cycle.status === 'completed' ? 200 : 409).json({
       ok: cycle.status === 'completed', cycle, run: entry,
@@ -242,7 +254,8 @@ function registerJarvisWorkforce(app) {
 
 async function runAndRecord(triggerType) {
   const {cycle, entry} = await executeAndRecord(triggerType, {
-    runCycle: runDryRunCycle,
+    runCycle: async () => String(process.env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() === 'true'
+      ? runLiveCycle() : runDryRunCycle(),
     historyStore: runHistoryStore,
   });
   lastCycle = cycle;
@@ -258,5 +271,23 @@ async function runAndRecord(triggerType) {
   return cycle;
 }
 
-module.exports = {registerJarvisWorkforce, workforceStatus, runDryRunCycle, auditMessage};
+async function runLiveCycle() {
+  if (!liveExecutor) return {status:'blocked',dry_run:true,external_writes_performed:false,ad_spend_eur:0,summary_report:{text:'JARVIS live cyklus zablokován: živý Meta/Shopify adaptér není zapojen; žádné změny ani útrata.'}};
+  const live = await liveExecutor.runLiveCycle();
+  const cycle = runDryRunCycle();
+  const homestro = cycle.pillar_results?.[0];
+  if (homestro) { homestro.status = live.status === 'completed' ? 'completed' : 'blocked'; homestro.result = {status:live.status,live}; }
+  cycle.status = live.status === 'completed' ? 'completed' : 'blocked';
+  cycle.dry_run = false;
+  cycle.external_writes_performed = live.externalWritesPerformed === true;
+  cycle.ad_spend_eur = Number(live.adSpendEUR || 0);
+  cycle.live_meta = live;
+  const campaign = live.campaign?.campaignId ? `Kampaň ${live.campaign.campaignId}` : (live.campaign?.reason || live.reason || 'reklama zablokována');
+  const seo = live.seo ? `SEO: upraveno ${live.seo.activeProductsOptimized || 0} aktivních produktů` : 'SEO nebylo dokončeno';
+  cycle.summary_report = {text:`JARVIS live cyklus ${cycle.status === 'completed' ? 'dokončen' : 'zablokován'}: ${campaign}; ${seo}; útrata cyklu ${cycle.ad_spend_eur.toFixed(2)} €. MS Handwerk zůstává oddělený.`,channel:'whatsapp_ready',sent:false,spendEUR:cycle.ad_spend_eur};
+  lastCycle = cycle;
+  return cycle;
+}
+
+module.exports = {registerJarvisWorkforce, workforceStatus, runDryRunCycle, runLiveCycle, auditMessage};
 
