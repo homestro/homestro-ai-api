@@ -123,11 +123,14 @@ class LiveMetaExecutor{
   }
   async product(){
     if(!this.shopifyGraphQL)throw Error('SHOPIFY_GRAPHQL_UNAVAILABLE');
-    const data=await this.shopifyGraphQL('query($query:String!){products(first:1,query:$query){nodes{id title handle description productType status tags seo{title description}media(first:50){nodes{mediaContentType status ... on Video{id sources{url mimeType format}}}}}}}',{query:`handle:${PRODUCT_HANDLE} status:active`});
+    const data=await this.shopifyGraphQL('query($query:String!){products(first:1,query:$query){nodes{id title handle description productType status tags seo{title description}media(first:50){nodes{mediaContentType status preview{image{url}} ... on Video{id preview{image{url}} sources{url mimeType format}}}}}}}',{query:`handle:${PRODUCT_HANDLE} status:active`});
     const p=data?.products?.nodes?.[0];if(!p||p.status!=='ACTIVE'||p.handle!==PRODUCT_HANDLE)throw Error('ERAZER_XP6_NOT_ACTIVE');
-    const video=p.media?.nodes?.find(m=>m.mediaContentType==='VIDEO'&&m.status==='READY')?.sources?.find(s=>s.mimeType==='video/mp4')?.url;
+    const videoMedia=p.media?.nodes?.find(m=>m.mediaContentType==='VIDEO'&&m.status==='READY');
+    const video=videoMedia?.sources?.find(s=>s.mimeType==='video/mp4')?.url;
+    const thumbnailUrl=videoMedia?.preview?.image?.url;
     if(!video||!/^https:\/\/cdn\.shopify\.com\//.test(video))throw Error('ERAZER_XP6_EXISTING_SHOPIFY_VIDEO_MISSING');
-    return {...p,videoUrl:video,productUrl:PRODUCT_URL};
+    if(!thumbnailUrl||!/^https:\/\/cdn\.shopify\.com\//.test(thumbnailUrl))throw Error('ERAZER_XP6_SHOPIFY_VIDEO_THUMBNAIL_MISSING');
+    return {...p,videoUrl:video,thumbnailUrl,productUrl:PRODUCT_URL};
   }
   async syncSeo(trends){
     if(!this.shopifyGraphQL)throw Error('SHOPIFY_GRAPHQL_UNAVAILABLE');
@@ -182,7 +185,7 @@ class LiveMetaExecutor{
       ids.campaignId=reuseExisting?String(existing.id):await this.write(`${ACCOUNT_ID}/campaigns`,token,{name:CAMPAIGN_NAME,objective:'OUTCOME_SALES',status:'PAUSED',special_ad_categories:'[]',is_adset_budget_sharing_enabled:'false'});
       ids.videoId=reuseExisting?String(this.env.META_AUTOPILOT_VIDEO_ID):await this.write(`${ACCOUNT_ID}/advideos`,token,{file_url:p.videoUrl,name:'Erazer XP6 Shopify CDN video'});
       ids.adsetId=await this.write(`${ACCOUNT_ID}/adsets`,token,{name:'Erazer XP6 Broad DE AT',campaign_id:ids.campaignId,daily_budget:String(START_BUDGET_EUR*100),billing_event:'IMPRESSIONS',optimization_goal:'OFFSITE_CONVERSIONS',bid_strategy:'LOWEST_COST_WITHOUT_CAP',promoted_object:JSON.stringify({pixel_id:evidence.pixelId,custom_event_type:'PURCHASE'}),dsa_beneficiary:evidence.dsaBeneficiary,dsa_payor:evidence.dsaPayor,targeting:JSON.stringify({geo_locations:{countries:['DE','AT']},age_min:20,age_max:60,publisher_platforms:['facebook','instagram'],targeting_automation:{advantage_audience:0}}),status:'PAUSED'});
-      const spec={page_id:String(this.env.META_PAGE_ID||''),video_data:{video_id:ids.videoId,message:AD_COPY,title:'Ein Stück Zuhausegefühl – Erazer XP6',link_description:'Entdecke die Erazer XP6 bei Homestro.',call_to_action:{type:'SHOP_NOW',value:{link:PRODUCT_URL}}}};
+      const spec={page_id:String(this.env.META_PAGE_ID||''),video_data:{video_id:ids.videoId,image_url:p.thumbnailUrl,message:AD_COPY,title:'Ein Stück Zuhausegefühl – Erazer XP6',link_description:'Entdecke die Erazer XP6 bei Homestro.',call_to_action:{type:'SHOP_NOW',value:{link:PRODUCT_URL}}}};
       if(!/^\d+$/.test(spec.page_id))throw Error('META_PAGE_ID_INVALID');
       const creative=await this.write(`${ACCOUNT_ID}/adcreatives`,token,{name:'Erazer XP6 – Zuhausegefühl',object_story_spec:JSON.stringify(spec)});
       ids.adId=await this.write(`${ACCOUNT_ID}/ads`,token,{name:'Erazer XP6 – Musik unterwegs',adset_id:ids.adsetId,creative:JSON.stringify({creative_id:creative}),status:'PAUSED'});
