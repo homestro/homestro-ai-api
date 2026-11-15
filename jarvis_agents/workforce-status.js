@@ -109,7 +109,7 @@ function buildOrganicScripts(products) {
     : String(product.title||'').toLowerCase().includes('ohrenreinigung')
       ? ['#Homestro','#Ohrenpflege','#Hundepflege','#Katzenpflege','#Haustierliebe']
       : ['#Homestro','#Alltagsideen','#Produktentdecken','#Zuhause','#ShoppingTipps'];
-  const shortTitle = product => product.handle === erazer.handle ? 'Erazer XP6' : String(product.title||'Produkt').split(/ – | \\(/)[0].slice(0,42);
+  const shortTitle = product => product.handle === erazer.handle ? 'Erazer XP6' : String(product.title||'Produkt').split(/ – | \(/)[0].slice(0,42);
   return [
     {
       id: 'organic-xp6-'+new Date().toISOString().slice(0,10), platforms, productTitle: xp6.title, productHandle: xp6.handle,
