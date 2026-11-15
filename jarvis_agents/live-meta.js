@@ -50,7 +50,13 @@ class LiveMetaExecutor{
     const opts={method,headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(20000)};
     if(method!=='GET'){opts.headers['Content-Type']='application/x-www-form-urlencoded';opts.body=new URLSearchParams(body);}
     let r,d;try{r=await this.fetch(u,opts);d=await r.json();}catch{throw Error('META_GRAPH_REQUEST_FAILED');}
-    if(!r.ok||d?.error)throw Object.assign(Error('META_GRAPH_'+(d?.error?.code||r.status)),{providerCode:d?.error?.code,providerMessage:String(d?.error?.message||'').slice(0,180)});
+    if(!r.ok||d?.error)throw Object.assign(Error('META_GRAPH_'+(d?.error?.code||r.status)),{
+      providerCode:d?.error?.code,providerSubcode:d?.error?.error_subcode,
+      providerMessage:String(d?.error?.message||'').slice(0,180),
+      providerUserMessage:String(d?.error?.error_user_msg||'').slice(0,180),
+      providerUserTitle:String(d?.error?.error_user_title||'').slice(0,120),
+      fbtraceId:String(d?.error?.fbtrace_id||'').slice(0,80),
+    });
     return d;
   }
   async pages(path,token,params){
@@ -183,7 +189,7 @@ class LiveMetaExecutor{
       const fresh=await this.accountSnapshot(token);const finalGate=accountBudgetDecision({...fresh,proposedDailyBudgetEur:START_BUDGET_EUR});if(!finalGate.allowed)throw Error(finalGate.reason);
       for(const id of [ids.adsetId,ids.adId,ids.campaignId])await this.graph(id,token,{method:'POST',body:{status:'ACTIVE'}});
       return {status:'ACTIVE',campaignId:ids.campaignId,adsetId:ids.adsetId,adId:ids.adId,dailyBudgetEur:START_BUDGET_EUR,targeting:{countries:['DE','AT'],ageMin:20,ageMax:60},creativeSource:'existing_shopify_cdn_video',videoGenerated:false,budgetGuard:finalGate,externalWritesPerformed:true};
-    }catch(e){await this.pauseCreated(token,ids);return {status:'blocked',reason:String(e.message||'META_CAMPAIGN_CREATE_FAILED').slice(0,100),providerMessage:String(e.providerMessage||'').slice(0,300)||null,createdIds:ids,externalWritesPerformed:Object.values(ids).some(Boolean)};}
+    }catch(e){await this.pauseCreated(token,ids);return {status:'blocked',reason:String(e.message||'META_CAMPAIGN_CREATE_FAILED').slice(0,100),providerCode:e.providerCode||null,providerSubcode:e.providerSubcode||null,providerMessage:String(e.providerMessage||'').slice(0,300)||null,providerUserMessage:String(e.providerUserMessage||'').slice(0,300)||null,providerUserTitle:String(e.providerUserTitle||'').slice(0,200)||null,fbtraceId:e.fbtraceId||null,createdIds:ids,externalWritesPerformed:Object.values(ids).some(Boolean)};}
   }
   async inspect(){
     const token=await this.token();
