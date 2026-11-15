@@ -50,7 +50,7 @@ class LiveMetaExecutor{
     const opts={method,headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(20000)};
     if(method!=='GET'){opts.headers['Content-Type']='application/x-www-form-urlencoded';opts.body=new URLSearchParams(body);}
     let r,d;try{r=await this.fetch(u,opts);d=await r.json();}catch{throw Error('META_GRAPH_REQUEST_FAILED');}
-    if(!r.ok||d?.error)throw Object.assign(Error('META_GRAPH_'+(d?.error?.code||r.status)),{providerCode:d?.error?.code});
+    if(!r.ok||d?.error)throw Object.assign(Error('META_GRAPH_'+(d?.error?.code||r.status)),{providerCode:d?.error?.code,providerMessage:String(d?.error?.message||'').slice(0,180)});
     return d;
   }
   async pages(path,token,params){
@@ -69,16 +69,21 @@ class LiveMetaExecutor{
     const sets=await this.pages(`${TARGET_CAMPAIGN_ID}/adsets`,token,{fields:'id,name,status,effective_status,daily_budget,promoted_object,dsa_beneficiary,dsa_payor'});
     const ads=await this.pages(`${TARGET_CAMPAIGN_ID}/ads`,token,{fields:'id,name,status,effective_status,creative{object_story_spec,video_id,object_url}'});
     const pixelIds=[...new Set(sets.map(x=>String(x.promoted_object?.pixel_id||'')).filter(Boolean))];
-    const pixels=await this.pages(`${ACCOUNT_ID}/adspixels`,token,{fields:'id,name,is_unavailable,last_fired_time,event_time_max,owner_ad_account'});
+    const pixels=await this.pages(`${ACCOUNT_ID}/adspixels`,token,{fields:'id,name,is_unavailable'});
     const available=pixels.filter(x=>!x.is_unavailable);
+    const pixelActivity=await Promise.all(available.map(async pixel=>{
+      try{const details=await this.graph(String(pixel.id),token,{params:{fields:'id,last_fired_time,event_time_max'}});
+        return {id:String(pixel.id),lastFiredTime:details.last_fired_time||null,eventTimeMax:details.event_time_max||null};
+      }catch(e){return {id:String(pixel.id),activityUnavailable:String(e?.message||'PIXEL_ACTIVITY_UNAVAILABLE'),providerMessage:e?.providerMessage||null};}
+    }));
     const pixelId=pixelIds.length===1?pixelIds[0]:pixelIds.length===0&&available.length===1?String(available[0].id):null;
     const campaignBeneficiaries=[...new Set(sets.map(x=>String(x.dsa_beneficiary||'').trim()).filter(Boolean))];
     const campaignPayors=[...new Set(sets.map(x=>String(x.dsa_payor||'').trim()).filter(Boolean))];
     const dsaBeneficiary=String(account.default_dsa_beneficiary||'').trim()|| (campaignBeneficiaries.length===1?campaignBeneficiaries[0]:'');
     const dsaPayor=String(account.default_dsa_payor||'').trim()|| (campaignPayors.length===1?campaignPayors[0]:'');
     const evidence={adsetCount:sets.length,adCount:ads.length,pixelCandidates:pixelIds,
-      availablePixels:available.map(x=>({id:String(x.id),name:String(x.name||''),isUnavailable:Boolean(x.is_unavailable),
-        lastFiredTime:x.last_fired_time||null,eventTimeMax:x.event_time_max||null,ownerAdAccount:x.owner_ad_account?.id||null})),
+      availablePixels:available.map(x=>({id:String(x.id),name:String(x.name||''),isUnavailable:Boolean(x.is_unavailable)})),
+      pixelActivity,
       campaignBeneficiaryCandidates:campaignBeneficiaries,campaignPayorCandidates:campaignPayors,
       accountDefaultBeneficiary:String(account.default_dsa_beneficiary||''),accountDefaultPayor:String(account.default_dsa_payor||'')};
     if(!pixelId||!available.some(x=>String(x.id)===pixelId)||!dsaBeneficiary||!dsaPayor){
