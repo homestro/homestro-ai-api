@@ -76,7 +76,8 @@ class LiveMetaExecutor{
     const campaignPayors=[...new Set(sets.map(x=>String(x.dsa_payor||'').trim()).filter(Boolean))];
     const dsaBeneficiary=String(account.default_dsa_beneficiary||'').trim()|| (campaignBeneficiaries.length===1?campaignBeneficiaries[0]:'');
     const dsaPayor=String(account.default_dsa_payor||'').trim()|| (campaignPayors.length===1?campaignPayors[0]:'');
-    const evidence={adsetCount:sets.length,adCount:ads.length,pixelCandidates:pixelIds,availablePixelIds:available.map(x=>String(x.id)),
+    const evidence={adsetCount:sets.length,adCount:ads.length,pixelCandidates:pixelIds,
+      availablePixels:available.map(x=>({id:String(x.id),name:String(x.name||''),isUnavailable:Boolean(x.is_unavailable)})),
       campaignBeneficiaryCandidates:campaignBeneficiaries,campaignPayorCandidates:campaignPayors,
       accountDefaultBeneficiary:String(account.default_dsa_beneficiary||''),accountDefaultPayor:String(account.default_dsa_payor||'')};
     if(!pixelId||!available.some(x=>String(x.id)===pixelId)||!dsaBeneficiary||!dsaPayor){
