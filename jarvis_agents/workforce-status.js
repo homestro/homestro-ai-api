@@ -104,11 +104,12 @@ function buildOrganicScripts(products) {
   const xp6 = products.find(p => p.handle === erazer.handle) || {title: erazer.title, handle: erazer.handle, productType: 'Audio'};
   const next = products.find(p => p.handle !== xp6.handle) || xp6;
   const platforms = ['TikTok', 'Instagram Reels', 'YouTube Shorts'];
-  const hashtags = product => {
-    const titleTags = String(product.title || '').normalize('NFKD').replace(/[\\u0300-\\u036f]/g,'')
-      .split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0,3).map(word => '#'+word.toLowerCase());
-    return [...new Set(['#homestro','#alltagshilfe',...titleTags])];
-  };
+  const hashtags = product => product.handle === erazer.handle
+    ? ['#Homestro','#ErazerXP6','#Kopfhoerer','#MusikUnterwegs','#Zuhausegefuehl']
+    : String(product.title||'').toLowerCase().includes('ohrenreinigung')
+      ? ['#Homestro','#Ohrenpflege','#Hundepflege','#Katzenpflege','#Haustierliebe']
+      : ['#Homestro','#Alltagsideen','#Produktentdecken','#Zuhause','#ShoppingTipps'];
+  const shortTitle = product => product.handle === erazer.handle ? 'Erazer XP6' : String(product.title||'Produkt').split(/ – | \\(/)[0].slice(0,42);
   return [
     {
       id: 'organic-xp6-'+new Date().toISOString().slice(0,10), platforms, productTitle: xp6.title, productHandle: xp6.handle,
@@ -130,7 +131,7 @@ function buildOrganicScripts(products) {
       durationSeconds: 20, angle: 'Kleine Erleichterung im neuen Alltag',
       scenes: [
         {seconds:'0-4',visual:'Ein neuer Alltag beginnt: Tasche abstellen, kurz orientieren, tief durchatmen.',onscreen:'Neuer Ort. Neuer Alltag.'},
-        {seconds:'4-11',visual:'Ruhige Nahaufnahme des Produkts '+next.title+'.',onscreen:next.title},
+        {seconds:'4-11',visual:'Ruhige Nahaufnahme des Produkts '+shortTitle(next)+'.',onscreen:shortTitle(next)},
         {seconds:'11-16',visual:'Das Produkt wird neutral und passend zu seiner Kategorie gezeigt.',onscreen:'Einfach selbst entdecken.'},
         {seconds:'16-20',visual:'Produktseite auf dem Smartphone.',onscreen:'Bei Homestro ansehen.'}
       ],
@@ -296,7 +297,7 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
     const enabled = autopilotScheduler.start();
     console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
     if (metaConnection && String(process.env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true') {
-      void liveExecutor.pauseAllActiveCampaigns().catch(error => console.error('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_FAILED', String(error?.message || error).slice(0,160)));
+      void liveExecutor.pauseAllActiveCampaigns().catch(error => console.error('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_FAILED '+JSON.stringify({reason:String(error?.message||error).slice(0,120),providerCode:error?.providerCode||null,providerSubcode:error?.providerSubcode||null,providerMessage:String(error?.providerMessage||'').slice(0,240),providerUserMessage:String(error?.providerUserMessage||'').slice(0,240),fbtraceId:error?.fbtraceId||null})));
     }
     if (metaConnection && shopifyGraphQL) {
       const timer = setTimeout(() => {
