@@ -100,6 +100,82 @@ function taskResult(agentId, pillar) {
   };
 }
 
+function buildOrganicScripts(products) {
+  const xp6 = products.find(p => p.handle === erazer.handle) || {title: erazer.title, handle: erazer.handle, productType: 'Audio'};
+  const next = products.find(p => p.handle !== xp6.handle) || xp6;
+  const platforms = ['TikTok', 'Instagram Reels', 'YouTube Shorts'];
+  const hashtags = product => {
+    const titleTags = String(product.title || '').normalize('NFKD').replace(/[\\u0300-\\u036f]/g,'')
+      .split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0,3).map(word => '#'+word.toLowerCase());
+    return [...new Set(['#homestro','#alltagshilfe',...titleTags])];
+  };
+  return [
+    {
+      id: 'organic-xp6-'+new Date().toISOString().slice(0,10), platforms, productTitle: xp6.title, productHandle: xp6.handle,
+      durationSeconds: 25, angle: 'Rescue & Relief in a Foreign Country',
+      scenes: [
+        {seconds:'0-4',visual:'Bahnhof in einer fremden Stadt; eine Person schaut kurz auf eine Karte und atmet durch.',onscreen:'Alles neu. Ein Moment für mich.'},
+        {seconds:'4-10',visual:'Die Person setzt die Erazer XP6 ein und startet ihre eigene Musikauswahl.',onscreen:'Ein vertrauter Song kann guttun.'},
+        {seconds:'10-18',visual:'Ruhiger Spaziergang durch die Stadt; die Person wirkt erleichtert und findet ihren Weg.',onscreen:'Kleine Momente fühlen sich nach Zuhause an.'},
+        {seconds:'18-25',visual:'Produktaufnahme der Erazer XP6, danach Homestro Shop auf dem Smartphone.',onscreen:'Erazer XP6 bei Homestro entdecken.'}
+      ],
+      voiceover:'Du bist weit weg von Zuhause. Alles klingt neu und der Tag war lang. Dann kommt dieser eine vertraute Song. Ein kleiner Moment zum Durchatmen. Entdecke die Erazer XP6 bei Homestro.',
+      caption:'Fern von Zuhause und ein langer Tag? Manchmal hilft ein vertrauter Song, kurz durchzuatmen. Entdecke die Erazer XP6 bei Homestro.',
+      hashtags:[...hashtags(xp6),'#unterwegs','#musikmoment','#zuhausegefühl'],
+      cta:'Jetzt bei Homestro entdecken: https://homestro.de/products/'+xp6.handle,
+      manualPostRequired:true, paidMedia:false, videoGeneration:false
+    },
+    {
+      id: 'organic-product-'+new Date().toISOString().slice(0,10), platforms, productTitle: next.title, productHandle: next.handle,
+      durationSeconds: 20, angle: 'Kleine Erleichterung im neuen Alltag',
+      scenes: [
+        {seconds:'0-4',visual:'Ein neuer Alltag beginnt: Tasche abstellen, kurz orientieren, tief durchatmen.',onscreen:'Neuer Ort. Neuer Alltag.'},
+        {seconds:'4-11',visual:'Ruhige Nahaufnahme des Produkts '+next.title+'.',onscreen:next.title},
+        {seconds:'11-16',visual:'Das Produkt wird neutral und passend zu seiner Kategorie gezeigt.',onscreen:'Einfach selbst entdecken.'},
+        {seconds:'16-20',visual:'Produktseite auf dem Smartphone.',onscreen:'Bei Homestro ansehen.'}
+      ],
+      voiceover:'Wenn sich der Alltag verändert, zählen die kleinen Dinge. Heute stelle ich dir '+next.title+' von Homestro vor. Schau dir die Details in Ruhe an und entscheide selbst, ob es zu deinem Alltag passt.',
+      caption:'Kleine Dinge können einen neuen Alltag angenehmer machen. Hier findest du '+next.title+' bei Homestro.',
+      hashtags:[...hashtags(next),'#neueralltag','#alltagsideen'],
+      cta:'Produkt ansehen: https://homestro.de/products/'+next.handle,
+      manualPostRequired:true, paidMedia:false, videoGeneration:false
+    }
+  ];
+}
+
+async function runFreeOrganicCycle() {
+  if (!liveExecutor) {
+    const products = [{title:erazer.title,handle:erazer.handle,productType:'Audio'}];
+    const organic_content = buildOrganicScripts(products);
+    const cycle = runDryRunCycle();
+    cycle.dry_run = false;
+    cycle.organic_content = organic_content;
+    cycle.summary_report = {text:'Organický cyklus: placené reklamy jsou uzamčené na 0,00 €; připraveny 2 bezplatné scénáře k ručnímu publikování. Shopify SEO adaptér není dostupný.',channel:'workforce_api',sent:false,spendEUR:0};
+    return cycle;
+  }
+  let seo={status:'blocked',activeProductsOptimized:0,altTextsUpdated:0,reason:null};
+  try { seo=await liveExecutor.syncSeo(); }
+  catch(error) { seo={status:'partial',activeProductsOptimized:error?.result?.activeProductsOptimized||0,altTextsUpdated:error?.result?.altTextsUpdated||0,reason:String(error?.message||'SHOPIFY_SEO_FAILED').slice(0,100)}; }
+  let products=[];
+  try { products=await liveExecutor.activeProductsForOrganic(); }
+  catch(error) { console.warn('[jarvis-organic] PRODUCT_CATALOG_READ_FAILED',String(error?.message||error).slice(0,100)); }
+  const organic_content=buildOrganicScripts(products);
+  const cycle=runDryRunCycle();
+  cycle.status='completed';
+  cycle.dry_run=false;
+  cycle.budget_eur=0;
+  cycle.ad_spend_eur=0;
+  cycle.external_writes_performed=Boolean(seo.activeProductsOptimized||seo.altTextsUpdated);
+  cycle.video_generation_performed=false;
+  cycle.organic_content=organic_content;
+  const seoSummary=seo.status==='completed'
+    ? `SEO: upraveno ${seo.activeProductsOptimized} aktivních produktů a ${seo.altTextsUpdated} chybějících ALT textů`
+    : `SEO: částečný výsledek (${seo.reason||'bez další změny'})`;
+  cycle.summary_report={text:`Bezplatný organický cyklus dokončen: Meta reklamy uzamčené na 0,00 €; ${seoSummary}; připraveny 2 scénáře pro TikTok, Reels a Shorts. MS Handwerk zůstává oddělený.`,channel:'workforce_api',sent:false,spendEUR:0};
+  lastCycle=cycle;
+  return cycle;
+}
+
 function runDryRunCycle() {
   const cycleId = crypto.randomUUID();
   const startedAt = timestamp();
@@ -170,7 +246,7 @@ function workforceStatus(env = process.env, runtime = {}) {
   return {
     ok: true,
     system: manifest.system,
-    executionMode: String(env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() === 'true' ? 'autonomous_live' : manifest.executionMode,
+    executionMode: String(env.PAID_ADS_ENABLED || '').toLowerCase() === 'true' && Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0) > 0 && String(env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() === 'true' ? 'autonomous_live' : 'organic_zero_spend',
     mission: manifest.systemPrompt,
     vision: manifest.vision,
     activePillar: manifest.activePillar,
@@ -180,6 +256,7 @@ function workforceStatus(env = process.env, runtime = {}) {
     last_auto_run_at: [...(runtime.run_history || [])].reverse()
       .find(item => item.trigger_type === 'AUTO_SCHEDULED')?.timestamp || null,
     next_scheduled_run_at: runtime.next_scheduled_run_at || null,
+    organic_content: [...(runtime.run_history || [])].reverse().find(item => Array.isArray(item.organic_content) && item.organic_content.length)?.organic_content || lastCycle?.organic_content || [],
     latest_czech_summary: [...(runtime.run_history || [])].reverse()
       .find(item => item.comms_agent_summary)?.comms_agent_summary || lastCycle?.summary_report?.text || null,
     run_history: runtime.run_history || [],
@@ -194,7 +271,7 @@ function workforceStatus(env = process.env, runtime = {}) {
     },
     safety: {
       dryRun: String(env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() !== 'true', newAdWrites: lastCycle?.external_writes_performed === true, adSpendEUR: lastCycle?.ad_spend_eur || 0, paidVideoGenerationByJarvis: false,
-      existingCampaigns: 'read_only_untouched', externalWhatsAppDelivery: false,
+      paidAdsEnabled: String(env.PAID_ADS_ENABLED || '').toLowerCase() === 'true', maxDailyAdSpendEUR: Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0), zeroSpendLock: String(env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true' || Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0) <= 0, existingCampaigns: 'paused_for_zero_spend', externalWhatsAppDelivery: false,
       runtimeSwitches: {
         DRY_RUN: asBoolean(env.DRY_RUN),
         PILOT_AD_DRY_RUN: asBoolean(env.PILOT_AD_DRY_RUN),
@@ -218,6 +295,9 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
     });
     const enabled = autopilotScheduler.start();
     console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
+    if (metaConnection && String(process.env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true') {
+      void liveExecutor.pauseAllActiveCampaigns().catch(error => console.error('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_FAILED', String(error?.message || error).slice(0,160)));
+    }
     if (metaConnection && shopifyGraphQL) {
       const timer = setTimeout(() => {
         void liveExecutor.preflight().catch(error => console.warn('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT_FAILED ' + JSON.stringify({reason:error?.message||String(error),evidence:error?.details||null})));
@@ -254,8 +334,9 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
 
 async function runAndRecord(triggerType) {
   const {cycle, entry} = await executeAndRecord(triggerType, {
-    runCycle: async () => String(process.env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() === 'true'
-      ? runLiveCycle() : runDryRunCycle(),
+    runCycle: async () => String(process.env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true' || Number(process.env.MAX_DAILY_AD_SPEND_EUR ?? 0) <= 0
+      ? runFreeOrganicCycle()
+      : String(process.env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() === 'true' ? runLiveCycle() : runDryRunCycle(),
     historyStore: runHistoryStore,
   });
   lastCycle = cycle;
