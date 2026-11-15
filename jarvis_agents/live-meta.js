@@ -234,18 +234,25 @@ class LiveMetaExecutor{
   }
   async pauseAllActiveCampaigns(){
     const token=await this.token();
-    const before=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status'});
-    const active=before.filter(c=>String(c.effective_status||c.status).toUpperCase()==='ACTIVE');
-    const paused=[];
+    const account=await this.graph(ACCOUNT_ID,token,{params:{fields:'id,account_status,disable_reason'}});
+    const before=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status,daily_budget'});
+    const active=before.filter(c=>String(c.status||'').toUpperCase()==='ACTIVE'||String(c.effective_status||'').toUpperCase()==='ACTIVE');
+    if(Number(account.account_status)!==1){
+      const result={accountId:ACCOUNT_ID,accountStatus:Number(account.account_status),disableReason:account.disable_reason||null,activeCampaigns:active.map(c=>({id:String(c.id),name:String(c.name||''),status:String(c.status||''),effectiveStatus:String(c.effective_status||''),dailyBudget:String(c.daily_budget||'')})),paused:[],pauseBlocked:'META_AD_ACCOUNT_STATUS_BLOCKS_WRITES',zeroSpendLock:active.length===0};
+      this.logger.error?.('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_STATUS '+JSON.stringify(result));
+      return result;
+    }
+    const ownedId=String(this.env.META_AUTOPILOT_CAMPAIGN_ID||'');
+    active.sort((a,b)=>(String(b.id)===ownedId?1:0)-(String(a.id)===ownedId?1:0));
+    const paused=[],failed=[];
     for(const campaign of active){
-      await this.graph(String(campaign.id),token,{method:'POST',body:{status:'PAUSED'}});
-      paused.push({id:String(campaign.id),name:String(campaign.name||'')});
+      try{await this.graph(String(campaign.id),token,{method:'POST',body:{status:'PAUSED'}});paused.push(String(campaign.id));}
+      catch(error){failed.push({id:String(campaign.id),code:error?.providerCode||null,subcode:error?.providerSubcode||null,message:String(error?.providerMessage||error?.message||'META_PAUSE_FAILED').slice(0,180),userMessage:String(error?.providerUserMessage||'').slice(0,180)});}
     }
     const after=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status'});
-    const stillActive=after.filter(c=>String(c.effective_status||c.status).toUpperCase()==='ACTIVE').map(c=>String(c.id));
-    const result={accountId:ACCOUNT_ID,paused,stillActive,zeroSpendLock:stillActive.length===0};
-    this.logger.info?.('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK '+JSON.stringify(result));
-    if(stillActive.length)throw Error('META_ACTIVE_CAMPAIGNS_REMAIN_AFTER_PAUSE');
+    const stillActive=after.filter(c=>String(c.status||'').toUpperCase()==='ACTIVE'||String(c.effective_status||'').toUpperCase()==='ACTIVE').map(c=>({id:String(c.id),name:String(c.name||''),status:String(c.status||''),effectiveStatus:String(c.effective_status||'')}));
+    const result={accountId:ACCOUNT_ID,accountStatus:Number(account.account_status),disableReason:account.disable_reason||null,activeBefore:active.map(c=>String(c.id)),paused,failed,activeAfter:stillActive,zeroSpendLock:stillActive.length===0};
+    this.logger.info?.('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_STATUS '+JSON.stringify(result));
     return result;
   }
   async inspect(){
