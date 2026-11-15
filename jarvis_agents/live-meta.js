@@ -65,15 +65,24 @@ class LiveMetaExecutor{
   async archivedCampaignEvidence(token){
     const c=await this.graph(TARGET_CAMPAIGN_ID,token,{params:{fields:'id,name,account_id,status,effective_status'}});
     if(String(c.account_id)!==ACCOUNT_ID.replace(/^act_/,''))throw Error('META_ARCHIVED_CAMPAIGN_ACCOUNT_MISMATCH');
+    const account=await this.graph(ACCOUNT_ID,token,{params:{fields:'id,default_dsa_beneficiary,default_dsa_payor'}});
     const sets=await this.pages(`${TARGET_CAMPAIGN_ID}/adsets`,token,{fields:'id,name,status,effective_status,daily_budget,promoted_object,dsa_beneficiary,dsa_payor'});
     const ads=await this.pages(`${TARGET_CAMPAIGN_ID}/ads`,token,{fields:'id,name,status,effective_status,creative{object_story_spec,video_id,object_url}'});
     const pixelIds=[...new Set(sets.map(x=>String(x.promoted_object?.pixel_id||'')).filter(Boolean))];
-    const beneficiaries=[...new Set(sets.map(x=>String(x.dsa_beneficiary||'').trim()).filter(Boolean))];
-    const payors=[...new Set(sets.map(x=>String(x.dsa_payor||'').trim()).filter(Boolean))];
-    if(pixelIds.length!==1||beneficiaries.length!==1||payors.length!==1)throw Error('META_ARCHIVED_CAMPAIGN_PIXEL_OR_DSA_AMBIGUOUS');
     const pixels=await this.pages(`${ACCOUNT_ID}/adspixels`,token,{fields:'id,name,is_unavailable'});
-    const pixel=pixels.find(x=>String(x.id)===pixelIds[0]&&!x.is_unavailable);if(!pixel)throw Error('META_ARCHIVED_PIXEL_UNAVAILABLE');
-    return {campaignId:String(c.id),campaignName:String(c.name||''),campaignStatus:String(c.effective_status||c.status||''),pixelId:pixelIds[0],dsaBeneficiary:beneficiaries[0],dsaPayor:payors[0],adsetCount:sets.length,adCount:ads.length};
+    const available=pixels.filter(x=>!x.is_unavailable);
+    const pixelId=pixelIds.length===1?pixelIds[0]:pixelIds.length===0&&available.length===1?String(available[0].id):null;
+    const campaignBeneficiaries=[...new Set(sets.map(x=>String(x.dsa_beneficiary||'').trim()).filter(Boolean))];
+    const campaignPayors=[...new Set(sets.map(x=>String(x.dsa_payor||'').trim()).filter(Boolean))];
+    const dsaBeneficiary=String(account.default_dsa_beneficiary||'').trim()|| (campaignBeneficiaries.length===1?campaignBeneficiaries[0]:'');
+    const dsaPayor=String(account.default_dsa_payor||'').trim()|| (campaignPayors.length===1?campaignPayors[0]:'');
+    const evidence={adsetCount:sets.length,adCount:ads.length,pixelCandidates:pixelIds,availablePixelIds:available.map(x=>String(x.id)),
+      campaignBeneficiaryCandidates:campaignBeneficiaries,campaignPayorCandidates:campaignPayors,
+      accountDefaultBeneficiary:String(account.default_dsa_beneficiary||''),accountDefaultPayor:String(account.default_dsa_payor||'')};
+    if(!pixelId||!available.some(x=>String(x.id)===pixelId)||!dsaBeneficiary||!dsaPayor){
+      throw Object.assign(Error('META_ARCHIVED_CAMPAIGN_PIXEL_OR_DSA_AMBIGUOUS'),{details:evidence});
+    }
+    return {campaignId:String(c.id),campaignName:String(c.name||''),campaignStatus:String(c.effective_status||c.status||''),pixelId,dsaBeneficiary,dsaPayor,adsetCount:sets.length,adCount:ads.length};
   }
   async accountSnapshot(token){
     const account=await this.graph(ACCOUNT_ID,token,{params:{fields:'id,account_status,currency,timezone_name,disable_reason'}});

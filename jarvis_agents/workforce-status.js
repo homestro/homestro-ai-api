@@ -220,7 +220,7 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
     console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
     if (metaConnection && shopifyGraphQL) {
       const timer = setTimeout(() => {
-        void liveExecutor.preflight().catch(error => console.warn('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT_FAILED', error?.message || String(error)));
+        void liveExecutor.preflight().catch(error => console.warn('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT_FAILED ' + JSON.stringify({reason:error?.message||String(error),evidence:error?.details||null})));
       }, 5000);
       timer.unref?.();
     }
