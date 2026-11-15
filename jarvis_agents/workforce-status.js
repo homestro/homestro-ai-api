@@ -21,6 +21,7 @@ const runHistoryStore = createRunHistoryStore(historyPath);
 let autopilotScheduler = null;
 let liveExecutor = null;
 let workforceApiKey = null;
+let paidAdsPauseStatus = null;
 const serviceList = ['Streicharbeiten', 'Spachtelarbeiten', 'Laminat und Vinyl verlegen',
   'Silikonfugen erneuern', 'Fliesenreparaturen', 'Haus- und Wohnungsrenovierungen'];
 const blockedRoot = 'Ma' + 'ler';
@@ -172,7 +173,8 @@ async function runFreeOrganicCycle() {
   const seoSummary=seo.status==='completed'
     ? `SEO: upraveno ${seo.activeProductsOptimized} aktivních produktů a ${seo.altTextsUpdated} chybějících ALT textů`
     : `SEO: částečný výsledek (${seo.reason||'bez další změny'})`;
-  cycle.summary_report={text:`Bezplatný organický cyklus dokončen: Meta reklamy uzamčené na 0,00 €; ${seoSummary}; připraveny 2 scénáře pro TikTok, Reels a Shorts. MS Handwerk zůstává oddělený.`,channel:'workforce_api',sent:false,spendEUR:0};
+  const adStatus=paidAdsPauseStatus?.zeroSpendLock?'všechny placené kampaně jsou pozastavené':'placené zápisy jsou vypnuté; stav existující kampaně blokuje Meta';
+  cycle.summary_report={text:`Bezplatný organický cyklus dokončen: ${adStatus}; rozpočtové zápisy 0,00 €; ${seoSummary}; připraveny 2 scénáře pro TikTok, Reels a Shorts. MS Handwerk zůstává oddělený.`,channel:'workforce_api',sent:false,spendEUR:0};
   lastCycle=cycle;
   return cycle;
 }
@@ -272,7 +274,7 @@ function workforceStatus(env = process.env, runtime = {}) {
     },
     safety: {
       dryRun: String(env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() !== 'true', newAdWrites: lastCycle?.external_writes_performed === true, adSpendEUR: lastCycle?.ad_spend_eur || 0, paidVideoGenerationByJarvis: false,
-      paidAdsEnabled: String(env.PAID_ADS_ENABLED || '').toLowerCase() === 'true', maxDailyAdSpendEUR: Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0), zeroSpendLock: String(env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true' || Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0) <= 0, existingCampaigns: 'paused_for_zero_spend', externalWhatsAppDelivery: false,
+      paidAdsEnabled: String(env.PAID_ADS_ENABLED || '').toLowerCase() === 'true', maxDailyAdSpendEUR: Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0), writeLockEnabled: String(env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true' || Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0) <= 0, zeroSpendLock: Boolean(runtime.paid_ads_status?.zeroSpendLock), existingCampaigns: runtime.paid_ads_status?.zeroSpendLock ? 'paused' : 'pause_not_confirmed', paidAdsPauseStatus: runtime.paid_ads_status || null, externalWhatsAppDelivery: false,
       runtimeSwitches: {
         DRY_RUN: asBoolean(env.DRY_RUN),
         PILOT_AD_DRY_RUN: asBoolean(env.PILOT_AD_DRY_RUN),
@@ -297,7 +299,7 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
     const enabled = autopilotScheduler.start();
     console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
     if (metaConnection && String(process.env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true') {
-      void liveExecutor.pauseAllActiveCampaigns().catch(error => console.error('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_FAILED '+JSON.stringify({reason:String(error?.message||error).slice(0,120),providerCode:error?.providerCode||null,providerSubcode:error?.providerSubcode||null,providerMessage:String(error?.providerMessage||'').slice(0,240),providerUserMessage:String(error?.providerUserMessage||'').slice(0,240),fbtraceId:error?.fbtraceId||null})));
+      void liveExecutor.pauseAllActiveCampaigns().then(result => { paidAdsPauseStatus=result; }).catch(error => { paidAdsPauseStatus={zeroSpendLock:false,pauseBlocked:String(error?.message||'META_PAUSE_FAILED').slice(0,120),providerCode:error?.providerCode||null,providerSubcode:error?.providerSubcode||null,providerMessage:String(error?.providerMessage||'').slice(0,240),providerUserMessage:String(error?.providerUserMessage||'').slice(0,240),fbtraceId:error?.fbtraceId||null}; console.error('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_FAILED '+JSON.stringify(paidAdsPauseStatus)); });
     }
     if (metaConnection && shopifyGraphQL) {
       const timer = setTimeout(() => {
@@ -313,12 +315,14 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
       const scheduler = autopilotScheduler?.status() || {};
       return res.status(200).json(workforceStatus(process.env, {
         ...scheduler,
+        paid_ads_status: paidAdsPauseStatus,
         run_history,
       }));
     } catch (error) {
       return res.status(200).json(workforceStatus(process.env, {
         autopilot_active: Boolean(autopilotScheduler?.status().autopilot_active),
         next_scheduled_run_at: autopilotScheduler?.status().next_scheduled_run_at || null,
+        paid_ads_status: paidAdsPauseStatus,
         run_history: [],
         history_error: error?.message || 'HISTORY_UNAVAILABLE',
       }));
