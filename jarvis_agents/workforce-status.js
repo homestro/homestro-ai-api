@@ -271,6 +271,7 @@ async function runFreeOrganicCycle() {
       }
       publication.status=channels.length&&channels.every(row=>row.status==='published')?'published':channels.some(row=>row.status==='published')?'partial':'blocked';
       publication.channels=channels;
+      publication.reason=null;
       publication.image_url=imageUrl;
     }
     result.publication=publication;
@@ -282,12 +283,12 @@ async function runFreeOrganicCycle() {
     const seoText=shopifyUpdate.updated?'Shopify SEO/GEO gespeichert':'Shopify SEO/GEO '+(shopifyUpdate.reason||'blockiert');
     const videoText=result.video?.rendered?'9:16-MP4 bereit: '+result.video.path:'MP4 '+(result.video?.reason||'nicht gerendert');
     const metaText=publication.status==='published'?'Facebook und Instagram veröffentlicht':('Meta-Status '+publication.status);
-    const summary='Zero-Spend-Lauf: '+(product.title||'Produkt ohne Titel')+'; '+seoText+'; '+videoText+'; '+metaText+'; TikTok/Shorts-Bundle '+(content.length?'in Run-History gespeichert':'nicht bereit')+'; Werbeausgaben 0,00 €.';
+    const summary='Bezplatný organický běh: '+(product.title||'produkt bez názvu')+'; '+(shopifyUpdate.updated?'Shopify SEO/GEO aktualizováno':'Shopify SEO/GEO '+(shopifyUpdate.reason||'zablokováno'))+'; '+(result.video?.rendered?'video 9:16 připraveno: '+result.video.path:'video '+(result.video?.reason||'se nevytvořilo'))+'; '+(publication.status==='published'?'Facebook a Instagram publikovány':('publikace Meta: '+publication.status))+'; TikTok/YouTube Shorts balíček '+(content.length?'uložen k ručnímu zveřejnění':'není připraven')+'; placená reklama 0,00 €.';
     lastCycle={
       cycle_id:crypto.randomUUID(),status:cycleStatus,dry_run:false,budget_eur:0,ad_spend_eur:0,
       external_writes_performed:Boolean(shopifyUpdate.updated||published),video_generation_performed:Boolean(result.video?.rendered),
       paid_video_generation_performed:false,local_video_rendered:Boolean(result.video?.rendered),
-      unified_pipeline:result,organic_content:content,
+      unified_pipeline:result,organic_content:content,organic_publication:publication.channels||[],
       pillar_results:[
         {pillar:'scout',agent:'agents.product_hunter',status:result.scout?.status||'blocked',result:result.scout||null},
         {pillar:'seo_geo_image',agent:'agents.creative_seo + Pillow',status:creative.status||'blocked',result:creative},
