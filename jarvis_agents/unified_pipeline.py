@@ -175,12 +175,35 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
         )
         return headline, hook, caption
     name = _human_product_name(product)
-    headline = "Eine kleine Hilfe. Ein ruhigerer Moment."
-    hook = "Wenn die nächste Kleinigkeit zur Geduldsprobe wird."
+    product_text = " ".join(str(product.get(key) or "") for key in
+                            ("title", "productType", "descriptionHtml"))
+    product_text += " " + " ".join(str(tag) for tag in (product.get("tags") or []))
+    if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE):
+        headline = "Deine Nail-Art-Idee beginnt hier."
+        hook = "Dotting, Linien oder feine Details – was probierst du zuerst?"
+        caption = (
+            "Du hast ein Nageldesign im Kopf, suchst aber noch den passenden Pinsel für die feinen Details? "
+            "Mit dem FUMOSIK-Set findest du Pinsel für Linien, Dotting, Flächen und feines Carving. "
+            "Wähle 5 oder 20 Stück und probiere dein Motiv mit Acryl, Gel, UV-Polish oder klassischem Nagellack "
+            "Schritt für Schritt aus.\n\n"
+            f"Jetzt bei Homestro ansehen.\n\n{product_url}"
+        )
+        return headline, hook, caption
+    if re.search(r"tierhaar|fell.?entfern|haar.?entfern|haare auf sofa", product_text, re.IGNORECASE):
+        headline = "Weniger Fell auf Sofa und Kleidung."
+        hook = "Überall Haare – und du willst endlich Ordnung?"
+        caption = (
+            f"Fell auf Sofa oder Kleidung kann im Alltag lästig sein. {name} ist dafür gedacht, Tierhaare "
+            "zu entfernen – schau dir die Produktdetails an und entscheide, ob es zu deinem Zuhause passt.\n\n"
+            f"Bei Homestro entdecken.\n\n{product_url}"
+        )
+        return headline, hook, caption
+    headline = "Mach Platz für deine nächste gute Idee."
+    hook = f"Du kennst den Moment, wenn {name.lower()} gerade fehlt?"
     caption = (
-        f"Der Tag ist schon voll – und dann hält dich auch noch eine Kleinigkeit auf. "
-        f"{name} von Homestro könnte genau der praktische Helfer sein, den du suchst. "
-        f"Einmal durchatmen, Details ansehen und selbst entscheiden, ob es zu deinem Alltag passt.\n\n{product_url}"
+        f"Du hast etwas vor und suchst dafür noch das passende Produkt? {name} von Homestro könnte zu deinem "
+        "Vorhaben passen. Schau dir die konkreten Produktdetails und Varianten an und entscheide in Ruhe, "
+        f"ob es deinen Alltag bereichert.\n\nBei Homestro ansehen.\n\n{product_url}"
     )
     return headline, hook, caption
 
