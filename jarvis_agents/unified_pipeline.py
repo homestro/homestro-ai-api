@@ -178,6 +178,17 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     product_text = " ".join(str(product.get(key) or "") for key in
                             ("title", "productType", "descriptionHtml"))
     product_text += " " + " ".join(str(tag) for tag in (product.get("tags") or []))
+    if re.search(r"kopfbande? für hunde|hunde.?kopfband|dog.?head.?cover", product_text, re.IGNORECASE):
+        headline = "Mehr Ruhe für ungewohnte Hundemomente."
+        hook = "Bad, Reise oder Lärm – wird dein Hund dann unruhig?"
+        caption = (
+            "Bei Bad, Reise oder lauten Geräuschen wünschst du dir, dass dein Hund sich sicherer fühlt? "
+            "Das leichte, wasserabweisende Nylon-Kopfband ist laut Produktbeschreibung für zusätzlichen Schutz "
+            "in ungewohnten Situationen gedacht und soll empfindliche Ohren vor Wasser und Insekten schützen. "
+            "Es ist kein Medizinprodukt und ersetzt keine tierärztliche Beratung. "
+            f"Details bei Homestro ansehen.\n\n{product_url}"
+        )
+        return headline, hook, caption
     if re.search(r"satin.?haube|sleep.?cap|bonnet", product_text, re.IGNORECASE):
         headline = "Morgens weniger Zeit mit Entwirren?"
         hook = "Nächtliches Haar-Chaos bei langen Haaren?"
@@ -304,6 +315,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE)
                 else ["#Homestro", "#NailArt", "#Nageldesign", "#Maniküre", "#Kreativ"]
                 if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE)
+                else ["#Homestro", "#Hundezubehör", "#Hundepflege", "#Hundereise", "#Hunde"]
+                if re.search(r"kopfbande? für hunde|hunde.?kopfband|dog.?head.?cover", product_text, re.IGNORECASE)
                 else ["#Homestro", "#Haarpflege", "#Satinhaube", "#Lockenpflege", "#Nachtpflege"]
                 if re.search(r"satin.?haube|sleep.?cap|bonnet", product_text, re.IGNORECASE)
                 else ["#Homestro", "#Schreibtisch", "#HomeOffice", "#Ordnung", "#Geschenkidee"]
