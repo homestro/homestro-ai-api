@@ -185,7 +185,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Du willst dir schnell etwas notieren – und suchst den Stift zwischen Monitor und Notizbuch? "
             "Der Ninja-Stiftehalter hält ihn griffbereit und bringt ein Schmunzeln auf den Schreibtisch. "
             "Wähle die Ausführung, die zu dir passt – zum Beispiel mit oder ohne Stift oder mit zusätzlichem "
-            f"Sockel. Jetzt bei Homestro entdecken.\\n\\n{product_url}"
+            f"Sockel. Jetzt bei Homestro entdecken.\n\n{product_url}"
         )
         return headline, hook, caption
     if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE):
