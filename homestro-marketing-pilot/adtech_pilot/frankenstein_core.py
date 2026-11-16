@@ -660,116 +660,60 @@ class MetaBuyer:
 
 
 async def run_once() -> dict[str, Any]:
-    if os.getenv("FRANKENSTEIN_INSPECT_EXISTING", "false").strip().lower() == "true":
-        buyer = MetaBuyer()
-        return await buyer.inspect_existing_objects(
-            _required("FRANKENSTEIN_CAMPAIGN_ID"),
-            _required("FRANKENSTEIN_ADSET_ID"),
-            _required("FRANKENSTEIN_AD_ID"),
-        )
-    if os.getenv("FRANKENSTEIN_ACTIVATE_EXISTING", "false").strip().lower() == "true":
-        buyer = MetaBuyer()
-        return await buyer.activate_existing_objects(
-            _required("FRANKENSTEIN_OLD_CAMPAIGN_ID"),
-            _required("FRANKENSTEIN_CAMPAIGN_ID"),
-            _required("FRANKENSTEIN_ADSET_ID"),
-            _required("FRANKENSTEIN_AD_ID"),
-        )
-
-    ledger = Ledger(os.getenv("FRANKENSTEIN_DB_PATH", "/data/frankenstein/ledger.sqlite3"))
-    # One-off owner override: skips the daily lock only on the exact Berlin date set.
-    bypass_date = os.getenv("FRANKENSTEIN_BYPASS_DAILY_LOCK_DATE", "").strip()
-    bypass_today = bypass_date == datetime.now(UTC).astimezone(ZoneInfo("Europe/Berlin")).date().isoformat()
-    if ledger.has_completed_today() and not bypass_today:
-        return {"status": "complete", "reason": "DAILY_PRODUCT_RUN_ALREADY_COMPLETED",
-                "openai_called": False, "meta_called": False}
-
-    # Paid Meta mutations are owned exclusively by the central adtech pilot.
-    # Keep this worker draft-only even if legacy live-write variables remain set.
-    reuse_existing = False
-    live = False
-    buyer = None
-    if reuse_existing:
-        if not live:
-            return {"status": "blocked", "reason": "META_LIVE_WRITES_DISABLED",
-                    "openai_called": False, "meta_called": False}
-        buyer = MetaBuyer()
-        campaign_id = _required("FRANKENSTEIN_CAMPAIGN_ID")
-        adset_id = _required("FRANKENSTEIN_ADSET_ID")
-        readiness = await buyer.existing_adset_readiness(campaign_id, adset_id)
-        if not readiness.get("ready"):
-            return {"status": "blocked", "reason": readiness.get("reason"),
+    """Read and verify JARVIS's free organic output; never call paid generators or Meta."""
+    origin = "https://homestro-ai-api-fixed-current-production.up.railway.app"
+    url = origin + "/api/jarvis/v1/workforce"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5),
+                                 follow_redirects=False) as client:
+        response = await client.get(url, headers={"Accept": "application/json"})
+        if response.status_code != 200:
+            return {"status": "blocked", "reason": "JARVIS_WORKFORCE_HTTP_ERROR",
+                    "http_status": response.status_code, "openai_called": False,
+                    "meta_called": False, "paid_spend_eur": "0.00"}
+        try:
+            workforce = response.json()
+        except ValueError:
+            return {"status": "blocked", "reason": "JARVIS_WORKFORCE_INVALID_JSON",
                     "openai_called": False, "meta_called": False,
-                    "campaign_id": campaign_id, "adset_id": adset_id}
+                    "paid_spend_eur": "0.00"}
 
-    feed = await hunt_one()
-    product = ledger.choose_product(
-        feed["products"],
-        os.getenv("FRANKENSTEIN_PRODUCT_ID", "").strip(),
-        os.getenv("FRANKENSTEIN_PRIORITY_PRODUCT_QUERY", "Lenovo Erazer XP6").strip(),
-    )
-    if product is None:
-        return {"status": "complete", "reason": "NO_UNPROCESSED_ELIGIBLE_PRODUCT",
-                "products_checked": feed["products_checked"], "openai_called": False, "meta_called": False}
-    if not ledger.reserve_product(product["id"]):
-        return {"status": "blocked", "reason": "PRODUCT_ALREADY_RESERVED", "product_id": product["id"]}
-    log.info("frankenstein_hunter_selected product_id=%s", product["id"])
-    try:
-        generated = await write_copy(product, ledger)
-    except Exception:
-        ledger.save(product["id"], state="retryable")
-        raise
-    copy_data = generated["copy"]
-    ledger.save(product["id"], state="copy_generated", copy_json=json.dumps(copy_data, ensure_ascii=False),
-                openai_cost_usd=generated["estimated_cost_usd"])
-    log.info("frankenstein_creative_generated product_id=%s model=%s input_tokens=%s output_tokens=%s cost_usd=%s",
-             product["id"], MODEL, generated["input_tokens"], generated["output_tokens"],
-             generated["estimated_cost_usd"])
-    document = render_seo_html(product, copy_data)
-    output_dir = Path(os.getenv("FRANKENSTEIN_OUTPUT_DIR", "/data/frankenstein/pages"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-    slug = hashlib.sha256(str(product["id"]).encode()).hexdigest()[:20]
-    html_path = output_dir / f"{slug}.html"
-    html_path.write_text(document, encoding="utf-8")
-    ledger.save(product["id"], state="seo_artifact_ready", html_path=str(html_path))
-    log.info("frankenstein_seo_artifact_ready product_id=%s bytes=%s published=false",
-             product["id"], len(document.encode("utf-8")))
+    scripts = workforce.get("organic_content") if isinstance(workforce, dict) else None
+    if not isinstance(scripts, list):
+        scripts = []
+    ready = []
+    for script in scripts:
+        if not isinstance(script, dict):
+            continue
+        product_handle = str(script.get("productHandle", ""))
+        product_url = urlsplit("https://homestro.de/products/" + product_handle)
+        if (not isinstance(script.get("id"), str)
+                or not product_handle
+                or not re.fullmatch(r"[a-z0-9-]{1,180}", product_handle)
+                or product_url.hostname != "homestro.de"
+                or not isinstance(script.get("voiceover"), str)
+                or not script["voiceover"].strip()
+                or not isinstance(script.get("caption"), str)
+                or not script["caption"].strip()
+                or not isinstance(script.get("hashtags"), list)
+                or script.get("manualPostRequired") is not True
+                or script.get("paidMedia") is not False
+                or script.get("videoGeneration") is not False):
+            continue
+        ready.append(script)
 
-    daily = Decimal(os.getenv("FRANKENSTEIN_META_DAILY_BUDGET_EUR", "5.00"))
-    total = Decimal(os.getenv("FRANKENSTEIN_META_TOTAL_BUDGET_EUR", "35.00"))
-    # Frankenstein is a preparation worker. The central adtech pilot is the
-    # sole owner of Meta campaign mutations; keep this lane draft-only unless
-    # an explicitly enabled, reviewed integration replaces this guard.
-    if not live:
-        result = {"status": "prepared_only",
-                  "reason": "CENTRAL_ADTECH_PILOT_OWNS_META_WRITES",
-                  "campaign_created": False, "writes_performed": False,
-                  "product_id": product["id"]}
-    elif daily <= 0 or total <= 0:
-        result = {"status": "blocked", "reason": "META_SPEND_BUDGET_REQUIRED",
-                  "campaign_created": False, "writes_performed": False}
-    elif reuse_existing:
-        result = await buyer.create_ad_in_existing_campaign(
-            product, copy_data, hashlib.sha256(str(product["id"]).encode()).hexdigest(),
-            _required("FRANKENSTEIN_CAMPAIGN_ID"), _required("FRANKENSTEIN_ADSET_ID"), live)
-    else:
-        buyer = buyer or MetaBuyer()
-        result = await buyer.create_paused_ad(product, copy_data,
-            hashlib.sha256(str(product["id"]).encode()).hexdigest(), float(daily), float(total), live)
-    state = ("prepared_only" if result.get("status") == "prepared_only"
-             else "meta_active" if result.get("status") == "active_existing_campaign"
-             else "meta_paused" if result.get("status") == "created_paused_existing_campaign"
-             else "meta_blocked" if result.get("status") == "blocked"
-             else "meta_active" if result.get("status") == "active"
-             else "meta_paused")
-    ledger.save(product["id"], state=state, campaign_id=result.get("campaign_id"))
-    result.update({"product_id": product["id"], "old_campaign_touched": False})
-    log.info("frankenstein_media_buyer %s", json.dumps(result, separators=(",", ":")))
-    return {"status": "completed" if result.get("writes_performed") else "prepared",
-            "hunter": {"status": "selected", "products_checked": feed["products_checked"],
-                       "eligible_count": feed["eligible_count"], "product_id": product["id"]},
-            "creative": generated, "seo": {"status": "artifact_ready", "html_path": str(html_path),
-                       "published": False}, "media_buyer": result}
+    if len(ready) < 2:
+        return {"status": "blocked", "reason": "TWO_JARVIS_ORGANIC_SCRIPTS_NOT_READY",
+                "script_count": len(ready), "openai_called": False,
+                "meta_called": False, "paid_spend_eur": "0.00"}
+
+    result = {"status": "completed", "handoff": "JARVIS_TO_FRANKENSTEIN_CONFIRMED",
+              "source": url, "script_count": 2, "scripts": ready[:2],
+              "openai_called": False, "meta_called": False, "paid_spend_eur": "0.00",
+              "publication_performed": False, "manual_post_required": True}
+    log.info("frankenstein_jarvis_handoff %s",
+             json.dumps({key: value for key, value in result.items() if key != "scripts"},
+                        separators=(",", ":")))
+    return result
 
 
 def main() -> None:
