@@ -1,20 +1,21 @@
-"""Prepare existing, reviewed TikTok video drafts for the Pilot's sole publisher.
+"""Prepare TikTok bundles and publish directly only when TikTok OAuth is configured.
 
-This agent deliberately does not generate media or call a posting endpoint. The
-marketing Pilot already owns TikTok consent, review, rate limits and publishing;
-creating a second publisher here could post the same video twice.
+No media generation is performed here. Without an authorized direct-post token,
+the existing ready-to-post bundle is returned without blocking the pipeline.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
+from urllib import error as urlerror, request as urlrequest
 
 import httpx
 
@@ -257,3 +258,163 @@ async def run_once(
         ),
     )
     return result
+
+
+
+def _tiktok_request(url: str, *, method: str = "POST", token: str | None = None,
+                    payload: dict[str, Any] | None = None, data: bytes | None = None,
+                    headers: dict[str, str] | None = None, timeout: int = 25) -> dict[str, Any]:
+    request_headers = dict(headers or {})
+    if token:
+        request_headers["Authorization"] = "Bearer " + token
+    body = data
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json; charset=UTF-8")
+    req = urlrequest.Request(url, data=body, headers=request_headers, method=method)
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as response:
+            raw = response.read(2_000_000)
+            return json.loads(raw.decode("utf-8")) if raw else {}
+    except urlerror.HTTPError as exc:
+        body_text = exc.read(2000).decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body_text).get("error", {}).get("code", "HTTP_ERROR")
+        except (ValueError, AttributeError):
+            detail = "HTTP_ERROR"
+        raise RuntimeError(f"TIKTOK_HTTP_{exc.code}_{str(detail)[:80]}") from None
+    except (urlerror.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise RuntimeError(f"TIKTOK_REQUEST_{type(exc).__name__.upper()}") from None
+
+
+def _tiktok_access_token(env: dict[str, str]) -> str:
+    access = (env.get("TIKTOK_ACCESS_TOKEN") or "").strip()
+    refresh = (env.get("TIKTOK_REFRESH_TOKEN") or "").strip()
+    client_key = (env.get("TIKTOK_CLIENT_KEY") or "").strip()
+    client_secret = (env.get("TIKTOK_CLIENT_SECRET") or "").strip()
+    if access:
+        return access
+    if not (refresh and client_key and client_secret):
+        return ""
+    body = urlencode({
+        "client_key": client_key, "client_secret": client_secret,
+        "grant_type": "refresh_token", "refresh_token": refresh,
+    }).encode("utf-8")
+    req = urlrequest.Request("https://open.tiktokapis.com/v2/oauth/token/",
+                             data=body, headers={"Content-Type": "application/x-www-form-urlencoded"},
+                             method="POST")
+    try:
+        with urlrequest.urlopen(req, timeout=20) as response:
+            data = json.loads(response.read(100_000).decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"TIKTOK_TOKEN_REFRESH_{type(exc).__name__.upper()}") from None
+    token = str(data.get("data", {}).get("access_token") or "")
+    if not token:
+        raise RuntimeError("TIKTOK_TOKEN_REFRESH_REJECTED")
+    return token
+
+
+def publish_generated_video(
+    video_path: str, caption: str, *, duration_seconds: int | None = None,
+    env: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Publish the locally rendered MP4 only when TikTok OAuth is configured."""
+    env = os.environ if env is None else env
+    if not (str(env.get("TIKTOK_ACCESS_TOKEN") or "").strip()
+            or (env.get("TIKTOK_REFRESH_TOKEN") and env.get("TIKTOK_CLIENT_KEY")
+                and env.get("TIKTOK_CLIENT_SECRET"))):
+        return {"status": "ready_to_post", "reason": "TIKTOK_OAUTH_NOT_CONFIGURED",
+                "upload_performed": False, "publication_performed": False}
+    path = Path(video_path)
+    if not path.is_file():
+        return {"status": "ready_to_post", "reason": "TIKTOK_VIDEO_FILE_MISSING",
+                "upload_performed": False, "publication_performed": False}
+    size = path.stat().st_size
+    if size <= 0 or size > 60 * 1024 * 1024:
+        return {"status": "ready_to_post", "reason": "TIKTOK_VIDEO_SIZE_OUT_OF_RANGE",
+                "upload_performed": False, "publication_performed": False}
+    try:
+        token = _tiktok_access_token(env)
+        creator = _tiktok_request(
+            "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
+            token=token, payload={},
+        )
+        error_data = creator.get("error") or {}
+        if error_data.get("code") not in ("ok", "OK", None):
+            raise RuntimeError("TIKTOK_CREATOR_INFO_" + str(error_data.get("code", "ERROR"))[:80])
+        creator_info = creator.get("data") or {}
+        privacy_options = creator_info.get("privacy_level_options") or []
+        privacy = str(env.get("TIKTOK_PRIVACY_LEVEL") or "PUBLIC_TO_EVERYONE")
+        if privacy not in privacy_options:
+            return {"status": "ready_to_post", "reason": "TIKTOK_PRIVACY_LEVEL_NOT_AVAILABLE",
+                    "privacy_options": privacy_options, "upload_performed": False,
+                    "publication_performed": False}
+        duration = int(creator_info.get("max_video_post_duration_sec") or 0)
+        if duration and duration_seconds and duration < duration_seconds:
+            return {"status": "ready_to_post", "reason": "TIKTOK_DURATION_LIMIT_TOO_LOW",
+                    "max_duration_seconds": duration, "upload_performed": False,
+                    "publication_performed": False}
+        chunk_size = 10_000_000
+        chunks = max(1, math.ceil(size / chunk_size))
+        init = _tiktok_request(
+            "https://open.tiktokapis.com/v2/post/publish/video/init/",
+            token=token,
+            payload={
+                "post_info": {
+                    "title": str(caption)[:2200], "privacy_level": privacy,
+                    "disable_duet": False, "disable_comment": False, "disable_stitch": False,
+                    "brand_content_toggle": False, "brand_organic_toggle": True,
+                },
+                "source_info": {
+                    "source": "FILE_UPLOAD", "video_size": size,
+                    "chunk_size": chunk_size, "total_chunk_count": chunks,
+                },
+            },
+        )
+        init_error = init.get("error") or {}
+        if init_error.get("code") not in ("ok", "OK", None):
+            raise RuntimeError("TIKTOK_INIT_" + str(init_error.get("code", "ERROR"))[:80])
+        publish_id = str((init.get("data") or {}).get("publish_id") or "")
+        upload_url = str((init.get("data") or {}).get("upload_url") or "")
+        if not publish_id or not upload_url or not upload_url.startswith("https://"):
+            raise RuntimeError("TIKTOK_UPLOAD_URL_OR_PUBLISH_ID_MISSING")
+        upload_host = urlsplit(upload_url).hostname or ""
+        if upload_host != "open-upload.tiktokapis.com":
+            raise RuntimeError("TIKTOK_UPLOAD_HOST_REJECTED")
+        with path.open("rb") as stream:
+            start = 0
+            while start < size:
+                chunk = stream.read(chunk_size)
+                if not chunk:
+                    break
+                end = start + len(chunk) - 1
+                req = urlrequest.Request(upload_url, data=chunk, headers={
+                    "Content-Type": "video/mp4", "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {start}-{end}/{size}",
+                }, method="PUT")
+                try:
+                    with urlrequest.urlopen(req, timeout=90) as response:
+                        response.read(2048)
+                except Exception as exc:
+                    raise RuntimeError(f"TIKTOK_UPLOAD_{type(exc).__name__.upper()}") from None
+                start = end + 1
+        status_result = _tiktok_request(
+            "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
+            token=token, payload={"publish_id": publish_id},
+        )
+        status_error = status_result.get("error") or {}
+        if status_error.get("code") not in ("ok", "OK", None):
+            raise RuntimeError("TIKTOK_STATUS_" + str(status_error.get("code", "ERROR"))[:80])
+        status_data = status_result.get("data") or {}
+        state = str(status_data.get("status") or "PROCESSING")
+        if state != "PUBLISH_COMPLETE":
+            return {"status": "processing" if state not in {"FAILED", "SEND_TO_USER_INBOX"} else "ready_to_post",
+                    "reason": state, "publish_id": publish_id, "upload_performed": True,
+                    "publication_performed": state == "PUBLISH_COMPLETE"}
+        ids = status_data.get("publicaly_available_post_id") or []
+        return {"status": "published", "publish_id": publish_id,
+                "post_ids": ids, "upload_performed": True, "publication_performed": True}
+    except Exception as exc:
+        return {"status": "ready_to_post",
+                "reason": str(exc)[:160], "upload_performed": False,
+                "publication_performed": False}
