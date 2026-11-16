@@ -142,6 +142,8 @@ async function executeAndRecord(triggerType, {runCycle, historyStore, now = () =
     duration_ms: Math.max(0, finishedAt - startedAt),
     comms_agent_summary: String(cycle?.summary_report?.text || ''),
     organic_content: Array.isArray(cycle?.organic_content) ? cycle.organic_content : [],
+    unified_pipeline: cycle?.unified_pipeline || null,
+    organic_publication: cycle?.organic_publication || [],
   };
   await historyStore.append(entry);
   return {cycle, entry};

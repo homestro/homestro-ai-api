@@ -174,6 +174,30 @@ def prepare_existing_drafts(
     }
 
 
+
+def prepare_generated_bundle(
+    product: dict[str, Any], video_url: str, caption: str, hashtags: list[str] | None = None
+) -> dict[str, Any]:
+    """Return a manual TikTok/Shorts bundle for a locally rendered MP4; never upload or publish."""
+    url = str(product.get("url") or product.get("source_url") or "")
+    caption = str(caption or "").strip()
+    if not _trusted_product_url(url):
+        return {"status": "blocked", "reason": "UNTRUSTED_PRODUCT_URL",
+                "upload_performed": False, "publication_performed": False}
+    if not _trusted_video_url(video_url):
+        return {"status": "blocked", "reason": "UNTRUSTED_VIDEO_URL",
+                "upload_performed": False, "publication_performed": False}
+    if not caption or len(caption) > 2200:
+        return {"status": "blocked", "reason": "INVALID_CAPTION",
+                "upload_performed": False, "publication_performed": False}
+    tags = [str(value).strip() for value in (hashtags or []) if str(value).strip()]
+    return {"status": "ready_to_post", "product_id": str(product.get("id") or product.get("product_id") or ""),
+            "product_url": url, "video_url": video_url, "format": "vertical_9_16_mp4",
+            "platforms": ["TikTok", "YouTube Shorts"], "caption": caption, "hashtags": tags,
+            "upload_performed": False, "publication_performed": False, "paid_ads_created": False,
+            "ad_spend_eur": 0}
+
+
 async def _read_social_posts(api_key: str, client: Any | None = None) -> list[dict[str, Any]]:
     own_client = client is None
     http = client or httpx.AsyncClient(

@@ -6,6 +6,8 @@ const {
   isAutopilotEnabled,
 } = require('./autopilot');
 const {LiveMetaExecutor} = require('./live-meta');
+const {spawn} = require('node:child_process');
+const {publishOrganicDraft} = require('../meta-organic');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -22,6 +24,10 @@ let autopilotScheduler = null;
 let liveExecutor = null;
 let workforceApiKey = null;
 let paidAdsPauseStatus = null;
+let metaConnectionBridge = null;
+const unifiedAssetsDir = process.env.JARVIS_UNIFIED_ASSETS_DIR || '/data/jarvis-unified/assets';
+const unifiedPublicOrigin = String(process.env.JARVIS_PUBLIC_ORIGIN || 'https://homestro-ai-api-fixed-current-production.up.railway.app').replace(/\/$/, '');
+const unifiedPublishedPath = process.env.JARVIS_UNIFIED_PUBLISH_LEDGER || '/data/jarvis-unified-published.json';
 const serviceList = ['Streicharbeiten', 'Spachtelarbeiten', 'Laminat und Vinyl verlegen',
   'Silikonfugen erneuern', 'Fliesenreparaturen', 'Haus- und Wohnungsrenovierungen'];
 const blockedRoot = 'Ma' + 'ler';
@@ -145,38 +151,159 @@ function buildOrganicScripts(products) {
   ];
 }
 
+
+function runPythonPipeline(payload) {
+  return new Promise((resolve,reject)=>{
+    const python=process.env.PYTHON_EXECUTABLE||'/opt/venv/bin/python';
+    const script=path.join(__dirname,'unified_pipeline.py');
+    const child=spawn(python,[script],{cwd:path.join(__dirname,'..'),env:process.env,stdio:['pipe','pipe','pipe']});
+    let stdout='',stderr='';
+    child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
+    child.stdout.on('data',chunk=>{stdout+=chunk;if(stdout.length>2000000)child.kill('SIGKILL');});
+    child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-1000);});
+    child.on('error',reject);
+    child.on('close',code=>{
+      let result;
+      try{result=JSON.parse(stdout);}catch{return reject(new Error('UNIFIED_PIPELINE_INVALID_JSON '+stderr.slice(-200)));}
+      resolve(result);
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+async function loadPublishLedger() {
+  try { return JSON.parse(await fs.promises.readFile(unifiedPublishedPath,'utf8')); }
+  catch(error) { if(error.code==='ENOENT')return {}; throw error; }
+}
+async function savePublishLedger(ledger) {
+  await fs.promises.mkdir(path.dirname(unifiedPublishedPath),{recursive:true});
+  const temp=unifiedPublishedPath+'.tmp';
+  await fs.promises.writeFile(temp,JSON.stringify(ledger,null,2),'utf8');
+  await fs.promises.rename(temp,unifiedPublishedPath);
+}
+function publicAssetUrl(file) {
+  const name=path.basename(String(file||''));
+  if(!/^[a-f0-9]{64}\.(?:jpg|mp4)$/.test(name))throw Error('UNIFIED_ASSET_NAME_INVALID');
+  return unifiedPublicOrigin+'/marketing-assets/'+name;
+}
 async function runFreeOrganicCycle() {
-  if (!liveExecutor) {
-    const products = [{title:erazer.title,handle:erazer.handle,productType:'Audio'}];
-    const organic_content = buildOrganicScripts(products);
-    const cycle = runDryRunCycle();
-    cycle.dry_run = false;
-    cycle.organic_content = organic_content;
-    cycle.summary_report = {text:'Organický cyklus: placené reklamy jsou uzamčené na 0,00 €; připraveny 2 bezplatné scénáře k ručnímu publikování. Shopify SEO adaptér není dostupný.',channel:'workforce_api',sent:false,spendEUR:0};
-    return cycle;
+  const blocked = reason => ({
+    cycle_id:crypto.randomUUID(),status:'blocked',dry_run:false,budget_eur:0,ad_spend_eur:0,
+    external_writes_performed:false,video_generation_performed:false,paid_video_generation_performed:false,
+    organic_content:[],
+    summary_report:{text:'Sjednocený běh zablokován: '+reason+'. Placené reklamy a AI generování zůstávají 0,00 €.',channel:'workforce_api',sent:false,spendEUR:0},
+  });
+  if(!liveExecutor||!liveExecutor.shopifyGraphQL)return blocked('Shopify adaptér není dostupný');
+  if(String(process.env.RAILWAY_SERVICE_ID||'')!=='3ee64de3-7855-4b84-a866-43cc79bc56d1')return blocked('běh je uzamčen pro homestro-ai-api-fixed-current');
+  if(String(process.env.PAID_ADS_ENABLED||'').toLowerCase()==='true'||Number(process.env.MAX_DAILY_AD_SPEND_EUR??0)>0)return blocked('nulový reklamní zámek není aktivní');
+  try{
+    const imported=await import('../homestro-marketing-pilot/modules/trends.js');
+    const trends=await new imported.GoogleTrends({geos:['DE','AT']}).refresh();
+    const products=await liveExecutor.activeCatalogForPipeline();
+    const result=await runPythonPipeline({products,trends,assets_dir:unifiedAssetsDir});
+    if(result.status==='blocked')return blocked(result.reason||result.scout?.reason||'Scout nenašel vhodný produkt');
+    const product=result.product||{};
+    const creative=result.creative||{};
+    const audit=auditMessage(message('seo_geo_visuals','shopify','homestro','shopify_seo_update',{
+      product_id:product.id,budget_eur:0,paid_api_call:false,
+    },'running'));
+    let shopifyUpdate={status:'blocked',updated:false,reason:'SEO_GEO_DRAFT_UNAVAILABLE'};
+    if(audit.allowed&&creative.seo?.title&&creative.seo?.meta_description){
+      const mutation='mutation($product:ProductUpdateInput!){productUpdate(product:$product){product{id seo{title description}} userErrors{field message}}}';
+      const response=await liveExecutor.shopifyGraphQL(mutation,{product:{id:product.id,seo:{
+        title:String(creative.seo.title).slice(0,70),description:String(creative.seo.meta_description).slice(0,320),
+      }}});
+      const saved=response?.productUpdate?.product,errors=response?.productUpdate?.userErrors||[];
+      shopifyUpdate=errors.length?{status:'blocked',updated:false,reason:'SHOPIFY_SEO_UPDATE_REJECTED',errors:errors.slice(0,3)}
+        :{status:'completed',updated:true,product_id:saved?.id||product.id,seo:saved?.seo||creative.seo};
+    }else shopifyUpdate={status:'blocked',updated:false,reason:audit.reason||'SEO_GEO_DRAFT_UNAVAILABLE'};
+    if(shopifyUpdate.updated&&creative.image_path){
+      const imageAlt='Homestro AI Organic Promo · '+String(product.title||'Produkt').slice(0,120);
+      const exists=(product.media?.nodes||[]).some(m=>m?.mediaContentType==='IMAGE'&&String(m.image?.altText||'').startsWith('Homestro AI Organic Promo'));
+      if(!exists){
+        try{
+          const mediaResult=await liveExecutor.shopifyGraphQL(
+            'mutation($productId:ID!,$media:[CreateMediaInput!]!){productCreateMedia(productId:$productId,media:$media){media{... on MediaImage{id status}}mediaUserErrors{field message}}}',
+            {productId:product.id,media:[{originalSource:publicAssetUrl(creative.image_path),mediaContentType:'IMAGE',alt:imageAlt}]}
+          );
+          const mediaErrors=mediaResult?.productCreateMedia?.mediaUserErrors||[];
+          shopifyUpdate.promo_image=mediaErrors.length?{status:'blocked',errors:mediaErrors.slice(0,2)}:{status:'submitted',media_id:mediaResult?.productCreateMedia?.media?.[0]?.id||null};
+        }catch(error){shopifyUpdate.promo_image={status:'blocked',reason:String(error?.message||'SHOPIFY_IMAGE_CREATE_FAILED').slice(0,120)};}
+      }else shopifyUpdate.promo_image={status:'already_present'};
+    }
+    result.shopify_update=shopifyUpdate;
+    const publication={status:'blocked',reason:'SEO_OR_MEDIA_NOT_READY',channels:[],ad_spend_eur:0};
+    if(shopifyUpdate.updated&&result.video?.rendered&&creative.image_path){
+      const videoUrl=publicAssetUrl(result.video.path);
+      const imageUrl=publicAssetUrl(creative.image_path);
+      result.video.public_url=videoUrl;
+      result.product.image_url=imageUrl;
+      const tiktok=require('../agents/tiktok_publisher');
+      result.tiktok_bundle=tiktok.prepare_generated_bundle(
+        {id:product.id,url:product.url},videoUrl,creative.caption,creative.hashtags
+      );
+      const caption=String(creative.caption||((product.title||'Produkt')+' bei Homestro entdecken.')).slice(0,2200);
+      const date=new Date().toISOString().slice(0,10);
+      const ledger=await loadPublishLedger(),key=date+':'+product.id;
+      ledger[key]=ledger[key]||{};
+      const channels=[];
+      for(const channel of ['facebook','instagram']){
+        const previous=ledger[key][channel];
+        if(previous?.status==='published'||previous?.status==='attempted'){
+          channels.push({channel,status:previous.status,id:previous.id||null,reason:previous.status==='attempted'?'PREVIOUS_ATTEMPT_REQUIRES_MANUAL_CHECK':undefined});
+          continue;
+        }
+        const publishAudit=auditMessage(message('unified_pipeline','meta_organic','homestro','organic_publish',{
+          channel,product_id:product.id,budget_eur:0,ad_spend_eur:0,paid_ads:false,
+        },'running'));
+        if(!publishAudit.allowed){channels.push({channel,status:'blocked',reason:publishAudit.reason});continue;}
+        ledger[key][channel]={status:'attempted',attempted_at:new Date().toISOString()};
+        await savePublishLedger(ledger);
+        try{
+          const posted=await publishOrganicDraft({channel,imageUrl,caption},{
+            getCredentials:()=>metaConnectionBridge.credentials(),
+            onCredentialError:(error,credentials)=>metaConnectionBridge.reject(error,credentials),
+          });
+          ledger[key][channel]={status:'published',id:posted.id||null,published_at:new Date().toISOString()};
+          await savePublishLedger(ledger);
+          channels.push({channel,status:'published',id:posted.id||null});
+        }catch(error){
+          ledger[key][channel]={status:'attempted',reason:String(error?.message||'META_PUBLISH_FAILED').slice(0,120),attempted_at:ledger[key][channel]?.attempted_at};
+          await savePublishLedger(ledger);
+          channels.push({channel,status:'blocked',reason:String(error?.message||'META_PUBLISH_FAILED').slice(0,120),retry:'manual_review_required'});
+        }
+      }
+      publication.status=channels.length&&channels.every(row=>row.status==='published')?'published':channels.some(row=>row.status==='published')?'partial':'blocked';
+      publication.channels=channels;
+      publication.image_url=imageUrl;
+    }
+    result.publication=publication;
+    result.cost_eur=0;result.ad_spend_eur=0;result.paid_ai_calls=0;result.ad_mutations_performed=false;
+    const bundle=result.tiktok_bundle;
+    const content=bundle?.status==='ready_to_post'?[bundle]:[];
+    const published=(publication.channels||[]).filter(row=>row.status==='published').length;
+    const cycleStatus=result.status==='completed'&&shopifyUpdate.updated&&published===2?'completed':'partial';
+    const seoText=shopifyUpdate.updated?'Shopify SEO/GEO gespeichert':'Shopify SEO/GEO '+(shopifyUpdate.reason||'blockiert');
+    const videoText=result.video?.rendered?'9:16-MP4 bereit: '+result.video.path:'MP4 '+(result.video?.reason||'nicht gerendert');
+    const metaText=publication.status==='published'?'Facebook und Instagram veröffentlicht':('Meta-Status '+publication.status);
+    const summary='Zero-Spend-Lauf: '+(product.title||'Produkt ohne Titel')+'; '+seoText+'; '+videoText+'; '+metaText+'; TikTok/Shorts-Bundle '+(content.length?'in Run-History gespeichert':'nicht bereit')+'; Werbeausgaben 0,00 €.';
+    lastCycle={
+      cycle_id:crypto.randomUUID(),status:cycleStatus,dry_run:false,budget_eur:0,ad_spend_eur:0,
+      external_writes_performed:Boolean(shopifyUpdate.updated||published),video_generation_performed:Boolean(result.video?.rendered),
+      paid_video_generation_performed:false,local_video_rendered:Boolean(result.video?.rendered),
+      unified_pipeline:result,organic_content:content,
+      pillar_results:[
+        {pillar:'scout',agent:'agents.product_hunter',status:result.scout?.status||'blocked',result:result.scout||null},
+        {pillar:'seo_geo_image',agent:'agents.creative_seo + Pillow',status:creative.status||'blocked',result:creative},
+        {pillar:'video',agent:'FFmpeg',status:result.video?.status||'blocked',result:result.video||null},
+        {pillar:'organic_marketing',agent:'agents.tiktok_publisher + Meta OAuth',status:publication.status,result:publication},
+      ],
+      summary_report:{text:summary,channel:'workforce_api',sent:false,spendEUR:0},
+    };
+    return lastCycle;
+  }catch(error){
+    console.error('[jarvis-unified] CYCLE_FAILED '+JSON.stringify({reason:String(error?.message||error).slice(0,180)}));
+    return blocked(String(error?.message||'PIPELINE_FAILED').slice(0,120));
   }
-  let seo={status:'blocked',activeProductsOptimized:0,altTextsUpdated:0,reason:null};
-  try { seo=await liveExecutor.syncSeo(); }
-  catch(error) { seo={status:'partial',activeProductsOptimized:error?.result?.activeProductsOptimized||0,altTextsUpdated:error?.result?.altTextsUpdated||0,reason:String(error?.message||'SHOPIFY_SEO_FAILED').slice(0,100)}; }
-  let products=[];
-  try { products=await liveExecutor.activeProductsForOrganic(); }
-  catch(error) { console.warn('[jarvis-organic] PRODUCT_CATALOG_READ_FAILED',String(error?.message||error).slice(0,100)); }
-  const organic_content=buildOrganicScripts(products);
-  const cycle=runDryRunCycle();
-  cycle.status='completed';
-  cycle.dry_run=false;
-  cycle.budget_eur=0;
-  cycle.ad_spend_eur=0;
-  cycle.external_writes_performed=Boolean(seo.activeProductsOptimized||seo.altTextsUpdated);
-  cycle.video_generation_performed=false;
-  cycle.organic_content=organic_content;
-  const seoSummary=seo.status==='completed'
-    ? `SEO: upraveno ${seo.activeProductsOptimized} aktivních produktů a ${seo.altTextsUpdated} chybějících ALT textů`
-    : `SEO: částečný výsledek (${seo.reason||'bez další změny'})`;
-  const adStatus=paidAdsPauseStatus?.zeroSpendLock?'všechny placené kampaně jsou pozastavené':'placené zápisy jsou vypnuté; stav existující kampaně blokuje Meta';
-  cycle.summary_report={text:`Bezplatný organický cyklus dokončen: ${adStatus}; rozpočtové zápisy 0,00 €; ${seoSummary}; připraveny 2 scénáře pro TikTok, Reels a Shorts. MS Handwerk zůstává oddělený.`,channel:'workforce_api',sent:false,spendEUR:0};
-  lastCycle=cycle;
-  return cycle;
 }
 
 function runDryRunCycle() {
@@ -288,6 +415,14 @@ function workforceStatus(env = process.env, runtime = {}) {
 function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} = {}) {
   workforceApiKey = apiKey || null;
   liveExecutor = new LiveMetaExecutor({metaConnection, shopifyGraphQL, env: process.env});
+  metaConnectionBridge=metaConnection||null;
+  const assetRoot=path.resolve(unifiedAssetsDir);
+  app.get('/marketing-assets/:name',(req,res)=>{
+    const name=String(req.params.name||'');
+  if(!/^[a-f0-9]{64}\.(?:jpg|mp4)$/.test(name))return res.status(404).end();
+    res.set('Cache-Control','public, max-age=300');
+    return res.sendFile(path.join(assetRoot,name),error=>{if(error&&!res.headersSent)res.status(error.statusCode||404).end();});
+  });
   if (!autopilotScheduler) {
     autopilotScheduler = createAutopilotScheduler({
       enabled: isAutopilotEnabled(process.env),

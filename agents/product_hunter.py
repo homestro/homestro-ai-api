@@ -612,6 +612,48 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
     return result
 
 
+
+def select_from_shopify_catalog(
+    products: list[dict[str, Any]], trends: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Rank active Shopify products against free DE/AT trend RSS terms; no paid actors."""
+    trend_rows = [row for row in trends if isinstance(row, dict)]
+    ranked: list[dict[str, Any]] = []
+    for raw in products:
+        if not isinstance(raw, dict) or str(raw.get("status", "")).upper() != "ACTIVE":
+            continue
+        variants = raw.get("variants") or []
+        available = [v for v in variants if isinstance(v, dict) and v.get("availableForSale")]
+        if not available:
+            continue
+        title = str(raw.get("title") or "").strip()
+        handle = str(raw.get("handle") or "").strip()
+        if not title or not handle:
+            continue
+        corpus = " ".join([title, str(raw.get("productType") or ""),
+                           " ".join(str(t) for t in raw.get("tags") or [])]).casefold()
+        matches = []
+        for item in trend_rows:
+            term = str(item.get("query") or item.get("title") or "").strip()
+            tokens = [t for t in _tokens(term) if len(t) >= 3]
+            overlap = sum(1 for token in tokens if token in corpus)
+            if overlap:
+                matches.append({"term": term[:100], "country": item.get("country"),
+                                "overlap": overlap, "traffic": item.get("approxTraffic")})
+        inventory = len(available)
+        flagship = handle == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
+        score = (2000 if flagship else 0) + min(inventory, 500) + sum(m["overlap"] * 25 for m in matches)
+        ranked.append({"product": raw, "score": score, "trend_matches": matches[:5],
+                       "available_variants": len(available), "available_variant_count": inventory})
+    ranked.sort(key=lambda row: (-row["score"], str(row["product"].get("handle") or "")))
+    if not ranked:
+        return {"status": "blocked", "reason": "NO_ACTIVE_IN_STOCK_SHOPIFY_PRODUCTS",
+                "product": None, "trend_source": "free_google_trends_rss_de_at"}
+    return {"status": "selected", "product": ranked[0]["product"], "score": ranked[0]["score"],
+            "trend_matches": ranked[0]["trend_matches"], "candidate_count": len(ranked),
+            "trend_source": "free_google_trends_rss_de_at"}
+
+
 def main() -> int:
     logging.basicConfig(
         level=os.getenv("PRODUCT_HUNTER_LOG_LEVEL", "INFO").upper(),
