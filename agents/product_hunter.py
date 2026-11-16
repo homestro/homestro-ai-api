@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sqlite3
+import fcntl
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -613,10 +614,9 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
 
 
 
-def select_from_shopify_catalog(
+def _rank_active_shopify_products(
     products: list[dict[str, Any]], trends: list[dict[str, Any]]
-) -> dict[str, Any]:
-    """Rank active Shopify products against free DE/AT trend RSS terms; no paid actors."""
+) -> list[dict[str, Any]]:
     trend_rows = [row for row in trends if isinstance(row, dict)]
     ranked: list[dict[str, Any]] = []
     for raw in products:
@@ -624,8 +624,6 @@ def select_from_shopify_catalog(
             continue
         variants = raw.get("variants") or []
         available = [v for v in variants if isinstance(v, dict) and v.get("availableForSale")]
-        if not available:
-            continue
         title = str(raw.get("title") or "").strip()
         handle = str(raw.get("handle") or "").strip()
         if not title or not handle:
@@ -640,18 +638,115 @@ def select_from_shopify_catalog(
             if overlap:
                 matches.append({"term": term[:100], "country": item.get("country"),
                                 "overlap": overlap, "traffic": item.get("approxTraffic")})
-        inventory = len(available)
         flagship = handle == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
-        score = (2000 if flagship else 0) + min(inventory, 500) + sum(m["overlap"] * 25 for m in matches)
+        score = (2000 if flagship else 0) + min(len(available), 500) + sum(m["overlap"] * 25 for m in matches)
         ranked.append({"product": raw, "score": score, "trend_matches": matches[:5],
-                       "available_variants": len(available), "available_variant_count": inventory})
+                       "available_variants": len(available)})
     ranked.sort(key=lambda row: (-row["score"], str(row["product"].get("handle") or "")))
+    return ranked
+
+
+def select_from_shopify_catalog(
+    products: list[dict[str, Any]], trends: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Return the strongest eligible active product without writing or selecting paid trends."""
+    ranked = _rank_active_shopify_products(products, trends)
     if not ranked:
         return {"status": "blocked", "reason": "NO_ACTIVE_IN_STOCK_SHOPIFY_PRODUCTS",
                 "product": None, "trend_source": "free_google_trends_rss_de_at"}
-    return {"status": "selected", "product": ranked[0]["product"], "score": ranked[0]["score"],
-            "trend_matches": ranked[0]["trend_matches"], "candidate_count": len(ranked),
+    first = ranked[0]
+    return {"status": "selected", "product": first["product"], "score": first["score"],
+            "trend_matches": first["trend_matches"], "candidate_count": len(ranked),
             "trend_source": "free_google_trends_rss_de_at"}
+
+
+def _previously_published_ids(ledger_path: str | Path | None) -> set[str]:
+    if not ledger_path:
+        return set()
+    try:
+        ledger = json.loads(Path(ledger_path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return set()
+    except (OSError, json.JSONDecodeError):
+        logger.warning("product_hunter_existing_publish_ledger_unavailable")
+        return set()
+    if not isinstance(ledger, dict):
+        return set()
+    seen: set[str] = set()
+    for key, channels in ledger.items():
+        if not isinstance(channels, dict):
+            continue
+        if not any(isinstance(row, dict) and row.get("status") in {"published", "attempted"}
+                   for row in channels.values()):
+            continue
+        product_id = str(key).split(":", 1)[1] if ":" in str(key) else str(key)
+        if product_id.startswith("gid://shopify/Product/"):
+            seen.add(product_id)
+    return seen
+
+
+def select_next_active_product(
+    products: list[dict[str, Any]],
+    trends: list[dict[str, Any]],
+    history_path: str | Path = "/data/jarvis-published-products.json",
+    *,
+    existing_publish_ledger_path: str | Path | None = "/data/jarvis-unified-published.json",
+    seed_published_product_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Pick the next eligible catalog item in a durable round-robin rotation."""
+    ranked = _rank_active_shopify_products(products, trends)
+    if not ranked:
+        return {"status": "blocked", "reason": "NO_ACTIVE_IN_STOCK_SHOPIFY_PRODUCTS",
+                "product": None, "trend_source": "free_google_trends_rss_de_at"}
+    path = Path(history_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            history = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            if not isinstance(history, list) or any(not isinstance(row, dict) for row in history):
+                raise ValueError("PRODUCT_ROTATION_HISTORY_INVALID")
+            if not history:
+                seeds = set(seed_published_product_ids or [])
+                seeds.update(_previously_published_ids(existing_publish_ledger_path))
+                history.extend({
+                    "product_id": product_id, "rotation_cycle": 1,
+                    "selected_at": datetime.now(UTC).isoformat(),
+                    "status": "previously_published", "source": "existing_publisher_ledger",
+                } for product_id in sorted(seeds))
+            cycle = max((int(row.get("rotation_cycle", 1)) for row in history), default=1)
+            active_ids = {str(row["product"].get("id") or "") for row in ranked}
+            seen = {str(row.get("product_id") or "") for row in history
+                    if int(row.get("rotation_cycle", cycle)) == cycle}
+            available = [row for row in ranked if str(row["product"].get("id") or "") not in seen]
+            if not available:
+                cycle += 1
+                available = ranked
+            selected = available[0]
+            product_id = str(selected["product"].get("id") or "")
+            history.append({
+                "product_id": product_id,
+                "handle": str(selected["product"].get("handle") or ""),
+                "title": str(selected["product"].get("title") or "")[:200],
+                "rotation_cycle": cycle,
+                "selected_at": datetime.now(UTC).isoformat(),
+                "status": "selected",
+            })
+            if len(history) > 20000:
+                history = history[-20000:]
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temporary, path)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    return {
+        "status": "selected", "product": selected["product"], "score": selected["score"],
+        "trend_matches": selected["trend_matches"], "candidate_count": len(ranked),
+        "trend_source": "free_google_trends_rss_de_at",
+        "rotation": {"cycle": cycle, "remaining_in_cycle": max(0, len(active_ids - {str(row.get("product_id") or "") for row in history if int(row.get("rotation_cycle", cycle)) == cycle})),
+                    "history_path": str(path)},
+    }
 
 
 def main() -> int:

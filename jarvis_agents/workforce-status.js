@@ -180,6 +180,27 @@ async function savePublishLedger(ledger) {
   await fs.promises.writeFile(temp,JSON.stringify(ledger,null,2),'utf8');
   await fs.promises.rename(temp,unifiedPublishedPath);
 }
+
+const productRotationPath=process.env.JARVIS_PUBLISHED_PRODUCTS_PATH||'/data/jarvis-published-products.json';
+async function updateProductRotationHistory(productId, publication) {
+  try {
+    const rows=JSON.parse(await fs.promises.readFile(productRotationPath,'utf8'));
+    if(!Array.isArray(rows))throw Error('PRODUCT_ROTATION_HISTORY_INVALID');
+    const row=[...rows].reverse().find(item=>item?.product_id===String(productId)&&item?.status==='selected');
+    if(!row)return false;
+    const outcomes=Object.entries(publication||{}).map(([channel,result])=>({channel,status:result?.status||'unknown',id:result?.id||result?.video_id||result?.publish_id||null}));
+    row.publications=outcomes;
+    row.status=outcomes.some(item=>item.status==='published'||item.status==='uploaded'||item.status==='processing')?'published':'prepared';
+    row.updated_at=new Date().toISOString();
+    const temp=productRotationPath+'.tmp';
+    await fs.promises.writeFile(temp,JSON.stringify(rows,null,2),'utf8');
+    await fs.promises.rename(temp,productRotationPath);
+    return true;
+  } catch(error) {
+    console.warn('[jarvis-rotation] HISTORY_UPDATE_FAILED '+String(error?.message||error).slice(0,120));
+    return false;
+  }
+}
 function publicAssetUrl(file) {
   const name=path.basename(String(file||''));
   if(!/^[a-f0-9]{64}\.(?:jpg|mp4)$/.test(name))throw Error('UNIFIED_ASSET_NAME_INVALID');
@@ -199,7 +220,7 @@ async function runFreeOrganicCycle() {
     const imported=await import('../homestro-marketing-pilot/modules/trends.js');
     const trends=await new imported.GoogleTrends({geos:['DE','AT']}).refresh();
     const products=await liveExecutor.activeCatalogForPipeline();
-    const result=await runPythonPipeline({products,trends,assets_dir:unifiedAssetsDir,public_origin:unifiedPublicOrigin});
+    const result=await runPythonPipeline({products,trends,assets_dir:unifiedAssetsDir,public_origin:unifiedPublicOrigin,rotation_history_path:productRotationPath,existing_publish_ledger_path:unifiedPublishedPath,seed_published_product_ids:process.env.JARVIS_ROTATION_SEED_PUBLISHED_PRODUCT_IDS||'[]'});
     if(result.status==='blocked')return blocked(result.reason||result.scout?.reason||'Scout nenašel vhodný produkt');
     const product=result.product||{};
     const creative=result.creative||{};
@@ -293,12 +314,22 @@ async function runFreeOrganicCycle() {
     result.cost_eur=0;result.ad_spend_eur=0;result.paid_ai_calls=0;result.ad_mutations_performed=false;
     const bundle=result.tiktok_bundle;
     const content=bundle?.status==='ready_to_post'?[bundle]:[];
+    const socialResult=result.social_publication||{};
+    await updateProductRotationHistory(product.id,{
+      facebook:(publication.channels||[]).find(row=>row.channel==='facebook'),
+      instagram:(publication.channels||[]).find(row=>row.channel==='instagram'),
+      youtube:socialResult.youtube,
+      tiktok:socialResult.tiktok,
+    });
     const published=(publication.channels||[]).filter(row=>row.status==='published').length;
     const cycleStatus=result.status==='completed'&&shopifyUpdate.updated&&published===2?'completed':'partial';
     const seoText=shopifyUpdate.updated?'Shopify SEO/GEO gespeichert':'Shopify SEO/GEO '+(shopifyUpdate.reason||'blockiert');
     const videoText=result.video?.rendered?'9:16-MP4 bereit: '+result.video.path:'MP4 '+(result.video?.reason||'nicht gerendert');
     const metaText=publication.status==='published'?'Facebook-Video und Instagram-Reel veröffentlicht':('Meta-Status '+publication.status);
-    const summary='Bezplatný organický běh: '+(product.title||'produkt bez názvu')+'; '+(shopifyUpdate.updated?'Shopify SEO/GEO aktualizováno':'Shopify SEO/GEO '+(shopifyUpdate.reason||'zablokováno'))+'; '+(result.video?.rendered?'video 9:16 připraveno: '+result.video.path:'video '+(result.video?.reason||'se nevytvořilo'))+'; '+(publication.status==='published'?'Facebook video a Instagram Reel publikovány':('publikace Meta: '+publication.status))+'; TikTok/YouTube Shorts balíček '+(content.length?'uložen k ručnímu zveřejnění':'není připraven')+'; placená reklama 0,00 €.';
+    const yt=socialResult.youtube?.status||'ready_to_post';
+    const tt=socialResult.tiktok?.status||'ready_to_post';
+    const socialText='YouTube Shorts: '+(yt==='published'?'publikován':yt==='uploaded'?'nahrán':yt==='ready_to_post'?'čeká na OAuth':'zpracovává se')+'; TikTok: '+(tt==='published'?'publikován':tt==='ready_to_post'?'čeká na OAuth':'zpracovává se');
+    const summary='Bezplatný organický běh: '+(product.title||'produkt bez názvu')+'; Shopify SEO/GEO '+(shopifyUpdate.updated?'aktualizováno':'zablokováno')+'; '+(result.video?.rendered?'video 9:16 připraveno':'video '+(result.video?.reason||'se nevytvořilo'))+'; '+(publication.status==='published'?'Facebook video a Instagram Reel publikovány':('Meta publikace: '+publication.status))+'; '+socialText+'; placená reklama 0,00 €.';
     lastCycle={
       cycle_id:crypto.randomUUID(),status:cycleStatus,dry_run:false,budget_eur:0,ad_spend_eur:0,
       external_writes_performed:Boolean(shopifyUpdate.updated||published),video_generation_performed:Boolean(result.video?.rendered),
