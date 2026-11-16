@@ -323,8 +323,9 @@ def publish_generated_video(
     env = os.environ if env is None else env
     zernio_key = str(env.get("ZERNIO_API_KEY") or "").strip()
     zernio_account = str(env.get("ZERNIO_TIKTOK_ACCOUNT_ID") or "").strip()
-    if zernio_key or zernio_account:
-        if not (zernio_key and zernio_account):
+    zernio_youtube_account = str(env.get("ZERNIO_YOUTUBE_ACCOUNT_ID") or "").strip()
+    if zernio_key or zernio_account or zernio_youtube_account:
+        if not (zernio_key and (zernio_account or zernio_youtube_account)):
             return {"status": "ready_to_post", "reason": "ZERNIO_TIKTOK_CONFIGURATION_INCOMPLETE",
                     "upload_performed": False, "publication_performed": False}
         return _publish_video_via_zernio(video_path, caption, env=env)
@@ -445,13 +446,31 @@ def _publish_video_via_zernio(
         return {"status": "ready_to_post", "reason": "UNTRUSTED_ZERNIO_VIDEO_URL",
                 "upload_performed": False, "publication_performed": False}
     account_id = str(env.get("ZERNIO_TIKTOK_ACCOUNT_ID") or "").strip()
+    youtube_account_id = str(env.get("ZERNIO_YOUTUBE_ACCOUNT_ID") or "").strip()
     api_key = str(env.get("ZERNIO_API_KEY") or "").strip()
     privacy = str(env.get("TIKTOK_PRIVACY_LEVEL") or "PUBLIC_TO_EVERYONE").strip()
+    platforms = []
+    if account_id:
+        platforms.append({"platform": "tiktok", "accountId": account_id})
+    if youtube_account_id:
+        youtube_title = next((line.strip() for line in str(caption or "").splitlines() if line.strip()), "Homestro Produktvideo")
+        platforms.append({
+            "platform": "youtube", "accountId": youtube_account_id,
+            "platformSpecificData": {
+                "title": youtube_title.replace("#Shorts", "").strip()[:100],
+                "visibility": str(env.get("YOUTUBE_PRIVACY_STATUS") or "public").strip().lower(),
+                "categoryId": str(env.get("YOUTUBE_CATEGORY_ID") or "22"),
+                "madeForKids": False,
+            },
+        })
     payload = {
         "content": str(caption or "")[:2200],
         "mediaItems": [{"type": "video", "url": video_url}],
-        "platforms": [{"platform": "tiktok", "accountId": account_id}],
-        "tiktokSettings": {
+        "platforms": platforms,
+        "publishNow": True,
+    }
+    if account_id:
+        payload["tiktokSettings"] = {
             "privacy_level": privacy,
             "allow_comment": True,
             "allow_duet": True,
@@ -459,9 +478,7 @@ def _publish_video_via_zernio(
             "content_preview_confirmed": True,
             "express_consent_given": True,
             "commercialContentType": "brand_organic",
-        },
-        "publishNow": True,
-    }
+        }
     idempotency_key = hashlib.sha256(("homestro-tiktok:" + path.stem).encode("utf-8")).hexdigest()
     req = urlrequest.Request(
         "https://zernio.com/api/v1/posts",
@@ -491,17 +508,44 @@ def _publish_video_via_zernio(
                 "upload_performed": False, "publication_performed": False}
     post = body.get("post") if isinstance(body, dict) else {}
     platforms = post.get("platforms") if isinstance(post, dict) else []
-    result = next((row for row in platforms if row.get("platform") == "tiktok"), {}) if isinstance(platforms, list) else {}
-    platform_status = str(result.get("status") or post.get("status") or "").lower()
+    platform_rows = {str(row.get("platform") or ""): row for row in platforms if isinstance(row, dict)} if isinstance(platforms, list) else {}
     post_id = str(post.get("_id") or post.get("id") or "")
-    if platform_status == "published":
-        return {"status": "published", "post_id": post_id or None,
-                "url": result.get("platformPostUrl"), "upload_performed": True,
-                "publication_performed": True, "provider": "zernio"}
-    if platform_status in {"processing", "queued", "scheduled", "publishing"}:
-        return {"status": "processing", "post_id": post_id or None,
-                "upload_performed": True, "publication_performed": False, "provider": "zernio"}
-    error_message = str(result.get("errorMessage") or post.get("error") or "TIKTOK_NOT_PUBLISHED")[:140]
-    return {"status": "ready_to_post", "reason": error_message,
-            "post_id": post_id or None, "upload_performed": bool(post_id),
-            "publication_performed": False, "provider": "zernio"}
+    platform_results: dict[str, dict[str, Any]] = {}
+    for platform in ("tiktok", "youtube"):
+        if not (account_id if platform == "tiktok" else youtube_account_id):
+            continue
+        result = platform_rows.get(platform, {})
+        platform_status = str(result.get("status") or post.get("status") or "").lower()
+        common = {"post_id": post_id or None, "provider": "zernio", "platform": platform}
+        if platform_status == "published":
+            platform_results[platform] = {
+                **common, "status": "published", "url": result.get("platformPostUrl"),
+                "upload_performed": True, "publication_performed": True,
+            }
+        elif platform_status in {"processing", "queued", "scheduled", "publishing", "pending"}:
+            platform_results[platform] = {
+                **common, "status": "processing", "reason": platform_status.upper(),
+                "upload_performed": True, "publication_performed": False,
+            }
+        else:
+            platform_results[platform] = {
+                **common, "status": "ready_to_post",
+                "reason": str(result.get("errorMessage") or post.get("error") or f"{platform.upper()}_NOT_PUBLISHED")[:140],
+                "error_category": result.get("errorCategory"), "error_source": result.get("errorSource"),
+                "upload_performed": bool(post_id), "publication_performed": False,
+            }
+
+    requested = list(platform_results.values())
+    all_published = bool(requested) and all(row["publication_performed"] for row in requested)
+    any_pending = any(row["status"] == "processing" for row in requested)
+    primary = platform_results.get("tiktok") or platform_results.get("youtube") or {}
+    return {
+        **primary,
+        "status": "published" if all_published else "processing" if any_pending else "ready_to_post",
+        "post_id": post_id or None,
+        "upload_performed": bool(post_id),
+        "publication_performed": all_published,
+        "provider": "zernio",
+        "platform_results": platform_results,
+    }
+

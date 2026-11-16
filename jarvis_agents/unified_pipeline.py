@@ -6,6 +6,7 @@ credentials stay in the Node API process; this worker receives only product data
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -116,30 +117,124 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return {"status": "blocked", "reason": "FFMPEG_NOT_INSTALLED", "rendered": False}
-    input_path = image_path
-    use_video = False
-    for index, url in enumerate((product.get("video_urls") or [])[:3]):
+    work.mkdir(parents=True, exist_ok=True)
+    hook = re.sub(r"[\r\n]+", " ", str(hook or "Entdecke das Produkt bei Homestro.")).strip()[:150]
+    hook_path = work / "hook-overlay.png"
+    _hook_overlay(hook, hook_path)
+
+    video_paths: list[Path] = []
+    for index, url in enumerate((product.get("video_urls") or [])[:6]):
+        if not urlsplit(str(url)).path.lower().endswith(".mp4"):
+            continue
         candidate = work / f"source-{index}.mp4"
         try:
             _download(url, candidate)
-            input_path = candidate
-            use_video = True
-            break
+            if candidate.stat().st_size > 0:
+                video_paths.append(candidate)
         except Exception:
             continue
-    hook = re.sub(r"[\r\n]+", " ", str(hook or "Entdecke das Produkt bei Homestro."))[:150]
-    textfile = work / "hook.txt"
-    textfile.write_text(hook, encoding="utf-8")
-    escaped = str(textfile).replace("\\", "\\\\").replace(":", "\\:")
-    drawtext = f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile='{escaped}':expansion=none:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=18:x=(w-tw)/2:y=120:enable='lt(t,5)'"
-    vf = f"scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x101827,setsar=1,fps=25,{drawtext}"
-    args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
-    if use_video:
-        args += ["-i", str(input_path), "-t", "20", "-vf", vf, "-an"]
+
+    if video_paths:
+        source = video_paths[0]
+        probe = shutil.which("ffprobe")
+        try:
+            if not probe:
+                raise ValueError("FFPROBE_NOT_INSTALLED")
+            result = subprocess.run(
+                [probe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(source)],
+                check=True, capture_output=True, text=True, timeout=20,
+            )
+            source_duration = float(result.stdout.strip())
+            if source_duration <= 0:
+                raise ValueError("INVALID_VIDEO_DURATION")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            source_duration = 15.0
+
+        duration = min(15.0, max(7.5, source_duration))
+        scenes = min(6, max(3, round(duration / 2.5)))
+        scene_duration = duration / scenes
+        transition = 0.16
+        args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        if source_duration < duration:
+            args += ["-stream_loop", "-1"]
+        args += ["-i", str(source), "-loop", "1", "-framerate", "25", "-i", str(hook_path)]
+        filters: list[str] = []
+        for index in range(scenes):
+            start = index * scene_duration
+            filters.append(
+                f"[0:v]trim=start={start:.3f}:duration={scene_duration:.3f},setpts=PTS-STARTPTS,"
+                "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,setsar=1,"
+                f"zoompan=z='min(zoom+0.00035,1.06)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=720x1280:fps=25,"
+                f"trim=duration={scene_duration:.3f},fps=25,settb=1/25,format=yuv420p[v{index}]"
+            )
+        previous = "v0"
+        for index in range(1, scenes):
+            current = f"xf{index}"
+            offset = index * (scene_duration - transition)
+            filters.append(
+                f"[{previous}][v{index}]xfade=transition=fade:duration={transition:.3f}:offset={offset:.3f}[{current}]"
+            )
+            previous = current
+        filters.append(
+            f"[{previous}][1:v]overlay=(W-w)/2:(H-h)/2:format=auto:enable='between(t,0,3.2)',"
+            "format=yuv420p[vout]"
+        )
+        args += ["-filter_complex", ";".join(filters), "-map", "[vout]", "-an"]
+        final_duration = scene_duration * scenes - transition * (scenes - 1)
+        source_name = "existing_shopify_video_motion_clips"
     else:
-        args += ["-loop", "1", "-framerate", "25", "-i", str(input_path), "-t", "12", "-vf", vf, "-an"]
-    args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p",
-             "-movflags", "+faststart", "-threads", "1", str(output)]
+        image_urls = list(dict.fromkeys(
+            str(url) for url in (product.get("image_urls") or []) if str(url).strip()
+        ))[:6]
+        image_paths: list[Path] = []
+        for index, url in enumerate(image_urls):
+            candidate = work / f"gallery-{index}.img"
+            try:
+                _download(url, candidate, 18 * 1024 * 1024)
+                with Image.open(candidate) as image:
+                    image.verify()
+                image_paths.append(candidate)
+            except Exception:
+                continue
+        if len(image_paths) < 3:
+            return {"status": "blocked", "reason": "THREE_SHOPIFY_GALLERY_IMAGES_REQUIRED",
+                    "rendered": False, "gallery_images_downloaded": len(image_paths),
+                    "static_card_fallback": False}
+
+        scenes = min(6, len(image_paths))
+        image_paths = image_paths[:scenes]
+        scene_duration = 2.5
+        transition = 0.16
+        args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        for image_file in image_paths:
+            args += ["-loop", "1", "-framerate", "25", "-t", f"{scene_duration:.3f}", "-i", str(image_file)]
+        args += ["-loop", "1", "-framerate", "25", "-i", str(hook_path)]
+        filters = []
+        for index in range(scenes):
+            filters.append(
+                f"[{index}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,"
+                f"zoompan=z='min(zoom+0.0012,1.12)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=720x1280:fps=25,"
+                f"trim=duration={scene_duration:.3f},setpts=PTS-STARTPTS,fps=25,settb=1/25,setsar=1,format=yuv420p[v{index}]"
+            )
+        previous = "v0"
+        for index in range(1, scenes):
+            current = f"xf{index}"
+            offset = index * (scene_duration - transition)
+            filters.append(
+                f"[{previous}][v{index}]xfade=transition=fade:duration={transition:.3f}:offset={offset:.3f}[{current}]"
+            )
+            previous = current
+        filters.append(
+            f"[{previous}][{scenes}:v]overlay=(W-w)/2:(H-h)/2:format=auto:enable='between(t,0,3.2)',"
+            "format=yuv420p[vout]"
+        )
+        args += ["-filter_complex", ";".join(filters), "-map", "[vout]", "-an"]
+        final_duration = scene_duration * scenes - transition * (scenes - 1)
+        source_name = "shopify_gallery_ken_burns_montage"
+
+    args += ["-t", f"{final_duration:.3f}", "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "24", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+             "-threads", "1", str(output)]
     try:
         subprocess.run(args, check=True, timeout=180, capture_output=True, text=True)
     except subprocess.CalledProcessError as error:
@@ -148,8 +243,37 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
     except subprocess.TimeoutExpired:
         return {"status": "blocked", "reason": "FFMPEG_RENDER_TIMEOUT", "rendered": False}
     return {"status": "rendered", "rendered": True, "path": str(output),
-            "source": "existing_shopify_video" if use_video else "shopify_product_image",
-            "format": "vertical_9_16_mp4", "duration_seconds": 20 if use_video else 12}
+            "source": source_name, "scene_count": scenes,
+            "source_image_count": scenes if source_name == "shopify_gallery_ken_burns_montage" else 0,
+            "full_screen": True, "motion_per_scene": "ken_burns" if not video_paths else "video_clip_and_zoom",
+            "hook_safe_zone": "center_wrapped_pill", "static_card_fallback": False,
+            "format": "vertical_9_16_mp4", "duration_seconds": round(final_duration, 1)}
+
+
+def _hook_overlay(hook: str, output: Path) -> None:
+    canvas = Image.new("RGBA", (680, 300), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    font = _font(40)
+    lines = _wrap(draw, hook, font, 580)
+    if len(lines) > 3:
+        lines = lines[:3]
+        while lines[-1] and draw.textbbox((0, 0), lines[-1] + "…", font=font)[2] > 580:
+            lines[-1] = lines[-1][:-1]
+        lines[-1] = lines[-1].rstrip() + "…"
+    line_height = 52
+    height = min(240, max(104, len(lines) * line_height + 44))
+    top = (canvas.height - height) // 2
+    draw.rounded_rectangle((10, top, 670, top + height), radius=42, fill=(8, 16, 30, 220),
+                           outline=(255, 255, 255, 220), width=2)
+    y = top + (height - len(lines) * line_height) // 2
+    for line in lines:
+        box = draw.textbbox((0, 0), line, font=font)
+        x = (canvas.width - (box[2] - box[0])) // 2
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255), stroke_width=1,
+                  stroke_fill=(0, 0, 0, 255))
+        y += line_height
+    output.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output, format="PNG", optimize=True)
 
 
 def _human_product_name(product: dict[str, Any]) -> str:
@@ -187,6 +311,16 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "dabei die ganze Zeit in der Hand? Der faltbare, biegsame Ständer passt Smartphone, Tablet "
             "oder Laptop in verschiedene Blickwinkel an. Danach lässt er sich kompakt zusammenlegen "
             f"und mitnehmen. Details bei Homestro ansehen.\n\n{product_url}"
+        )
+        return headline, hook, caption
+    if re.search(r"smartphone.{0,12}halter|rückseitenhalter|saugmatte|phone.?mount", product_text, re.IGNORECASE):
+        headline = "Freie Hände. Dein Handy im Blick."
+        hook = "Wohin mit dem Handy beim nächsten Videoanruf?"
+        caption = (
+            "Du willst beim Videoanruf oder beim Blick aufs Display beide Hände frei haben? "
+            f"Die Saugmatte ist als Wand- und Rückseitenhalter für dein Smartphone beschrieben: {name}. "
+            "Prüfe vor dem Verwenden, ob Untergrund und Hülle dafür geeignet sind. "
+            f"Link in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
         )
         return headline, hook, caption
     if re.search(r"kopfbande? für hunde|hunde.?kopfband|dog.?head.?cover", product_text, re.IGNORECASE):
@@ -252,13 +386,13 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             f"Bei Homestro entdecken.\n\n{product_url}"
         )
         return headline, hook, caption
-    headline = "Mach Platz für deine nächste gute Idee."
-    hook = f"Du kennst den Moment, wenn {name.lower()} gerade fehlt?"
-    caption = (
-        f"Du hast etwas vor und suchst dafür noch das passende Produkt? {name} von Homestro könnte zu deinem "
-        "Vorhaben passen. Schau dir die konkreten Produktdetails und Varianten an und entscheide in Ruhe, "
-        f"ob es deinen Alltag bereichert.\n\nBei Homestro ansehen.\n\n{product_url}"
-    )
+    details = html.unescape(re.sub(r"<[^>]+>", " ", str(product.get("descriptionHtml") or "")))
+    details = re.sub(r"\s+", " ", details).strip()
+    fact = re.split(r"(?<=[.!?])\s+", details, maxsplit=1)[0][:180].strip()
+    headline = name[:70]
+    hook = f"Was macht {name} im Alltag leichter?"
+    caption = f"{hook} {fact}" if fact else f"Ein genauerer Blick auf {name}: Wofür ist dieses Produkt gedacht?"
+    caption += f"\n\nLink in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
     return headline, hook, caption
 
 
@@ -294,6 +428,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             except (TypeError, ValueError):
                 pass
     headline, hook, story_caption = _story_copy(product, product_url, prices)
+    if "Link in der Bio" not in story_caption:
+        story_caption = re.sub(r"\n+https://homestro\.de/products/[^\s]+\s*$", "", story_caption).rstrip()
+        story_caption += f"\n\nLink in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
     feed = {
         "id": product_id, "title": product.get("title"),
         "description": product.get("descriptionHtml") or "", "link": product_url,
@@ -308,7 +445,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "blocked", "scout": {k:v for k,v in scout.items() if k != "product"},
                 "creative": {"status": "blocked", "reason": "SEO_GEO_DRAFT_UNAVAILABLE"}, "video": None}
     draft = drafts[0]
-    digest = hashlib.sha256((product_id + str(product.get("handle")) + ":organic-promo-v1").encode()).hexdigest()
+    digest = hashlib.sha256((product_id + str(product.get("handle")) + ":organic-motion-v2").encode()).hexdigest()
     root = Path(payload.get("assets_dir") or "/data/jarvis-unified/assets")
     root.mkdir(parents=True, exist_ok=True)
     work = root / f".work-{digest[:16]}"
@@ -356,11 +493,24 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         social_caption = (caption + "\n\n" + " ".join(hashtags)).strip()
         title = (headline + " #Shorts")[:100]
         description = (social_caption + "\n\n#Shorts")[:5000]
+        tiktok_result = tiktok_publisher.publish_generated_video(
+            str(video_path), social_caption,
+            duration_seconds=int(video.get("duration_seconds") or 0), env=os.environ
+        )
+        if str(os.environ.get("ZERNIO_YOUTUBE_ACCOUNT_ID") or "").strip():
+            youtube_result = (tiktok_result.get("platform_results") or {}).get("youtube") or {
+                "status": "ready_to_post", "reason": "ZERNIO_YOUTUBE_RESULT_MISSING",
+                "upload_performed": False, "publication_performed": False,
+            }
+            tiktok_result = (tiktok_result.get("platform_results") or {}).get("tiktok") or {
+                "status": "ready_to_post", "reason": "ZERNIO_TIKTOK_ACCOUNT_NOT_CONFIGURED",
+                "upload_performed": False, "publication_performed": False,
+            }
+        else:
+            youtube_result = youtube_publisher.publish_video(str(video_path), title, description)
         social_publication = {
-            "youtube": youtube_publisher.publish_video(str(video_path), title, description),
-            "tiktok": tiktok_publisher.publish_generated_video(
-                str(video_path), social_caption, duration_seconds=int(video.get("duration_seconds") or 0), env=os.environ
-            ),
+            "youtube": youtube_result,
+            "tiktok": tiktok_result,
         }
     if isinstance(bundle, dict):
         bundle["youtube_publishing"] = social_publication["youtube"]
@@ -390,3 +540,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

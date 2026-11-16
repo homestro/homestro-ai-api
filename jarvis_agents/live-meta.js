@@ -176,12 +176,16 @@ class LiveMetaExecutor{
     if(!this.shopifyGraphQL)throw Error('SHOPIFY_GRAPHQL_UNAVAILABLE');
     const products=[];let after=null;
     do{
-      const data=await this.shopifyGraphQL('query($after:String){products(first:100,after:$after,query:"status:active"){nodes{id title handle descriptionHtml productType status tags updatedAt onlineStoreUrl featuredImage{url altText} variants(first:100){nodes{id price availableForSale}} media(first:20){nodes{mediaContentType ... on MediaImage{image{url altText}} ... on Video{sources{url mimeType format}}}}}pageInfo{hasNextPage endCursor}}}',{after});
+      const data=await this.shopifyGraphQL('query($after:String){products(first:100,after:$after,query:"status:active"){nodes{id title handle descriptionHtml productType status tags updatedAt onlineStoreUrl featuredImage{url altText} variants(first:100){nodes{id price availableForSale}} media(first:250){nodes{alt mediaContentType ... on MediaImage{image{url altText}} ... on Video{status sources{url mimeType format}}}}}pageInfo{hasNextPage endCursor}}}',{after});
       const page=data?.products;
       if(!page||!Array.isArray(page.nodes))throw Error('SHOPIFY_ACTIVE_PRODUCTS_UNAVAILABLE');
       products.push(...page.nodes.map(p=>({...p,
-        image_urls:[...new Set([p.featuredImage?.url,...(p.media?.nodes||[]).filter(m=>m?.mediaContentType==='IMAGE').map(m=>m.image?.url)].filter(Boolean))],
-        video_urls:[...new Set((p.media?.nodes||[]).filter(m=>m?.mediaContentType==='VIDEO').flatMap(m=>(m.sources||[]).map(s=>s.url)).filter(Boolean))],
+         image_urls:[...new Set([
+           p.featuredImage?.altText?.startsWith('Homestro AI Organic Promo')?null:p.featuredImage?.url,
+           ...(p.media?.nodes||[]).filter(m=>m?.mediaContentType==='IMAGE'&&
+             !String(m.image?.altText||m.alt||'').startsWith('Homestro AI Organic Promo')).map(m=>m.image?.url),
+         ].filter(Boolean))],
+         video_urls:[...new Set((p.media?.nodes||[]).filter(m=>m?.mediaContentType==='VIDEO'&&(!m.status||m.status==='READY')).flatMap(m=>(m.sources||[]).filter(s=>String(s.mimeType||'').toLowerCase()==='video/mp4').map(s=>s.url)).filter(Boolean))],
         variants:p.variants?.nodes||[],
       })));
       if(!page.pageInfo?.hasNextPage)break;
@@ -300,3 +304,4 @@ class LiveMetaExecutor{
 }
 
 module.exports={ACCOUNT_ID,TARGET_CAMPAIGN_ID,DAILY_CAP_EUR,START_BUDGET_EUR,CAMPAIGN_NAME,AD_COPY,accountBudgetDecision,LiveMetaExecutor};
+
