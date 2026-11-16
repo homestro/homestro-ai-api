@@ -178,6 +178,17 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     product_text = " ".join(str(product.get(key) or "") for key in
                             ("title", "productType", "descriptionHtml"))
     product_text += " " + " ".join(str(tag) for tag in (product.get("tags") or []))
+    if re.search(r"handyhalter|smartphone.*ständer|phone.?holder|multi.?winkel desktop.?ständer",
+                  str(product.get("title") or ""), re.IGNORECASE):
+        headline = "Freie Hände. Der passende Blickwinkel."
+        hook = "Videoanruf oder Stream – liegt dein Gerät schon wieder flach?"
+        caption = (
+            "Du möchtest am Schreibtisch arbeiten oder einen Videoanruf führen – und hältst dein Gerät "
+            "dabei die ganze Zeit in der Hand? Der faltbare, biegsame Ständer passt Smartphone, Tablet "
+            "oder Laptop in verschiedene Blickwinkel an. Danach lässt er sich kompakt zusammenlegen "
+            f"und mitnehmen. Details bei Homestro ansehen.\n\n{product_url}"
+        )
+        return headline, hook, caption
     if re.search(r"kopfbande? für hunde|hunde.?kopfband|dog.?head.?cover", product_text, re.IGNORECASE):
         headline = "Mehr Ruhe für ungewohnte Hundemomente."
         hook = "Bad, Reise oder Lärm – wird dein Hund dann unruhig?"
@@ -315,6 +326,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE)
                 else ["#Homestro", "#NailArt", "#Nageldesign", "#Maniküre", "#Kreativ"]
                 if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE)
+                else ["#Homestro", "#Smartphonehalter", "#Tabletständer", "#HomeOffice", "#Alltagshelfer"]
+                if re.search(r"handyhalter|smartphone.*ständer|phone.?holder|multi.?winkel desktop.?ständer",
+                             str(product.get("title") or ""), re.IGNORECASE)
                 else ["#Homestro", "#Hundezubehör", "#Hundepflege", "#Hundereise", "#Hunde"]
                 if re.search(r"kopfbande? für hunde|hunde.?kopfband|dog.?head.?cover", product_text, re.IGNORECASE)
                 else ["#Homestro", "#Haarpflege", "#Satinhaube", "#Lockenpflege", "#Nachtpflege"]
