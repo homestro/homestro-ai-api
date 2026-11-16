@@ -178,6 +178,16 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     product_text = " ".join(str(product.get(key) or "") for key in
                             ("title", "productType", "descriptionHtml"))
     product_text += " " + " ".join(str(tag) for tag in (product.get("tags") or []))
+    if re.search(r"ninja.*stiftehalter|stiftehalter|stifthalter|pen.?holder", product_text, re.IGNORECASE):
+        headline = "Nie wieder den Stift suchen."
+        hook = "Du willst etwas notieren – aber wo ist schon wieder der Stift?"
+        caption = (
+            "Du willst dir schnell etwas notieren – und suchst den Stift zwischen Monitor und Notizbuch? "
+            "Der Ninja-Stiftehalter hält ihn griffbereit und bringt ein Schmunzeln auf den Schreibtisch. "
+            "Wähle die Ausführung, die zu dir passt – zum Beispiel mit oder ohne Stift oder mit zusätzlichem "
+            f"Sockel. Jetzt bei Homestro entdecken.\\n\\n{product_url}"
+        )
+        return headline, hook, caption
     if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE):
         headline = "Vor dem Training passend einstellen."
         hook = "Gleich geht's los – sitzt der Gürtel schon bequem?"
@@ -281,7 +291,11 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 if product.get("handle") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
                 else ["#Homestro", "#Training", "#Jogging", "#Fitness", "#Workout"]
                 if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE)
-                else ["#Homestro", "#NailArt", "#Nageldesign", "#Maniküre", "#Kreativ"])
+                else ["#Homestro", "#NailArt", "#Nageldesign", "#Maniküre", "#Kreativ"]
+                if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE)
+                else ["#Homestro", "#Schreibtisch", "#HomeOffice", "#Ordnung", "#Geschenkidee"]
+                if re.search(r"stifte?halter|stifthalter|pen.?holder|schreibtisch|ninja", product_text, re.IGNORECASE)
+                else ["#Homestro", "#Produktentdecken", "#Alltagsideen", "#OnlineShop"])
     creative = {
         "status": "prepared", "product_id": product_id, "seo": draft.get("seo"),
         "geo": draft.get("geo"), "caption": caption, "hashtags": hashtags,
