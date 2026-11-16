@@ -178,6 +178,17 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     product_text = " ".join(str(product.get(key) or "") for key in
                             ("title", "productType", "descriptionHtml"))
     product_text += " " + " ".join(str(tag) for tag in (product.get("tags") or []))
+    if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE):
+        headline = "Vor dem Training passend einstellen."
+        hook = "Gleich geht's los – sitzt der Gürtel schon bequem?"
+        caption = (
+            "Du möchtest vor dem Joggen oder Workout noch kurz den Sitz anpassen und dann loslegen? "
+            "Der verstellbare Klettverschluss lässt sich individuell einstellen; der breite Sitz ist für "
+            "Unterstützung im Bauch- und Lendenbereich beschrieben. Achte darauf, normal atmen zu können, "
+            "und leg den Gürtel bei Unwohlsein ab. Schau dir die Details bei Homestro an und entscheide, "
+            f"ob er zu deinem Training passt.\\n\\n{product_url}"
+        )
+        return headline, hook, caption
     if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE):
         headline = "Deine Nail-Art-Idee beginnt hier."
         hook = "Dotting, Linien oder feine Details – was probierst du zuerst?"
@@ -265,7 +276,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     caption = story_caption
     hashtags = (["#Homestro", "#ErazerXP6", "#Kopfhoerer", "#Unterwegs", "#ReiseTipps"]
                 if product.get("handle") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
-                else ["#Homestro", "#Produktentdecken", "#Alltagsideen", "#OnlineShop"])
+                else ["#Homestro", "#Training", "#Jogging", "#Fitness", "#Workout"]
+                if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE)
+                else ["#Homestro", "#NailArt", "#Nageldesign", "#Maniküre", "#Kreativ"])
     creative = {
         "status": "prepared", "product_id": product_id, "seo": draft.get("seo"),
         "geo": draft.get("geo"), "caption": caption, "hashtags": hashtags,
