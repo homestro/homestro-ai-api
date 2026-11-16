@@ -1,3 +1,9 @@
+// Keep transient Railway log-pipe closures from terminating the API process.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', error => {
+    if (error?.code !== 'EPIPE') throw error;
+  });
+}
 const {checkGallery}=require('./gallery-readiness');
 const {contentReadiness}=require('./content-readiness');
 const {summarizeAutopilotResults}=require('./autopilot-results');
