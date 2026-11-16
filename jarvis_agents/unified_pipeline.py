@@ -239,6 +239,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "blocked", "scout": scout, "creative": None, "video": None}
     product = scout["product"]
     product_id = str(product.get("id") or "")
+    product_text = " ".join(str(product.get(key) or "") for key in
+                            ("title", "productType", "descriptionHtml"))
+    product_text += " " + " ".join(str(tag) for tag in (product.get("tags") or []))
     product_url = str(product.get("onlineStoreUrl") or f"https://homestro.de/products/{product.get('handle', '')}")
     prices = []
     for variant in product.get("variants") or []:
