@@ -6,6 +6,7 @@ the existing ready-to-post bundle is returned without blocking the pipeline.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -320,6 +321,13 @@ def publish_generated_video(
 ) -> dict[str, Any]:
     """Publish the locally rendered MP4 only when TikTok OAuth is configured."""
     env = os.environ if env is None else env
+    zernio_key = str(env.get("ZERNIO_API_KEY") or "").strip()
+    zernio_account = str(env.get("ZERNIO_TIKTOK_ACCOUNT_ID") or "").strip()
+    if zernio_key or zernio_account:
+        if not (zernio_key and zernio_account):
+            return {"status": "ready_to_post", "reason": "ZERNIO_TIKTOK_CONFIGURATION_INCOMPLETE",
+                    "upload_performed": False, "publication_performed": False}
+        return _publish_video_via_zernio(video_path, caption, env=env)
     if not (str(env.get("TIKTOK_ACCESS_TOKEN") or "").strip()
             or (env.get("TIKTOK_REFRESH_TOKEN") and env.get("TIKTOK_CLIENT_KEY")
                 and env.get("TIKTOK_CLIENT_SECRET"))):
@@ -418,3 +426,82 @@ def publish_generated_video(
         return {"status": "ready_to_post",
                 "reason": str(exc)[:160], "upload_performed": False,
                 "publication_performed": False}
+
+
+def _publish_video_via_zernio(
+    video_path: str, caption: str, *, env: dict[str, str]
+) -> dict[str, Any]:
+    """Use Homestro's existing Zernio-connected TikTok account."""
+    if str(env.get("PILOT_SOCIAL_ENABLED", "true")).strip().lower() == "false" or \
+       str(env.get("PILOT_SOCIAL_PUBLISH_ENABLED", "true")).strip().lower() == "false":
+        return {"status": "ready_to_post", "reason": "PILOT_SOCIAL_PUBLISHING_DISABLED",
+                "upload_performed": False, "publication_performed": False}
+    path = Path(video_path)
+    if not path.is_file():
+        return {"status": "ready_to_post", "reason": "TIKTOK_VIDEO_FILE_MISSING",
+                "upload_performed": False, "publication_performed": False}
+    video_url = ORIGIN.rstrip("/") + "/marketing-assets/" + path.name
+    if not _trusted_video_url(video_url):
+        return {"status": "ready_to_post", "reason": "UNTRUSTED_ZERNIO_VIDEO_URL",
+                "upload_performed": False, "publication_performed": False}
+    account_id = str(env.get("ZERNIO_TIKTOK_ACCOUNT_ID") or "").strip()
+    api_key = str(env.get("ZERNIO_API_KEY") or "").strip()
+    privacy = str(env.get("TIKTOK_PRIVACY_LEVEL") or "PUBLIC_TO_EVERYONE").strip()
+    payload = {
+        "content": str(caption or "")[:2200],
+        "mediaItems": [{"type": "video", "url": video_url}],
+        "platforms": [{"platform": "tiktok", "accountId": account_id}],
+        "tiktokSettings": {
+            "privacy_level": privacy,
+            "allow_comment": True,
+            "allow_duet": True,
+            "allow_stitch": True,
+            "content_preview_confirmed": True,
+            "express_consent_given": True,
+            "commercialContentType": "brand_organic",
+        },
+        "publishNow": True,
+    }
+    idempotency_key = hashlib.sha256(("homestro-tiktok:" + path.stem).encode("utf-8")).hexdigest()
+    req = urlrequest.Request(
+        "https://zernio.com/api/v1/posts",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotency_key,
+        },
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=45) as response:
+            status_code = int(response.status)
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise RuntimeError("ZERNO_RESPONSE_TOO_LARGE")
+        body = json.loads(raw.decode("utf-8")) if raw else {}
+    except urlerror.HTTPError as exc:
+        return {"status": "ready_to_post", "reason": f"ZERNO_HTTP_{exc.code}",
+                "upload_performed": False, "publication_performed": False}
+    except (urlerror.URLError, TimeoutError, OSError, ValueError) as exc:
+        return {"status": "ready_to_post", "reason": f"ZERNO_REQUEST_{type(exc).__name__.upper()}",
+                "upload_performed": False, "publication_performed": False}
+    if status_code < 200 or status_code >= 300:
+        return {"status": "ready_to_post", "reason": f"ZERNO_HTTP_{status_code}",
+                "upload_performed": False, "publication_performed": False}
+    post = body.get("post") if isinstance(body, dict) else {}
+    platforms = post.get("platforms") if isinstance(post, dict) else []
+    result = next((row for row in platforms if row.get("platform") == "tiktok"), {}) if isinstance(platforms, list) else {}
+    platform_status = str(result.get("status") or post.get("status") or "").lower()
+    post_id = str(post.get("_id") or post.get("id") or "")
+    if platform_status == "published":
+        return {"status": "published", "post_id": post_id or None,
+                "url": result.get("platformPostUrl"), "upload_performed": True,
+                "publication_performed": True, "provider": "zernio"}
+    if platform_status in {"processing", "queued", "scheduled", "publishing"}:
+        return {"status": "processing", "post_id": post_id or None,
+                "upload_performed": True, "publication_performed": False, "provider": "zernio"}
+    error_message = str(result.get("errorMessage") or post.get("error") or "TIKTOK_NOT_PUBLISHED")[:140]
+    return {"status": "ready_to_post", "reason": error_message,
+            "post_id": post_id or None, "upload_performed": bool(post_id),
+            "publication_performed": False, "provider": "zernio"}
