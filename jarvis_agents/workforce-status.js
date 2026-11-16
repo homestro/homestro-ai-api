@@ -218,8 +218,21 @@ async function runFreeOrganicCycle() {
     }else shopifyUpdate={status:'blocked',updated:false,reason:audit.reason||'SEO_GEO_DRAFT_UNAVAILABLE'};
     if(shopifyUpdate.updated&&creative.image_path){
       const imageAlt='Homestro AI Organic Promo · '+String(product.title||'Produkt').slice(0,120);
-      const exists=(product.media?.nodes||[]).some(m=>m?.mediaContentType==='IMAGE'&&String(m.image?.altText||'').startsWith('Homestro AI Organic Promo'));
-      if(!exists){
+      let exists=false,mediaCheckOk=false;
+      try{
+        const refreshed=await liveExecutor.shopifyGraphQL(
+          'query($id:ID!){product(id:$id){media(first:250){nodes{mediaContentType ... on MediaImage{id image{url altText}}}}}}',
+          {id:product.id}
+        );
+        const mediaNodes=refreshed?.product?.media?.nodes;
+        if(!Array.isArray(mediaNodes))throw Error('SHOPIFY_MEDIA_DEDUPE_CHECK_INVALID');
+        exists=mediaNodes.some(m=>m?.mediaContentType==='IMAGE'&&String(m.image?.altText||'').startsWith('Homestro AI Organic Promo'));
+        mediaCheckOk=true;
+      }catch(error){
+        shopifyUpdate.promo_image={status:'blocked',reason:String(error?.message||'SHOPIFY_MEDIA_DEDUPE_CHECK_FAILED').slice(0,120)};
+      }
+      if(exists)shopifyUpdate.promo_image={status:'already_present'};
+      else if(mediaCheckOk){
         try{
           const mediaResult=await liveExecutor.shopifyGraphQL(
             'mutation($productId:ID!,$media:[CreateMediaInput!]!){productCreateMedia(productId:$productId,media:$media){media{... on MediaImage{id status}}mediaUserErrors{field message}}}',
@@ -228,7 +241,7 @@ async function runFreeOrganicCycle() {
           const mediaErrors=mediaResult?.productCreateMedia?.mediaUserErrors||[];
           shopifyUpdate.promo_image=mediaErrors.length?{status:'blocked',errors:mediaErrors.slice(0,2)}:{status:'submitted',media_id:mediaResult?.productCreateMedia?.media?.[0]?.id||null};
         }catch(error){shopifyUpdate.promo_image={status:'blocked',reason:String(error?.message||'SHOPIFY_IMAGE_CREATE_FAILED').slice(0,120)};}
-      }else shopifyUpdate.promo_image={status:'already_present'};
+      }
     }
     result.shopify_update=shopifyUpdate;
     const publication={status:'blocked',reason:'SEO_OR_MEDIA_NOT_READY',channels:[],ad_spend_eur:0};
