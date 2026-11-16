@@ -4,6 +4,10 @@ for (const stream of [process.stdout, process.stderr]) {
     if (error?.code !== 'EPIPE') throw error;
   });
 }
+process.on('uncaughtException', error => {
+  if (error?.code === 'EPIPE') return;
+  throw error;
+});
 const {checkGallery}=require('./gallery-readiness');
 const {contentReadiness}=require('./content-readiness');
 const {summarizeAutopilotResults}=require('./autopilot-results');
