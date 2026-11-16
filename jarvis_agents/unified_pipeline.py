@@ -262,7 +262,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if video.get("rendered"):
         social_caption = (caption + "\n\n" + " ".join(hashtags)).strip()
         title = (headline + " #Shorts")[:100]
-        description = (social_caption + "\\n\\n#Shorts")[:5000]
+        description = (social_caption + "\n\n#Shorts")[:5000]
         social_publication = {
             "youtube": youtube_publisher.publish_video(str(video_path), title, description),
             "tiktok": tiktok_publisher.publish_generated_video(
