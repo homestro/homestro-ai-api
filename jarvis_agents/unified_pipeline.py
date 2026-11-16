@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -21,7 +22,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from agents import creative_seo, product_hunter, tiktok_publisher
+from agents import creative_seo, product_hunter, tiktok_publisher, youtube_publisher
 
 
 MAX_DOWNLOAD = 60 * 1024 * 1024
@@ -151,6 +152,16 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
             "format": "vertical_9_16_mp4", "duration_seconds": 20 if use_video else 12}
 
 
+def _human_product_name(product: dict[str, Any]) -> str:
+    title = re.sub(r"\s+", " ", str(product.get("title") or "Produkt bei Homestro")).strip()
+    title = re.split(
+        r"\s+(?:mit|inkl(?:usive)?|Bluetooth|IPX\d|USB-C?|Watt|mAh|Hz|dB|\d+(?:[.,]\d+)?\s*(?:mm|cm|m|kg|g|W|V))\b",
+        title, maxsplit=1, flags=re.IGNORECASE
+    )[0]
+    title = re.sub(r"[|•,;\s-]+$", "", title).strip()
+    return (title or "Produkt bei Homestro")[:100]
+
+
 def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) -> tuple[str, str, str]:
     if str(product.get("handle") or "") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5":
         headline = "135 Sprachen. Kein Handy im Gesicht."
@@ -163,16 +174,33 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             f"135 Sprachen. Kabellos. Erazer XP6 für {price} € bei Homestro entdecken.\n\n{product_url}"
         )
         return headline, hook, caption
-    title = str(product.get("title") or "dein nächster Alltagshelfer").strip()
-    return "Kleine Dinge. Mehr Leichtigkeit.", f"Einfacher durch den Alltag mit {title}.", (
-        f"Manchmal machen die kleinen Dinge den Alltag ein Stück leichter. Entdecke {title} bei Homestro.\n\n{product_url}"
+    name = _human_product_name(product)
+    headline = "Eine kleine Hilfe. Ein ruhigerer Moment."
+    hook = "Wenn die nächste Kleinigkeit zur Geduldsprobe wird."
+    caption = (
+        f"Der Tag ist schon voll – und dann hält dich auch noch eine Kleinigkeit auf. "
+        f"{name} von Homestro könnte genau der praktische Helfer sein, den du suchst. "
+        f"Einmal durchatmen, Details ansehen und selbst entscheiden, ob es zu deinem Alltag passt.\n\n{product_url}"
     )
+    return headline, hook, caption
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     products = payload.get("products") if isinstance(payload.get("products"), list) else []
     trends = payload.get("trends") if isinstance(payload.get("trends"), list) else []
-    scout = product_hunter.select_from_shopify_catalog(products, trends)
+    seed_ids_raw = payload.get("seed_published_product_ids") or os.getenv("JARVIS_ROTATION_SEED_PUBLISHED_PRODUCT_IDS", "[]")
+    try:
+        seed_ids = json.loads(seed_ids_raw) if isinstance(seed_ids_raw, str) else seed_ids_raw
+    except (TypeError, ValueError):
+        seed_ids = []
+    if not isinstance(seed_ids, list):
+        seed_ids = []
+    scout = product_hunter.select_next_active_product(
+        products, trends,
+        payload.get("rotation_history_path") or "/data/jarvis-published-products.json",
+        existing_publish_ledger_path=payload.get("existing_publish_ledger_path") or "/data/jarvis-unified-published.json",
+        seed_published_product_ids=[str(item) for item in seed_ids],
+    )
     if scout.get("status") != "selected":
         return {"status": "blocked", "scout": scout, "creative": None, "video": None}
     product = scout["product"]
@@ -229,12 +257,29 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         "status": "blocked", "reason": video.get("reason") or "VIDEO_NOT_RENDERED",
         "upload_performed": False, "publication_performed": False, "ad_spend_eur": 0,
     }
+    social_publication = {"youtube": {"status": "blocked", "reason": "VIDEO_NOT_RENDERED"},
+                          "tiktok": {"status": "blocked", "reason": "VIDEO_NOT_RENDERED"}}
+    if video.get("rendered"):
+        social_caption = (caption + "\n\n" + " ".join(hashtags)).strip()
+        title = (headline + " #Shorts")[:100]
+        description = (social_caption + "\\n\\n#Shorts")[:5000]
+        social_publication = {
+            "youtube": youtube_publisher.publish_video(str(video_path), title, description),
+            "tiktok": tiktok_publisher.publish_generated_video(
+                str(video_path), social_caption, duration_seconds=int(video.get("duration_seconds") or 0), env=os.environ
+            ),
+        }
+    if isinstance(bundle, dict):
+        bundle["youtube_publishing"] = social_publication["youtube"]
+        bundle["tiktok_publishing"] = social_publication["tiktok"]
+        bundle["status"] = "ready_to_post"
     return {"status": "completed" if video.get("rendered") else "partial",
             "scout": {k:v for k,v in scout.items() if k != "product"},
             "product": {"id": product_id, "title": product.get("title"),
                         "handle": product.get("handle"), "url": product_url,
                         "image_path": str(image_path)},
             "creative": creative, "video": video, "tiktok_bundle": bundle,
+            "social_publication": social_publication,
             "cost_eur": 0, "paid_ai_calls": 0, "ad_mutations_performed": False}
 
 
