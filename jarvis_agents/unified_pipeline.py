@@ -186,7 +186,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Der verstellbare Klettverschluss lässt sich individuell einstellen; der breite Sitz ist für "
             "Unterstützung im Bauch- und Lendenbereich beschrieben. Achte darauf, normal atmen zu können, "
             "und leg den Gürtel bei Unwohlsein ab. Schau dir die Details bei Homestro an und entscheide, "
-            f"ob er zu deinem Training passt.\\n\\n{product_url}"
+            f"ob er zu deinem Training passt.\n\n{product_url}"
         )
         return headline, hook, caption
     if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE):
