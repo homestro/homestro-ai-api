@@ -199,7 +199,7 @@ async function runFreeOrganicCycle() {
     const imported=await import('../homestro-marketing-pilot/modules/trends.js');
     const trends=await new imported.GoogleTrends({geos:['DE','AT']}).refresh();
     const products=await liveExecutor.activeCatalogForPipeline();
-    const result=await runPythonPipeline({products,trends,assets_dir:unifiedAssetsDir});
+    const result=await runPythonPipeline({products,trends,assets_dir:unifiedAssetsDir,public_origin:unifiedPublicOrigin});
     if(result.status==='blocked')return blocked(result.reason||result.scout?.reason||'Scout nenašel vhodný produkt');
     const product=result.product||{};
     const creative=result.creative||{};
@@ -237,10 +237,7 @@ async function runFreeOrganicCycle() {
       const imageUrl=publicAssetUrl(creative.image_path);
       result.video.public_url=videoUrl;
       result.product.image_url=imageUrl;
-      const tiktok=require('../agents/tiktok_publisher');
-      result.tiktok_bundle=tiktok.prepare_generated_bundle(
-        {id:product.id,url:product.url},videoUrl,creative.caption,creative.hashtags
-      );
+      result.tiktok_bundle=result.tiktok_bundle||null;
       const caption=String(creative.caption||((product.title||'Produkt')+' bei Homestro entdecken.')).slice(0,2200);
       const date=new Date().toISOString().slice(0,10);
       const ledger=await loadPublishLedger(),key=date+':'+product.id;

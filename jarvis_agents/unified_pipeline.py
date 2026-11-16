@@ -21,7 +21,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from agents import creative_seo, product_hunter
+from agents import creative_seo, product_hunter, tiktok_publisher
 
 
 MAX_DOWNLOAD = 60 * 1024 * 1024
@@ -196,10 +196,12 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         "image_path": str(image_path), "image_hash": digest,
         "claims_policy": "validated_shopify_facts_only", "paid_generation_performed": False,
     }
-    bundle = {
-        "status": "pending_public_url", "product_id": product_id,
-        "product_url": product_url, "video_path": str(video_path) if video.get("rendered") else None,
-        "caption": caption, "hashtags": hashtags, "platforms": ["TikTok", "YouTube Shorts"],
+    public_origin = str(payload.get("public_origin") or "https://homestro-ai-api-fixed-current-production.up.railway.app").rstrip("/")
+    video_url = public_origin + "/marketing-assets/" + video_path.name if video.get("rendered") else ""
+    bundle = tiktok_publisher.prepare_generated_bundle(
+        {"id": product_id, "url": product_url}, video_url, caption, hashtags
+    ) if video.get("rendered") else {
+        "status": "blocked", "reason": video.get("reason") or "VIDEO_NOT_RENDERED",
         "upload_performed": False, "publication_performed": False, "ad_spend_eur": 0,
     }
     return {"status": "completed" if video.get("rendered") else "partial",
