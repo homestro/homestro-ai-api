@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from agents import creative_seo, product_hunter
 
