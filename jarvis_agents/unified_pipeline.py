@@ -72,7 +72,7 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, width
     return lines
 
 
-def _promo_image(product: dict[str, Any], output: Path, work: Path) -> None:
+def _promo_image(product: dict[str, Any], output: Path, work: Path, headline: str) -> None:
     sources = product.get("image_urls") or []
     photo = None
     for index, url in enumerate(sources[:4]):
@@ -87,25 +87,31 @@ def _promo_image(product: dict[str, Any], output: Path, work: Path) -> None:
 
     canvas = Image.new("RGB", (1080, 1350), "#101827")
     draw = ImageDraw.Draw(canvas)
+    # Reserved padded red header band keeps the emotional headline inside the safe area.
+    draw.rounded_rectangle((40, 40, 1040, 218), radius=30, fill="#b91c1c")
+    header_font = _font(42)
+    for index, line in enumerate(_wrap(draw, headline, header_font, 900)[:2]):
+        draw.text((76, 68 + index * 56), line, fill="#ffffff", font=header_font)
     if photo:
-        canvas.paste(photo, (40, 40))
+        card_photo = ImageOps.fit(photo, (1000, 675), method=Image.Resampling.LANCZOS)
+        canvas.paste(card_photo, (40, 238))
     else:
-        draw.rounded_rectangle((40, 40, 1040, 940), radius=34, fill="#1c2b42")
-        draw.text((80, 80), "HOMESTRO", fill="#ffd22e", font=_font(42))
-    draw.rounded_rectangle((40, 930, 1040, 1310), radius=34, fill="#17253a")
-    draw.text((84, 970), "HOMESTRO  •  DE / AT", fill="#ffd22e", font=_font(30))
-    title = str(product.get("title") or "Produkt bei Homestro")[:130]
-    title_font = _font(48)
-    y = 1030
-    for line in _wrap(draw, title, title_font, 900)[:3]:
+        draw.rounded_rectangle((40, 238, 1040, 913), radius=34, fill="#1c2b42")
+        draw.text((80, 280), "HOMESTRO", fill="#ffd22e", font=_font(42))
+    draw.rounded_rectangle((40, 925, 1040, 1310), radius=34, fill="#17253a")
+    draw.text((84, 962), "HOMESTRO  •  DE / AT", fill="#ffd22e", font=_font(30))
+    title = "Erazer XP6" if "XP6" in headline else str(product.get("title") or "Produkt bei Homestro")[:90]
+    title_font = _font(44)
+    y = 1022
+    for line in _wrap(draw, title, title_font, 900)[:2]:
         draw.text((84, y), line, fill="#ffffff", font=title_font)
-        y += 62
-    draw.text((84, 1235), "Details im Homestro Shop entdecken", fill="#cbd5e1", font=_font(26))
+        y += 58
+    draw.text((84, 1228), "Details im Homestro Shop entdecken", fill="#cbd5e1", font=_font(26))
     output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output, format="JPEG", quality=90, optimize=True)
 
 
-def _render_video(product: dict[str, Any], image_path: Path, output: Path, work: Path) -> dict[str, Any]:
+def _render_video(product: dict[str, Any], image_path: Path, output: Path, work: Path, hook: str) -> dict[str, Any]:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return {"status": "blocked", "reason": "FFMPEG_NOT_INSTALLED", "rendered": False}
@@ -120,12 +126,11 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
             break
         except Exception:
             continue
-    title = re.sub(r"[\r\n]+", " ", str(product.get("title") or ""))
-    hook = f"Alles neu? Entdecke {title} bei Homestro."[:150]
+    hook = re.sub(r"[\r\n]+", " ", str(hook or "Entdecke das Produkt bei Homestro."))[:150]
     textfile = work / "hook.txt"
     textfile.write_text(hook, encoding="utf-8")
     escaped = str(textfile).replace("\\", "\\\\").replace(":", "\\:")
-    drawtext = f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile='{escaped}':expansion=none:fontsize=38:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=18:x=(w-tw)/2:y=80:enable='lt(t,5)'"
+    drawtext = f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile='{escaped}':expansion=none:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=18:x=(w-tw)/2:y=120:enable='lt(t,5)'"
     vf = f"scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x101827,setsar=1,fps=25,{drawtext}"
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     if use_video:
@@ -146,6 +151,24 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
             "format": "vertical_9_16_mp4", "duration_seconds": 20 if use_video else 12}
 
 
+def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) -> tuple[str, str, str]:
+    if str(product.get("handle") or "") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5":
+        headline = "135 Sprachen. Kein Handy im Gesicht."
+        hook = "Gate B14. Flug gestrichen. Was jetzt?"
+        price = f"{min(prices):.2f}".replace(".", ",") if prices else "47,99"
+        caption = (
+            "Gate B14. Dein Flug ist gestrichen. Die Durchsage kommt in einer Sprache, die du nicht verstehst. "
+            "Du atmest kurz durch und setzt den Erazer XP6 ein, um die nächsten Schritte besser einzuordnen. "
+            "Kein Handy, das du fremden Menschen vors Gesicht halten musst.\n\n"
+            f"135 Sprachen. Kabellos. Erazer XP6 für {price} € bei Homestro entdecken.\n\n{product_url}"
+        )
+        return headline, hook, caption
+    title = str(product.get("title") or "dein nächster Alltagshelfer").strip()
+    return "Kleine Dinge. Mehr Leichtigkeit.", f"Einfacher durch den Alltag mit {title}.", (
+        f"Manchmal machen die kleinen Dinge den Alltag ein Stück leichter. Entdecke {title} bei Homestro.\n\n{product_url}"
+    )
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     products = payload.get("products") if isinstance(payload.get("products"), list) else []
     trends = payload.get("trends") if isinstance(payload.get("trends"), list) else []
@@ -162,6 +185,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 prices.append(float(variant.get("price")))
             except (TypeError, ValueError):
                 pass
+    headline, hook, story_caption = _story_copy(product, product_url, prices)
     feed = {
         "id": product_id, "title": product.get("title"),
         "description": product.get("descriptionHtml") or "", "link": product_url,
@@ -183,13 +207,14 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     work.mkdir(parents=True, exist_ok=True)
     image_path, video_path = root / f"{digest}.jpg", root / f"{digest}.mp4"
     try:
-        _promo_image(product, image_path, work)
-        video = _render_video(product, image_path, video_path, work)
+        _promo_image(product, image_path, work, headline)
+        video = _render_video(product, image_path, video_path, work, hook)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    caption = str(draft.get("social", {}).get("text") or f"{product.get('title')} bei Homestro entdecken.")
-    caption = f"{caption}\n\n{product_url}"
-    hashtags = ["#Homestro", "#Produktentdecken", "#Alltagsideen", "#OnlineShop"]
+    caption = story_caption
+    hashtags = (["#Homestro", "#ErazerXP6", "#Kopfhoerer", "#Unterwegs", "#ReiseTipps"]
+                if product.get("handle") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
+                else ["#Homestro", "#Produktentdecken", "#Alltagsideen", "#OnlineShop"])
     creative = {
         "status": "prepared", "product_id": product_id, "seo": draft.get("seo"),
         "geo": draft.get("geo"), "caption": caption, "hashtags": hashtags,

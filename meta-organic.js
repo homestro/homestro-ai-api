@@ -83,23 +83,29 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
   const credentials=getCredentials?await getCredentials():{token:String(env.META_PAGE_ACCESS_TOKEN||'').trim(),pageId:String(env.META_PAGE_ID||'').trim(),instagramId:String(env.META_INSTAGRAM_ACCOUNT_ID||'').trim()};
   const {token,pageId,instagramId}=credentials;
   if(!token||!pageId||!instagramId) throw new Error('Meta publishing configuration incomplete');
+  const videoUrl=String(draft.videoUrl||'').trim();
+  if(!videoUrl)throw new Error('ORGANIC_VIDEO_REQUIRED');
+  const parsed=new URL(videoUrl);
+  const expectedHost=new URL(String(env.JARVIS_PUBLIC_ORIGIN||'https://homestro-ai-api-fixed-current-production.up.railway.app')).hostname;
+  if(parsed.protocol!=='https:'||parsed.hostname!==expectedHost||parsed.username||parsed.password||parsed.search||parsed.hash
+    ||!/^\/marketing-assets\/[a-f0-9]{64}\.mp4$/.test(parsed.pathname))throw new Error('UNTRUSTED_REEL_VIDEO_URL');
   async function post(path, params) {
-    const body=new URLSearchParams({...params,...(credentials.appsecretProof?{appsecret_proof:credentials.appsecretProof}:{})}); const response=await fetchImpl(`https://graph.facebook.com/v26.0/${path}`,{
+    const body=new URLSearchParams({...params,...(credentials.appsecretProof?{appsecret_proof:credentials.appsecretProof}:{})});
+    const response=await fetchImpl(`https://graph.facebook.com/v26.0/${path}`,{
       method:'POST',headers:{Authorization:`Bearer ${credentials.token}`,'Content-Type':'application/x-www-form-urlencoded'},body,signal:AbortSignal.timeout(30000)
-    }); const data=await response.json(); if(!response.ok||data.error){const e=new Error('Meta publish rejected');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;} return data;
+    });
+    const data=await response.json();
+    if(!response.ok||data.error){const e=new Error('Meta publish rejected');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;}
+    return data;
   }
   if(draft.channel==='facebook'){
-    const result=await post(`${pageId}/photos`,{url:draft.imageUrl,caption:draft.caption,published:'true'});
-    return {channel:'facebook',published:true,id:result.post_id||result.id};
+    const result=await post(`${pageId}/videos`,{file_url:videoUrl,description:draft.caption,published:'true'});
+    return {channel:'facebook',published:true,id:result.id,mediaType:'video'};
   }
   if(draft.channel==='instagram'){
-    const sourceImage=new URL(draft.imageUrl);
-    // Shopify CDN can transform source WEBP assets to a Meta-compatible JPEG.
-    if(/cdn\.shopify\.com$/i.test(sourceImage.hostname)){
-      sourceImage.searchParams.set('format','jpg');
-    }
-    const instagramImageUrl=sourceImage.href;
-    const container=await post(`${instagramId}/media`,{image_url:instagramImageUrl,caption:draft.caption});
+    const container=await post(`${instagramId}/media`,{
+      media_type:'REELS',video_url:videoUrl,caption:draft.caption,share_to_feed:'true'
+    });
     let status=null;
     for(let attempt=0;attempt<12;attempt++){
       await new Promise(resolve=>setTimeout(resolve,5000));
@@ -108,14 +114,14 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
       if(credentials.appsecretProof)url.searchParams.set('appsecret_proof',credentials.appsecretProof);
       const response=await fetchImpl(url,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
       const data=await response.json();
-      if(!response.ok||data.error){const e=new Error('Instagram container status failed');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;}
+      if(!response.ok||data.error){const e=new Error('Instagram Reel status failed');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;}
       status=data;
       if(data.status_code==='FINISHED')break;
-      if(data.status_code==='ERROR'||data.status_code==='EXPIRED')throw new Error(`Instagram media processing failed: ${data.status||data.status_code}`);
+      if(data.status_code==='ERROR'||data.status_code==='EXPIRED')throw new Error('Instagram Reel processing failed: '+(data.status||data.status_code));
     }
-    if(status?.status_code!=='FINISHED')throw new Error('Instagram media processing timed out');
+    if(status?.status_code!=='FINISHED')throw new Error('Instagram Reel processing timed out');
     const result=await post(`${instagramId}/media_publish`,{creation_id:container.id});
-    return {channel:'instagram',published:true,id:result.id,containerId:container.id};
+    return {channel:'instagram',published:true,id:result.id,containerId:container.id,mediaType:'reel'};
   }
   throw new Error('Unsupported channel');
 }

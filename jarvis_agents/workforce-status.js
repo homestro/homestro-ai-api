@@ -251,33 +251,34 @@ async function runFreeOrganicCycle() {
       result.video.public_url=videoUrl;
       result.product.image_url=imageUrl;
       result.tiktok_bundle=result.tiktok_bundle||null;
-      const caption=String(creative.caption||((product.title||'Produkt')+' bei Homestro entdecken.')).slice(0,2200);
+      const caption=(String(creative.caption||((product.title||'Produkt')+' bei Homestro entdecken.')).trim()+'\n\n'+(Array.isArray(creative.hashtags)?creative.hashtags.join(' '):'')).slice(0,2200);
       const date=new Date().toISOString().slice(0,10);
       const ledger=await loadPublishLedger(),key=date+':'+product.id;
       ledger[key]=ledger[key]||{};
       const channels=[];
       for(const channel of ['facebook','instagram']){
-        const previous=ledger[key][channel];
+        const formatKey=channel+'_video_reel_v1';
+        const previous=ledger[key][formatKey];
         if(previous?.status==='published'||previous?.status==='attempted'){
-          channels.push({channel,status:previous.status,id:previous.id||null,reason:previous.status==='attempted'?'PREVIOUS_ATTEMPT_REQUIRES_MANUAL_CHECK':undefined});
+          channels.push({channel,status:previous.status,id:previous.id||null,reason:previous.status==='attempted'?'PREVIOUS_VIDEO_ATTEMPT_REQUIRES_MANUAL_CHECK':undefined,mediaType:previous.mediaType||null});
           continue;
         }
         const publishAudit=auditMessage(message('unified_pipeline','meta_organic','homestro','organic_publish',{
           channel,product_id:product.id,budget_eur:0,ad_spend_eur:0,paid_ads:false,
         },'running'));
         if(!publishAudit.allowed){channels.push({channel,status:'blocked',reason:publishAudit.reason});continue;}
-        ledger[key][channel]={status:'attempted',attempted_at:new Date().toISOString()};
+        ledger[key][formatKey]={status:'attempted',mediaType:channel==='instagram'?'reel':'video',attempted_at:new Date().toISOString()};
         await savePublishLedger(ledger);
         try{
-          const posted=await publishOrganicDraft({channel,imageUrl,caption},{
+          const posted=await publishOrganicDraft({channel,videoUrl,caption},{
             getCredentials:()=>metaConnectionBridge.credentials(),
             onCredentialError:(error,credentials)=>metaConnectionBridge.reject(error,credentials),
           });
-          ledger[key][channel]={status:'published',id:posted.id||null,published_at:new Date().toISOString()};
+          ledger[key][formatKey]={status:'published',id:posted.id||null,mediaType:posted.mediaType||null,published_at:new Date().toISOString()};
           await savePublishLedger(ledger);
-          channels.push({channel,status:'published',id:posted.id||null});
+          channels.push({channel,status:'published',id:posted.id||null,mediaType:posted.mediaType||null});
         }catch(error){
-          ledger[key][channel]={status:'attempted',reason:String(error?.message||'META_PUBLISH_FAILED').slice(0,120),attempted_at:ledger[key][channel]?.attempted_at};
+          ledger[key][formatKey]={status:'attempted',mediaType:channel==='instagram'?'reel':'video',reason:String(error?.message||'META_PUBLISH_FAILED').slice(0,120),attempted_at:ledger[key][formatKey]?.attempted_at};
           await savePublishLedger(ledger);
           channels.push({channel,status:'blocked',reason:String(error?.message||'META_PUBLISH_FAILED').slice(0,120),retry:'manual_review_required'});
         }
@@ -285,7 +286,8 @@ async function runFreeOrganicCycle() {
       publication.status=channels.length&&channels.every(row=>row.status==='published')?'published':channels.some(row=>row.status==='published')?'partial':'blocked';
       publication.channels=channels;
       publication.reason=null;
-      publication.image_url=imageUrl;
+      publication.video_url=videoUrl;
+      publication.media_type='facebook_video_and_instagram_reel';
     }
     result.publication=publication;
     result.cost_eur=0;result.ad_spend_eur=0;result.paid_ai_calls=0;result.ad_mutations_performed=false;
@@ -295,8 +297,8 @@ async function runFreeOrganicCycle() {
     const cycleStatus=result.status==='completed'&&shopifyUpdate.updated&&published===2?'completed':'partial';
     const seoText=shopifyUpdate.updated?'Shopify SEO/GEO gespeichert':'Shopify SEO/GEO '+(shopifyUpdate.reason||'blockiert');
     const videoText=result.video?.rendered?'9:16-MP4 bereit: '+result.video.path:'MP4 '+(result.video?.reason||'nicht gerendert');
-    const metaText=publication.status==='published'?'Facebook und Instagram veröffentlicht':('Meta-Status '+publication.status);
-    const summary='Bezplatný organický běh: '+(product.title||'produkt bez názvu')+'; '+(shopifyUpdate.updated?'Shopify SEO/GEO aktualizováno':'Shopify SEO/GEO '+(shopifyUpdate.reason||'zablokováno'))+'; '+(result.video?.rendered?'video 9:16 připraveno: '+result.video.path:'video '+(result.video?.reason||'se nevytvořilo'))+'; '+(publication.status==='published'?'Facebook a Instagram publikovány':('publikace Meta: '+publication.status))+'; TikTok/YouTube Shorts balíček '+(content.length?'uložen k ručnímu zveřejnění':'není připraven')+'; placená reklama 0,00 €.';
+    const metaText=publication.status==='published'?'Facebook-Video und Instagram-Reel veröffentlicht':('Meta-Status '+publication.status);
+    const summary='Bezplatný organický běh: '+(product.title||'produkt bez názvu')+'; '+(shopifyUpdate.updated?'Shopify SEO/GEO aktualizováno':'Shopify SEO/GEO '+(shopifyUpdate.reason||'zablokováno'))+'; '+(result.video?.rendered?'video 9:16 připraveno: '+result.video.path:'video '+(result.video?.reason||'se nevytvořilo'))+'; '+(publication.status==='published'?'Facebook video a Instagram Reel publikovány':('publikace Meta: '+publication.status))+'; TikTok/YouTube Shorts balíček '+(content.length?'uložen k ručnímu zveřejnění':'není připraven')+'; placená reklama 0,00 €.';
     lastCycle={
       cycle_id:crypto.randomUUID(),status:cycleStatus,dry_run:false,budget_eur:0,ad_spend_eur:0,
       external_writes_performed:Boolean(shopifyUpdate.updated||published),video_generation_performed:Boolean(result.video?.rendered),
