@@ -10,6 +10,7 @@ const {spawn} = require('node:child_process');
 const {publishOrganicDraft} = require('../meta-organic');
 const fs = require('node:fs');
 const path = require('node:path');
+const msHandwerkPipeline = require('./ms-handwerk-pipeline');
 
 const readJson = name => JSON.parse(fs.readFileSync(path.join(__dirname, name), 'utf8'));
 const manifest = readJson('workforce.json');
@@ -438,6 +439,7 @@ function workforceStatus(env = process.env, runtime = {}) {
     communication: {...manifest.communication, messageCount: messageBus.length,
       lastMessage: messageBus.length ? {...messageBus[messageBus.length - 1], payload: undefined} : null},
     lastCycle,
+    msHandwerkPipeline: msHandwerkPipeline.status(env),
     erazerPriority: {
       rank: 1, title: erazer.title, handle: erazer.handle, referencePriceEUR: erazer.referencePriceEUR,
       locked: true, existingVideoPolicy: 'Shopify asset only; missing asset blocks the draft',
@@ -514,6 +516,13 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
       ok: cycle.status === 'completed', cycle, run: entry,
     });
   });
+
+  app.post('/api/jarvis/v1/workforce/ms-handwerk/run', ...(workforceApiKey ? [workforceApiKey] : []), async (_req, res) => {
+    const result = await msHandwerkPipeline.generate({force: true, render: true});
+    return res.status(result.ok ? 200 : 503).json(result);
+  });
+  msHandwerkPipeline.registerAssetRoute(app);
+  msHandwerkPipeline.startDailyScheduler();
 }
 
 async function runAndRecord(triggerType) {
