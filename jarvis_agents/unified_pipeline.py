@@ -1,7 +1,8 @@
-"""Zero-cost JARVIS chain: Shopify catalog -> SEO/GEO -> Pillow -> FFmpeg -> organic handoffs.
+"""JARVIS organic chain: Shopify catalog -> SEO/GEO -> Pillow -> video -> organic handoffs.
 
-No OpenAI, Apify, advertising API, or paid video service is called. Shopify and Meta
-credentials stay in the Node API process; this worker receives only product data.
+Default operation remains zero-cost. Optional Higgsfield generation is attempted only
+when HIGGSFIELD_ENABLED=true and HIGGSFIELD_API_KEY is configured; failures fall back
+to existing Shopify video or the free gallery montage. Paid ads remain disabled.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from agents import creative_seo, product_hunter, tiktok_publisher, youtube_publisher
+from jarvis_agents import higgsfield_video_agent
 
 
 MAX_DOWNLOAD = 60 * 1024 * 1024
@@ -134,6 +136,27 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
         except Exception:
             continue
 
+    higgsfield_result: dict[str, Any] | None = None
+    if not video_paths and higgsfield_video_agent.is_enabled(os.environ):
+        image_urls = product.get("image_urls") or []
+        if image_urls:
+            try:
+                generated = higgsfield_video_agent.generate_video(
+                    image_url=str(image_urls[0]),
+                    prompt=higgsfield_video_agent.build_story_prompt(product, hook),
+                    output_path=work / "higgsfield-source.mp4",
+                    env=os.environ,
+                )
+                higgsfield_result = generated
+                if generated.get("status") == "completed":
+                    generated_path = Path(str(generated.get("path") or ""))
+                    if generated_path.is_file() and generated_path.stat().st_size > 0:
+                        video_paths.append(generated_path)
+            except Exception as error:
+                higgsfield_result = {"status": "fallback", "reason": type(error).__name__}
+        else:
+            higgsfield_result = {"status": "fallback", "reason": "SHOPIFY_PRODUCT_IMAGE_MISSING"}
+
     if video_paths:
         source = video_paths[0]
         probe = shutil.which("ffprobe")
@@ -181,7 +204,8 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
         )
         args += ["-filter_complex", ";".join(filters), "-map", "[vout]", "-an"]
         final_duration = scene_duration * scenes - transition * (scenes - 1)
-        source_name = "existing_shopify_video_motion_clips"
+        source_name = ("higgsfield_generated_motion_clips" if higgsfield_result and higgsfield_result.get("status") == "completed"
+                       else "existing_shopify_video_motion_clips")
     else:
         image_urls = list(dict.fromkeys(
             str(url) for url in (product.get("image_urls") or []) if str(url).strip()
@@ -247,7 +271,8 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
             "source_image_count": scenes if source_name == "shopify_gallery_ken_burns_montage" else 0,
             "full_screen": True, "motion_per_scene": "ken_burns" if not video_paths else "video_clip_and_zoom",
             "hook_safe_zone": "center_wrapped_pill", "static_card_fallback": False,
-            "format": "vertical_9_16_mp4", "duration_seconds": round(final_duration, 1)}
+            "format": "vertical_9_16_mp4", "duration_seconds": round(final_duration, 1),
+            "higgsfield_generation": higgsfield_result}
 
 
 def _hook_overlay(hook: str, output: Path) -> None:
