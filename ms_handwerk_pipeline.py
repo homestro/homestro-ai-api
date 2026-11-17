@@ -15,10 +15,9 @@ from zoneinfo import ZoneInfo
 
 BRAND = "MS Handwerk & Service"
 AREAS = "Kempten (Allgäu), 87435–87439, Oberallgäu und Ostallgäu"
-CTA = "Jetzt unverbindlich anfragen — schnell, sauber & zuverlässig in Kempten & Umgebung"
-SERVICES = "Innenausbau, Renovierungsarbeiten, Trockenbau, Bodenverlegung, Möbelmontage, Reparatur- & Hausmeisterservice in Kempten & Allgäu"
+CTA = "Kostenlose Besichtigung anfragen: Tel. 0176 36336476 (Gerne auch per WhatsApp)"
+SERVICES = "Streicharbeiten, Türen und Rahmen lackieren, Spachtelarbeiten, Schleifen und Vorbereitung der Flächen, Verputzarbeiten, Ausbesserungen aller Art, Tapezierarbeiten, Kleinreparaturen, Laminat und Vinyl verlegen, Sockelleisten montieren, Bodenreparaturen, Fliesenreparaturen, Silikonfugen erneuern, Möbelaufbau, Terrassenreinigung und Terrassenverlegung, Haus- und Wohnungsrenovierungen"
 BLOCKED = re.compile(r"maler|malerbetrieb|malermeister", re.I)
-
 
 def safe_copy(value: str) -> str:
     if BLOCKED.search(value):
@@ -28,11 +27,11 @@ def safe_copy(value: str) -> str:
 
 def daily_copy(day: dt.date) -> dict:
     themes = [
-        ("Innenausbau und Trockenbau in Kempten", "Sie möchten Räume neu aufteilen oder Flächen im Innenbereich erneuern? MS Handwerk & Service unterstützt bei Innenausbau, Trockenbau und Renovierungsarbeiten im Raum Kempten."),
-        ("Bodenverlegung im Allgäu", "Ein neuer Boden verändert den Raum. MS Handwerk & Service übernimmt Bodenverlegung und passende Renovierungsarbeiten in Kempten sowie im Ober- und Ostallgäu."),
-        ("Möbelmontage und Reparaturservice in Kempten", "Wenn Möbel aufgebaut oder kleinere Reparaturen erledigt werden sollen, hilft MS Handwerk & Service in Kempten und Umgebung."),
-        ("Renovierungsarbeiten in Kempten und Umgebung", "Für anstehende Arbeiten im Innenbereich bietet MS Handwerk & Service Unterstützung bei Renovierung, Trockenbau und Bodenverlegung im Allgäu."),
-        ("Hausmeisterservice im Ober- und Ostallgäu", "Für laufende Reparaturen und praktische Arbeiten rund ums Objekt ist MS Handwerk & Service in Kempten und im Allgäu erreichbar."),
+        ("Streich- und Spachtelarbeiten in Kempten", "Für Streicharbeiten, Spachtelarbeiten und die Vorbereitung von Flächen unterstützt MS Handwerk & Service in Kempten und Umgebung."),
+        ("Laminat und Vinyl verlegen im Allgäu", "MS Handwerk & Service verlegt Laminat und Vinyl und montiert passende Sockelleisten in Kempten sowie im Ober- und Ostallgäu."),
+        ("Silikonfugen erneuern und Fliesen reparieren", "Erneuerungsbedürftige Silikonfugen oder kleine Fliesenreparaturen? MS Handwerk & Service hilft in Kempten und Umgebung."),
+        ("Möbelaufbau und Kleinreparaturen in Kempten", "Wenn Möbel aufgebaut oder Kleinreparaturen erledigt werden sollen, unterstützt MS Handwerk & Service in Kempten und Umgebung."),
+        ("Terrassenreinigung und Renovierungen im Allgäu", "MS Handwerk & Service unterstützt bei Terrassenreinigung, Terrassenverlegung und Haus- und Wohnungsrenovierungen im Allgäu."),
     ]
     title, intro = themes[day.toordinal() % len(themes)]
     seo_title = f"{title} | {BRAND}"
@@ -45,13 +44,13 @@ def daily_copy(day: dt.date) -> dict:
         "date": day.isoformat(),
         "location": AREAS,
         "services": SERVICES,
-        "seo": {"title": safe_copy(seo_title), "metaDescription": safe_copy(description[:160]), "keywords": ["Innenausbau Kempten", "Trockenbau Kempten", "Bodenverlegung Allgäu", "Renovierungsarbeiten Kempten", "Hausmeisterservice Allgäu"]},
+        "seo": {"title": safe_copy(seo_title), "metaDescription": safe_copy(description[:160]), "keywords": ["Streicharbeiten Kempten", "Laminat Vinyl Kempten", "Silikonfugen Allgäu", "Kleinreparaturen Kempten", "Terrassenreinigung Allgäu"]},
         "geo": {"primaryCity": "Kempten (Allgäu)", "postalCodes": ["87435", "87436", "87437", "87438", "87439"], "regions": ["Oberallgäu", "Ostallgäu"], "answerSummary": safe_copy(f"{BRAND} bietet {SERVICES} im Einsatzgebiet {AREAS} an.")},
         "video": {"format": "9:16", "hook": safe_copy(f"Arbeiten im Innenbereich in Kempten geplant? {CTA}."), "caption": caption, "callToAction": CTA, "scenes": [
-            {"seconds": 4, "text": "Innenausbau in Kempten"},
-            {"seconds": 4, "text": "Trockenbau & Renovierungsarbeiten"},
-            {"seconds": 4, "text": "Bodenverlegung & Möbelmontage"},
-            {"seconds": 4, "text": "Reparatur- & Hausmeisterservice"},
+            {"seconds": 4, "text": "Streich- & Spachtelarbeiten"},
+            {"seconds": 4, "text": "Laminat & Vinyl verlegen"},
+            {"seconds": 4, "text": "Silikonfugen & Fliesenreparaturen"},
+            {"seconds": 4, "text": "Möbelaufbau & Kleinreparaturen"},
             {"seconds": 4, "text": CTA},
         ]},
         "kleinanzeigen": {"title": safe_copy(ad_title), "description": caption},
