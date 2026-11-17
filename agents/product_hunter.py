@@ -622,6 +622,8 @@ def _rank_active_shopify_products(
     for raw in products:
         if not isinstance(raw, dict) or str(raw.get("status", "")).upper() != "ACTIVE":
             continue
+        # Active Shopify products remain eligible for dropshipping even when
+        # inventory tracking is disabled or Shopify reports zero local stock.
         variants = raw.get("variants") or []
         available = [v for v in variants if isinstance(v, dict) and v.get("availableForSale")]
         title = str(raw.get("title") or "").strip()
@@ -639,7 +641,9 @@ def _rank_active_shopify_products(
                 matches.append({"term": term[:100], "country": item.get("country"),
                                 "overlap": overlap, "traffic": item.get("approxTraffic")})
         flagship = handle == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
-        score = (2000 if flagship else 0) + min(len(available), 500) + sum(m["overlap"] * 25 for m in matches)
+        # Keep availability informational only; it must not gate or rank out
+        # active dropshipping products with untracked/zero local inventory.
+        score = (2000 if flagship else 0) + sum(m["overlap"] * 25 for m in matches)
         ranked.append({"product": raw, "score": score, "trend_matches": matches[:5],
                        "available_variants": len(available)})
     ranked.sort(key=lambda row: (-row["score"], str(row["product"].get("handle") or "")))
