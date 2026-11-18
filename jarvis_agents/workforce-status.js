@@ -511,7 +511,10 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
   });
 
   app.post('/api/jarvis/v1/workforce/cycle', ...(workforceApiKey ? [workforceApiKey] : []), async (_req, res) => {
-    const {cycle, entry} = await runAndRecord('MANUAL');
+    if (cycleRunning) return res.status(409).json({ok: false, error: 'cycle_already_running'});
+    const ran = await runAndRecord('MANUAL');
+    if (!ran) return res.status(409).json({ok: false, error: 'cycle_already_running'});
+    const {cycle, entry} = ran;
     return res.status(cycle.status === 'completed' ? 200 : 409).json({
       ok: cycle.status === 'completed', cycle, run: entry,
     });
@@ -525,7 +528,20 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
   msHandwerkPipeline.startDailyScheduler();
 }
 
+let cycleRunning = false;
 async function runAndRecord(triggerType) {
+  if (cycleRunning) {
+    console.log('[jarvis-autopilot] SKIPPED ' + JSON.stringify({trigger_type: triggerType, reason: 'cycle_already_running'}));
+    return null;
+  }
+  cycleRunning = true;
+  try {
+    return await runAndRecordLocked(triggerType);
+  } finally {
+    cycleRunning = false;
+  }
+}
+async function runAndRecordLocked(triggerType) {
   const {cycle, entry} = await executeAndRecord(triggerType, {
     runCycle: async () => String(process.env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true' || Number(process.env.MAX_DAILY_AD_SPEND_EUR ?? 0) <= 0
       ? runFreeOrganicCycle()
@@ -542,7 +558,7 @@ async function runAndRecord(triggerType) {
     dry_run: cycle.dry_run !== false,
     external_writes_performed: cycle.external_writes_performed === true,
   }));
-  return cycle;
+  return {cycle, entry};
 }
 
 async function runLiveCycle() {

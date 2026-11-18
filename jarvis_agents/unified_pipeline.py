@@ -315,12 +315,12 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     if str(product.get("handle") or "") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5":
         headline = "135 Sprachen. Kein Handy im Gesicht."
         hook = "Gate B14. Flug gestrichen. Was jetzt?"
-        price = f"{min(prices):.2f}".replace(".", ",") if prices else "47,99"
+        price_text = f"für {min(prices):.2f}".replace(".", ",") + " € " if prices else ""
         caption = (
             "Gate B14. Dein Flug ist gestrichen. Die Durchsage kommt in einer Sprache, die du nicht verstehst. "
             "Du atmest kurz durch und setzt den Erazer XP6 ein, um die nächsten Schritte besser einzuordnen. "
             "Kein Handy, das du fremden Menschen vors Gesicht halten musst.\n\n"
-            f"135 Sprachen. Kabellos. Erazer XP6 für {price} € bei Homestro entdecken.\n\n{product_url}"
+            f"135 Sprachen. Kabellos. Erazer XP6 {price_text}bei Homestro entdecken.\n\n{product_url}"
         )
         return headline, hook, caption
     name = _human_product_name(product)
@@ -447,11 +447,13 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     product_url = str(product.get("onlineStoreUrl") or f"https://homestro.de/products/{product.get('handle', '')}")
     prices = []
     for variant in product.get("variants") or []:
-        if variant.get("availableForSale"):
-            try:
-                prices.append(float(variant.get("price")))
-            except (TypeError, ValueError):
-                pass
+        # Dropshipping products may be zero/untracked stock: use any variant's positive price.
+        try:
+            value = float(variant.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            prices.append(value)
     headline, hook, story_caption = _story_copy(product, product_url, prices)
     if "Link in der Bio" not in story_caption:
         story_caption = re.sub(r"\n+https://homestro\.de/products/[^\s]+\s*$", "", story_caption).rstrip()
