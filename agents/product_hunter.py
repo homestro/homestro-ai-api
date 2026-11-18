@@ -708,9 +708,14 @@ def select_next_active_product(
     with lock_path.open("a", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
-            history = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            try:
+                history = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            except (OSError, ValueError):
+                logger.warning("product_hunter_rotation_history_unreadable_treated_as_empty")
+                history = []
             if not isinstance(history, list) or any(not isinstance(row, dict) for row in history):
-                raise ValueError("PRODUCT_ROTATION_HISTORY_INVALID")
+                logger.warning("product_hunter_rotation_history_invalid_treated_as_empty")
+                history = []
             if not history:
                 seeds = set(seed_published_product_ids or [])
                 seeds.update(_previously_published_ids(existing_publish_ledger_path))
@@ -724,9 +729,19 @@ def select_next_active_product(
             seen = {str(row.get("product_id") or "") for row in history
                     if int(row.get("rotation_cycle", cycle)) == cycle}
             available = [row for row in ranked if str(row["product"].get("id") or "") not in seen]
+            rotation_reset = False
             if not available:
-                cycle += 1
+                # Every active product has been visited: reset the persisted list to
+                # empty so rotation restarts from the top of the catalog order.
+                logger.info("product_hunter_rotation_exhausted_reset visited=%d active=%d",
+                            len(seen), len(ranked))
+                history = []
+                cycle = 1
+                rotation_reset = True
                 available = ranked
+                reset_tmp = path.with_suffix(path.suffix + ".tmp")
+                reset_tmp.write_text("[]", encoding="utf-8")
+                os.replace(reset_tmp, path)
             selected = available[0]
             product_id = str(selected["product"].get("id") or "")
             history.append({
@@ -748,7 +763,7 @@ def select_next_active_product(
         "status": "selected", "product": selected["product"], "score": selected["score"],
         "trend_matches": selected["trend_matches"], "candidate_count": len(ranked),
         "trend_source": "free_google_trends_rss_de_at",
-        "rotation": {"cycle": cycle, "remaining_in_cycle": max(0, len(active_ids - {str(row.get("product_id") or "") for row in history if int(row.get("rotation_cycle", cycle)) == cycle})),
+        "rotation": {"cycle": cycle, "reset": rotation_reset, "remaining_in_cycle": max(0, len(active_ids - {str(row.get("product_id") or "") for row in history if int(row.get("rotation_cycle", cycle)) == cycle})),
                     "history_path": str(path)},
     }
 
