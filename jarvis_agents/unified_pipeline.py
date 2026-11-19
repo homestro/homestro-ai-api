@@ -24,8 +24,8 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from agents import creative_seo, product_hunter, tiktok_publisher, youtube_publisher
-from jarvis_agents import higgsfield_video_agent
+from agents import copy_compliance, creative_seo, product_hunter, tiktok_publisher, youtube_publisher
+from jarvis_agents import ai_video_generator
 
 
 MAX_DOWNLOAD = 60 * 1024 * 1024
@@ -137,25 +137,18 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
             continue
 
     higgsfield_result: dict[str, Any] | None = None
-    if not video_paths and higgsfield_video_agent.is_enabled(os.environ):
-        image_urls = product.get("image_urls") or []
-        if image_urls:
-            try:
-                generated = higgsfield_video_agent.generate_video(
-                    image_url=str(image_urls[0]),
-                    prompt=higgsfield_video_agent.build_story_prompt(product, hook),
-                    output_path=work / "higgsfield-source.mp4",
-                    env=os.environ,
-                )
-                higgsfield_result = generated
-                if generated.get("status") == "completed":
-                    generated_path = Path(str(generated.get("path") or ""))
-                    if generated_path.is_file() and generated_path.stat().st_size > 0:
-                        video_paths.append(generated_path)
-            except Exception as error:
-                higgsfield_result = {"status": "fallback", "reason": type(error).__name__}
-        else:
-            higgsfield_result = {"status": "fallback", "reason": "SHOPIFY_PRODUCT_IMAGE_MISSING"}
+    if not video_paths:
+        try:
+            generated = ai_video_generator.generate_video(
+                product, hook, work / "higgsfield-source.mp4", env=os.environ,
+            )
+            higgsfield_result = generated
+            if generated.get("status") == "completed":
+                generated_path = Path(str(generated.get("path") or ""))
+                if generated_path.is_file() and generated_path.stat().st_size > 0:
+                    video_paths.append(generated_path)
+        except Exception as error:
+            higgsfield_result = {"status": "fallback", "reason": type(error).__name__}
 
     if video_paths:
         source = video_paths[0]
@@ -313,20 +306,29 @@ def _human_product_name(product: dict[str, Any]) -> str:
 
 def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) -> tuple[str, str, str]:
     if str(product.get("handle") or "") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5":
-        headline = "135 Sprachen. Kein Handy im Gesicht."
-        hook = "Gate B14. Flug gestrichen. Was jetzt?"
-        price_text = f"für {min(prices):.2f}".replace(".", ",") + " € " if prices else ""
-        caption = (
-            "Gate B14. Dein Flug ist gestrichen. Die Durchsage kommt in einer Sprache, die du nicht verstehst. "
-            "Du atmest kurz durch und setzt den Erazer XP6 ein, um die nächsten Schritte besser einzuordnen. "
-            "Kein Handy, das du fremden Menschen vors Gesicht halten musst.\n\n"
-            f"135 Sprachen. Kabellos. Erazer XP6 {price_text}bei Homestro entdecken.\n\n{product_url}"
-        )
-        return headline, hook, caption
+        if copy_compliance.supports_135_languages(product):
+            headline = "135 Sprachen. Kein Handy im Gesicht."
+            hook = "Gate B14. Flug gestrichen. Was jetzt?"
+            price_text = f"für {min(prices):.2f}".replace(".", ",") + " € " if prices else ""
+            caption = (
+                "Gate B14. Dein Flug ist gestrichen. Die Durchsage kommt in einer Sprache, die du nicht verstehst. "
+                "Du atmest kurz durch und setzt den Erazer XP6 ein, um die nächsten Schritte besser einzuordnen. "
+                "Kein Handy, das du fremden Menschen vors Gesicht halten musst.\n\n"
+                f"135 Sprachen. Kabellos. Erazer XP6 {price_text}bei Homestro entdecken.\n\n{product_url}"
+            )
+        else:
+            headline = "Kabelloser Klang für unterwegs."
+            hook = "Musik oder Telefonat – was begleitet dich heute?"
+            caption = (
+                "Die Erazer XP6 verbinden Bluetooth 5.4 mit dynamischen 13-mm-Treibern und einem integrierten "
+                f"Mikrofon für Musik und Telefonate im Alltag. Details bei Homestro ansehen.\n\n{product_url}"
+            )
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     name = _human_product_name(product)
     product_text = " ".join(str(product.get(key) or "") for key in
-                            ("title", "productType", "descriptionHtml"))
+                            ("title", "productType", "descriptionHtml", "description", "specifications", "specs"))
     product_text += " " + " ".join(str(tag) for tag in (product.get("tags") or []))
+    product_text += " " + " ".join(str(variant) for variant in (product.get("variants") or []))
     if re.search(r"handyhalter|smartphone.*ständer|phone.?holder|multi.?winkel desktop.?ständer",
                   str(product.get("title") or ""), re.IGNORECASE):
         headline = "Freie Hände. Der passende Blickwinkel."
@@ -337,7 +339,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "oder Laptop in verschiedene Blickwinkel an. Danach lässt er sich kompakt zusammenlegen "
             f"und mitnehmen. Details bei Homestro ansehen.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"smartphone.{0,12}halter|rückseitenhalter|saugmatte|phone.?mount", product_text, re.IGNORECASE):
         headline = "Freie Hände. Dein Handy im Blick."
         hook = "Wohin mit dem Handy beim nächsten Videoanruf?"
@@ -347,7 +349,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Prüfe vor dem Verwenden, ob Untergrund und Hülle dafür geeignet sind. "
             f"Link in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"kopfbande? für hunde|hunde.?kopfband|dog.?head.?cover", product_text, re.IGNORECASE):
         headline = "Mehr Ruhe für ungewohnte Hundemomente."
         hook = "Bad, Reise oder Lärm – wird dein Hund dann unruhig?"
@@ -358,7 +360,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Es ist kein Medizinprodukt und ersetzt keine tierärztliche Beratung. "
             f"Details bei Homestro ansehen.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"satin.?haube|sleep.?cap|bonnet", product_text, re.IGNORECASE):
         headline = "Morgens weniger Zeit mit Entwirren?"
         hook = "Nächtliches Haar-Chaos bei langen Haaren?"
@@ -369,7 +371,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Haar beschrieben. Schau dir Materialangaben und Varianten bei Homestro an und entscheide, "
             f"ob die Haube zu deiner Routine passt.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"ninja.*stiftehalter|stiftehalter|stifthalter|pen.?holder", product_text, re.IGNORECASE):
         headline = "Nie wieder den Stift suchen."
         hook = "Du willst etwas notieren – aber wo ist schon wieder der Stift?"
@@ -379,7 +381,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Wähle die Ausführung, die zu dir passt – zum Beispiel mit oder ohne Stift oder mit zusätzlichem "
             f"Sockel. Jetzt bei Homestro entdecken.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE):
         headline = "Vor dem Training passend einstellen."
         hook = "Gleich geht's los – sitzt der Gürtel schon bequem?"
@@ -390,7 +392,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "und leg den Gürtel bei Unwohlsein ab. Schau dir die Details bei Homestro an und entscheide, "
             f"ob er zu deinem Training passt.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE):
         headline = "Deine Nail-Art-Idee beginnt hier."
         hook = "Dotting, Linien oder feine Details – was probierst du zuerst?"
@@ -401,7 +403,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Schritt für Schritt aus.\n\n"
             f"Jetzt bei Homestro ansehen.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"tierhaar|fell.?entfern|haar.?entfern|haare auf sofa", product_text, re.IGNORECASE):
         headline = "Weniger Fell auf Sofa und Kleidung."
         hook = "Überall Haare – und du willst endlich Ordnung?"
@@ -410,7 +412,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "zu entfernen – schau dir die Produktdetails an und entscheide, ob es zu deinem Zuhause passt.\n\n"
             f"Bei Homestro entdecken.\n\n{product_url}"
         )
-        return headline, hook, caption
+        return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     details = html.unescape(re.sub(r"<[^>]+>", " ", str(product.get("descriptionHtml") or "")))
     details = re.sub(r"\s+", " ", details).strip()
     fact = re.split(r"(?<=[.!?])\s+", details, maxsplit=1)[0][:180].strip()
@@ -418,7 +420,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     hook = f"Was macht {name} im Alltag leichter?"
     caption = f"{hook} {fact}" if fact else f"Ein genauerer Blick auf {name}: Wofür ist dieses Produkt gedacht?"
     caption += f"\n\nLink in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
-    return headline, hook, caption
+    return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
@@ -465,6 +467,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         "price": min(prices) if prices else None, "currency": "EUR",
         "availability": "in_stock", "product_type": product.get("productType") or "",
         "tags": product.get("tags") or [], "facts": [],
+        "descriptionHtml": product.get("descriptionHtml") or "",
+        "variants": product.get("variants") or [],
+        "specifications": product.get("specifications") or product.get("specs") or [],
     }
     creative_result = creative_seo.prepare([feed], limit=1)
     drafts = creative_result.get("drafts") or []
@@ -483,7 +488,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         video = _render_video(product, image_path, video_path, work, hook)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    caption = story_caption
+    caption = copy_compliance.sanitize_text(story_caption, product=product)
     hashtags = (["#Homestro", "#ErazerXP6", "#Kopfhoerer", "#Unterwegs", "#ReiseTipps"]
                 if product.get("handle") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
                 else ["#Homestro", "#Training", "#Jogging", "#Fitness", "#Workout"]
@@ -500,6 +505,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 else ["#Homestro", "#Schreibtisch", "#HomeOffice", "#Ordnung", "#Geschenkidee"]
                 if re.search(r"stifte?halter|stifthalter|pen.?holder|schreibtisch|ninja", product_text, re.IGNORECASE)
                 else ["#Homestro", "#Produktentdecken", "#Alltagsideen", "#OnlineShop"])
+    hashtags = copy_compliance.normalize_hashtags(hashtags)
     creative = {
         "status": "prepared", "product_id": product_id, "seo": draft.get("seo"),
         "geo": draft.get("geo"), "caption": caption, "hashtags": hashtags,

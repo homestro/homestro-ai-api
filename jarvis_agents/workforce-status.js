@@ -24,7 +24,6 @@ const runHistoryStore = createRunHistoryStore(historyPath);
 let autopilotScheduler = null;
 let liveExecutor = null;
 let workforceApiKey = null;
-let paidAdsPauseStatus = null;
 let metaConnectionBridge = null;
 const unifiedAssetsDir = process.env.JARVIS_UNIFIED_ASSETS_DIR || '/data/jarvis-unified/assets';
 const unifiedPublicOrigin = String(process.env.JARVIS_PUBLIC_ORIGIN || 'https://homestro-ai-api-fixed-current-production.up.railway.app').replace(/\/$/, '');
@@ -447,7 +446,9 @@ function workforceStatus(env = process.env, runtime = {}) {
     },
     safety: {
       dryRun: String(env.AUTONOMOUS_LIVE_MODE || '').toLowerCase() !== 'true', newAdWrites: lastCycle?.external_writes_performed === true, adSpendEUR: lastCycle?.ad_spend_eur || 0, paidVideoGenerationByJarvis: false,
-      paidAdsEnabled: String(env.PAID_ADS_ENABLED || '').toLowerCase() === 'true', maxDailyAdSpendEUR: Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0), writeLockEnabled: String(env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true' || Number(env.MAX_DAILY_AD_SPEND_EUR ?? 0) <= 0, zeroSpendLock: Boolean(runtime.paid_ads_status?.zeroSpendLock), existingCampaigns: runtime.paid_ads_status?.zeroSpendLock ? 'paused' : 'pause_not_confirmed', paidAdsPauseStatus: runtime.paid_ads_status || null, externalWhatsAppDelivery: false,
+      paidAdsEnabled: false, maxDailyAdSpendEUR: 0, writeLockEnabled: true, zeroSpendLock: true,
+      existingCampaigns: 'read_only_untouched', paidAdsPauseStatus: {mode: 'read_only', campaignMutationPerformed: false},
+      externalWhatsAppDelivery: false,
       runtimeSwitches: {
         DRY_RUN: asBoolean(env.DRY_RUN),
         PILOT_AD_DRY_RUN: asBoolean(env.PILOT_AD_DRY_RUN),
@@ -479,9 +480,7 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
     });
     const enabled = autopilotScheduler.start();
     console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
-    if (metaConnection && String(process.env.PAID_ADS_ENABLED || '').toLowerCase() !== 'true') {
-      void liveExecutor.pauseAllActiveCampaigns().then(result => { paidAdsPauseStatus=result; }).catch(error => { paidAdsPauseStatus={zeroSpendLock:false,pauseBlocked:String(error?.message||'META_PAUSE_FAILED').slice(0,120),providerCode:error?.providerCode||null,providerSubcode:error?.providerSubcode||null,providerMessage:String(error?.providerMessage||'').slice(0,240),providerUserMessage:String(error?.providerUserMessage||'').slice(0,240),fbtraceId:error?.fbtraceId||null}; console.error('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_FAILED '+JSON.stringify(paidAdsPauseStatus)); });
-    }
+    // Meta Ads remain strictly read-only. Startup only performs the GET-only preflight below.
     if (metaConnection && shopifyGraphQL) {
       const timer = setTimeout(() => {
         void liveExecutor.preflight().catch(error => console.warn('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT_FAILED ' + JSON.stringify({reason:error?.message||String(error),evidence:error?.details||null})));
@@ -496,14 +495,14 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
       const scheduler = autopilotScheduler?.status() || {};
       return res.status(200).json(workforceStatus(process.env, {
         ...scheduler,
-        paid_ads_status: paidAdsPauseStatus,
+        paid_ads_status: {mode: 'read_only', campaignMutationPerformed: false},
         run_history,
       }));
     } catch (error) {
       return res.status(200).json(workforceStatus(process.env, {
         autopilot_active: Boolean(autopilotScheduler?.status().autopilot_active),
         next_scheduled_run_at: autopilotScheduler?.status().next_scheduled_run_at || null,
-        paid_ads_status: paidAdsPauseStatus,
+        paid_ads_status: {mode: 'read_only', campaignMutationPerformed: false},
         run_history: [],
         history_error: error?.message || 'HISTORY_UNAVAILABLE',
       }));

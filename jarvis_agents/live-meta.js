@@ -3,7 +3,7 @@
 const {createHmac}=require('node:crypto');
 const ACCOUNT_ID='act_918741266442442';
 const TARGET_CAMPAIGN_ID='120254762990220274';
-const DAILY_CAP_EUR=Number.isFinite(Number(process.env.MAX_DAILY_AD_SPEND_EUR))?Number(process.env.MAX_DAILY_AD_SPEND_EUR):10;
+const DAILY_CAP_EUR=Number.isFinite(Number(process.env.MAX_DAILY_AD_SPEND_EUR))?Number(process.env.MAX_DAILY_AD_SPEND_EUR):0;
 const START_BUDGET_EUR=5;
 const CAMPAIGN_NAME='Homestro AI Autopilot - Erazer XP6';
 const PRODUCT_HANDLE='lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5';
@@ -255,29 +255,6 @@ class LiveMetaExecutor{
       return {status:'ACTIVE',campaignId:ids.campaignId,adsetId:ids.adsetId,adId:ids.adId,dailyBudgetEur:START_BUDGET_EUR,targeting:{countries:['DE','AT'],ageMin:20,ageMax:60},creativeSource:'existing_shopify_cdn_video',videoGenerated:false,budgetGuard:finalGate,externalWritesPerformed:true};
     }catch(e){await this.pauseCreated(token,ids);return {status:'blocked',reason:String(e.message||'META_CAMPAIGN_CREATE_FAILED').slice(0,100),providerCode:e.providerCode||null,providerSubcode:e.providerSubcode||null,providerMessage:String(e.providerMessage||'').slice(0,300)||null,providerUserMessage:String(e.providerUserMessage||'').slice(0,300)||null,providerUserTitle:String(e.providerUserTitle||'').slice(0,200)||null,fbtraceId:e.fbtraceId||null,createdIds:ids,externalWritesPerformed:Object.values(ids).some(Boolean)};}
   }
-  async pauseAllActiveCampaigns(){
-    const token=await this.token();
-    const account=await this.graph(ACCOUNT_ID,token,{params:{fields:'id,account_status,disable_reason'}});
-    const before=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status,daily_budget'});
-    const active=before.filter(c=>String(c.status||'').toUpperCase()==='ACTIVE'||String(c.effective_status||'').toUpperCase()==='ACTIVE');
-    if(Number(account.account_status)!==1){
-      const result={accountId:ACCOUNT_ID,accountStatus:Number(account.account_status),disableReason:account.disable_reason||null,activeCampaigns:active.map(c=>({id:String(c.id),name:String(c.name||''),status:String(c.status||''),effectiveStatus:String(c.effective_status||''),dailyBudget:String(c.daily_budget||'')})),paused:[],pauseBlocked:'META_AD_ACCOUNT_STATUS_BLOCKS_WRITES',zeroSpendLock:active.length===0};
-      this.logger.error?.('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_STATUS '+JSON.stringify(result));
-      return result;
-    }
-    const ownedId=String(this.env.META_AUTOPILOT_CAMPAIGN_ID||'');
-    active.sort((a,b)=>(String(b.id)===ownedId?1:0)-(String(a.id)===ownedId?1:0));
-    const paused=[],failed=[];
-    for(const campaign of active){
-      try{await this.graph(String(campaign.id),token,{method:'POST',body:{status:'PAUSED'}});paused.push(String(campaign.id));}
-      catch(error){failed.push({id:String(campaign.id),code:error?.providerCode||null,subcode:error?.providerSubcode||null,message:String(error?.providerMessage||error?.message||'META_PAUSE_FAILED').slice(0,180),userMessage:String(error?.providerUserMessage||'').slice(0,180)});}
-    }
-    const after=await this.pages(`${ACCOUNT_ID}/campaigns`,token,{fields:'id,name,status,effective_status'});
-    const stillActive=after.filter(c=>String(c.status||'').toUpperCase()==='ACTIVE'||String(c.effective_status||'').toUpperCase()==='ACTIVE').map(c=>({id:String(c.id),name:String(c.name||''),status:String(c.status||''),effectiveStatus:String(c.effective_status||'')}));
-    const result={accountId:ACCOUNT_ID,accountStatus:Number(account.account_status),disableReason:account.disable_reason||null,activeBefore:active.map(c=>String(c.id)),paused,failed,activeAfter:stillActive,zeroSpendLock:stillActive.length===0};
-    this.logger.info?.('[jarvis-autopilot] PAID_ADS_ZERO_SPEND_LOCK_STATUS '+JSON.stringify(result));
-    return result;
-  }
   async inspect(){
     const token=await this.token();
     const [evidence,snapshot,product]=await Promise.all([this.archivedCampaignEvidence(token),this.accountSnapshot(token),this.product()]);
@@ -286,20 +263,7 @@ class LiveMetaExecutor{
   }
   async preflight(){const token=await this.token();const [evidence,snapshot,product]=await Promise.all([this.archivedCampaignEvidence(token),this.accountSnapshot(token),this.product()]);const result={status:'checked',evidence,snapshot:{accountId:snapshot.accountId,currency:snapshot.currency,timezone:snapshot.timezone,spendTodayEur:snapshot.spendTodayEur,activeDailyBudgetsEur:snapshot.activeDailyBudgetsEur,activeCampaignCount:snapshot.campaigns.filter(x=>String(x.effective_status||x.status).toUpperCase()==='ACTIVE').length},product:{id:product.id,handle:product.handle,videoUrl:product.videoUrl},budgetGuard:accountBudgetDecision(snapshot)};this.logger.info?.('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT '+JSON.stringify(result));return result;}
   async runLiveCycle(){
-    if(String(this.env.PAID_ADS_ENABLED||'').toLowerCase()!=='true'||DAILY_CAP_EUR<=0)return {status:'blocked',reason:'PAID_ADS_ZERO_SPEND_LOCK',dryRun:false,externalWritesPerformed:false,adSpendEUR:0,capEur:DAILY_CAP_EUR};
-    if(String(this.env.AUTONOMOUS_LIVE_MODE||'').toLowerCase()!=='true')return {status:'blocked',reason:'AUTONOMOUS_LIVE_MODE_DISABLED',dryRun:true};
-    if(this.env.META_AD_ACCOUNT_ID!==ACCOUNT_ID)return {status:'blocked',reason:'META_AD_ACCOUNT_ID_MISMATCH',dryRun:true};
-    const token=await this.token();const [evidence,snapshot,product]=await Promise.all([this.archivedCampaignEvidence(token),this.accountSnapshot(token),this.product()]);
-    for(const [key,value] of [['META_PIXEL_ID',evidence.pixelId],['META_DSA_BENEFICIARY',evidence.dsaBeneficiary],['META_DSA_PAYOR',evidence.dsaPayor]]){
-      if(String(this.env[key]||'').trim()!==value)return {status:'blocked',reason:key+'_MISSING_OR_MISMATCH',dryRun:true,externalWritesPerformed:false};
-    }
-    const budgetGuard=accountBudgetDecision(snapshot);
-    if(!budgetGuard.allowed)return {status:'blocked',reason:budgetGuard.reason,budgetGuard,dryRun:false,externalWritesPerformed:false};
-    let seo=null,campaign=null;
-    try{seo=await this.syncSeo();}catch(e){return {status:'blocked',reason:String(e.message||'SHOPIFY_SEO_SYNC_FAILED').slice(0,100),dryRun:false,externalWritesPerformed:Boolean(e.externalWritesPerformed),adSpendEUR:0,seo:e.result||null,videoGenerationPerformed:false,handwerkIsolated:true};}
-    campaign=await this.createCampaign(token,product,null,snapshot,evidence);
-    const externalWritesPerformed=Boolean(seo.activeProductsOptimized||campaign.externalWritesPerformed);
-    return {status:campaign.status==='ACTIVE'||campaign.status==='existing_campaign'?'completed':'blocked',dryRun:false,externalWritesPerformed,adSpendEUR:0,meta:{accountId:ACCOUNT_ID,spendTodayEur:snapshot.spendTodayEur,activeDailyBudgetsEur:snapshot.activeDailyBudgetsEur,budgetGuard},seo,campaign,videoGenerationPerformed:false,handwerkIsolated:true};
+    return {status:'blocked',reason:'META_ADS_READ_ONLY',dryRun:true,externalWritesPerformed:false,adSpendEUR:0,capEur:0};
   }
 }
 

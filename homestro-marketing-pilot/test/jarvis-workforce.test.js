@@ -12,6 +12,8 @@ test('workforce status is read-only, reports the flagship lock and safe runtime 
   assert.equal(status.erazerPriority.referencePriceEUR,47.99);
   assert.equal(status.safety.adSpendEUR,0);
   assert.equal(status.safety.existingCampaigns,'read_only_untouched');
+  assert.equal(status.safety.paidAdsEnabled,false);
+  assert.equal(status.safety.paidAdsPauseStatus.campaignMutationPerformed,false);
   assert.equal(status.safety.runtimeSwitches.VIDEO_GENERATION_ENABLED,false);
   assert.equal(status.agents.length,6);
 

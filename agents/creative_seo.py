@@ -11,10 +11,12 @@ from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PILOT_SOURCE = REPOSITORY_ROOT / "homestro-marketing-pilot"
-if str(PILOT_SOURCE) not in sys.path:
-    sys.path.insert(0, str(PILOT_SOURCE))
+for import_path in (REPOSITORY_ROOT, PILOT_SOURCE):
+    if str(import_path) not in sys.path:
+        sys.path.insert(0, str(import_path))
 
 from adtech_pilot.content_engine import content_batch  # noqa: E402
+from agents.copy_compliance import sanitize_draft  # noqa: E402
 
 logger = logging.getLogger("homestro.agents.creative_seo")
 
@@ -22,8 +24,9 @@ logger = logging.getLogger("homestro.agents.creative_seo")
 def prepare(products: list[dict[str, Any]], *, limit: int = 10) -> dict[str, Any]:
     """Build local, reviewable drafts; make no provider, Shopify, or publishing calls."""
     batch = content_batch(products, limit=max(1, min(limit, 10)))
+    source_by_id = {str(product.get("id")): product for product in products if isinstance(product, dict)}
     drafts = [
-        {
+        sanitize_draft({
             "product_id": draft["product_id"],
             "product_url": draft["source_url"],
             "ad": draft["ad"],
@@ -36,7 +39,7 @@ def prepare(products: list[dict[str, Any]], *, limit: int = 10) -> dict[str, Any
             "storefront_mutations_performed": False,
             "publication_performed": False,
             "requires_refresh_before_publication": True,
-        }
+        }, source_by_id.get(str(draft["product_id"])))
         for draft in batch["drafts"]
     ]
     return {
