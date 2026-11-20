@@ -60,6 +60,7 @@ export class ZernioOrganic {
     if(job.status!=='publishing'||!job.approved_by||!job.approved_at||p?.adSpendEUR!==0||p.previewOnly===true)fail('APPROVAL_REQUIRED');
     if(!String(job.id||'').trim()||!String(p.caption||'').trim())fail('INVALID_POST');
     const isVideo=p.format==='reels';
+    if(job.channel==='tiktok'&&!isVideo)fail('TIKTOK_VIDEO_REQUIRED');
     if(!['reels','carousel','image'].includes(p.format))fail('INVALID_POST_FORMAT');
     const urls=isVideo?[p.videoURL]:p.imageURLs;
     const limit=job.channel==='pinterest'?1:35;
