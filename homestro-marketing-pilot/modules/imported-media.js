@@ -121,6 +121,8 @@ export class ImportedMediaCoordinator{
       await client.query('BEGIN');
       try{
         for(const channel of channels){
+          // TikTok must receive an actual MP4/Reels asset; never turn an image into a photo post.
+          if(channel==='tiktok'&&asset.format!=='reels')continue;
           const payload=importedPost(product,channel,asset,this.cfg,metadata,this.social?.providerCfg),revision=hash(payload);
           const table=['facebook','instagram'].includes(channel)?'marketing_posts':'marketing_social_posts';
           await client.query(`INSERT INTO ${table}(id,product_id,channel,revision,payload,status)

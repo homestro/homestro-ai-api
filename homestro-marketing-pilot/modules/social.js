@@ -31,6 +31,7 @@ export function prepareSocial(p,channel,cfg) {
   if(!eligible(p,cfg)||!p.localized||!p.asset||p.asset.previewOnly)fail('SOCIAL_SOURCE_NOT_READY');
   productURL(p.url);
   const result=compilePost(p,channel,p.asset,cfg);
+  if(channel==='tiktok'&&result.format!=='reels')fail('TIKTOK_VIDEO_REQUIRED');
   result.title=result.title.slice(0,channel==='pinterest'?100:result.format==='reels'?150:90);
   result.productURL=result.link;
   if(channel==='pinterest'){
@@ -199,6 +200,12 @@ export class SocialCoordinator {
       // A crash after submission must never make the job eligible for another write.
       await client.query(`UPDATE marketing_social_posts SET status='recovery_required',error_code='SOCIAL_INTERRUPTED'
         WHERE status='publishing'`);
+      // Retire old image-only TikTok drafts before the publisher can submit them.
+      const photoDrafts=await client.query(`UPDATE marketing_social_posts SET status='rejected',
+        error_code='TIKTOK_VIDEO_REQUIRED',updated_at=now()
+        WHERE channel='tiktok' AND status IN ('draft_queued','approved')
+          AND COALESCE(payload->>'format','')<>'reels' AND remote='{}'::jsonb RETURNING id`);
+      if(photoDrafts.rowCount)log('TIKTOK_PHOTO_DRAFTS_BLOCKED',{count:photoDrafts.rowCount});
       const pending=(await client.query(`SELECT * FROM marketing_social_posts WHERE status IN
         ('remote_pending','recovery_required') AND remote ? 'providerPostId' ORDER BY updated_at LIMIT 20`)).rows;
       for(const job of pending){
