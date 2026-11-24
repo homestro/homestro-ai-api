@@ -29,6 +29,7 @@ def prepare(products: list[dict[str, Any]], *, limit: int = 10) -> dict[str, Any
         sanitize_draft({
             "product_id": draft["product_id"],
             "product_url": draft["source_url"],
+            "product_description": draft["product_description"],
             "ad": draft["ad"],
             "seo": draft["seo"],
             "geo": draft["geo"],

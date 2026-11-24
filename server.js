@@ -799,6 +799,7 @@ function homestroNormalizeExternalItem(p,sourceType,keyword){
  return {id:id||('ext-'+crypto.createHash('sha1').update(sourceType+'|'+title+'|'+url).digest('hex').slice(0,16)),title,cost,sold,url,source_url:url,costEur:cost,euWarehouse:eu,warehouse,availability,source_type:sourceType,source_role:sourceType==='amazon-fba'?'market_reference':'supplier',context:JSON.stringify(p).slice(0,12000),evidence:eu?'Apify '+warehouseProof.evidence[0].path+' confirms '+warehouse:'no explicit ship-from/warehouse country evidence'};
 }
 async function homestroApifySourceSearch(keyword){
+ if(process.env.HOMESTRO_APIFY_ALLOW_PAID_RUNS!=='true')return [];
  const token=String(process.env.APIFY_API_TOKEN||'').trim();
  if(!token)return [];
  const out=[];
@@ -1447,12 +1448,12 @@ app.get('/catalog/candidates-public',(_q,res)=>res.json({ok:true,source:'AliExpr
 
 app.post('/api/catalog/process-existing',apiKey,async(req,res)=>{try{const selected=normalizeSelectedDraftId(req.body?.productId);const token=await getClientToken();const results=selected?[await processExistingDraftProduct(selected,token)]:await processExistingDrafts(Math.min(Number(req.body?.limit||10),10),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
 app.get('/api/catalog/process-existing-test',apiKey,async(req,res)=>{try{const token=await getClientToken();const results=await processExistingDrafts(Math.min(Number(req.query?.limit||5),5),token);res.json({ok:true,results});}catch(e){res.status(e.status||502).json({ok:false,error:e.message});}});
-app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
-app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+app.get('/health/catalog',(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED==='true' && process.env.HOMESTRO_APIFY_ALLOW_PAID_RUNS==='true',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+app.get('/api/catalog/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_CATALOG_ENABLED==='true' && process.env.HOMESTRO_APIFY_ALLOW_PAID_RUNS==='true',running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 app.post('/api/catalog/run',apiKey,async(_q,res)=>{if(catalogState.running)return res.json({ok:true,skipped:true});catalogRun();res.json({ok:true,started:true});});
-if(process.env.HOMESTRO_CATALOG_ENABLED!=='false'){setTimeout(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),10000);setInterval(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),catalogInterval());}
+if(process.env.HOMESTRO_CATALOG_ENABLED==='true' && process.env.HOMESTRO_APIFY_ALLOW_PAID_RUNS==='true'){setTimeout(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),10000);setInterval(()=>catalogRun().catch(e=>console.error('CATALOG AUTO FAILED',e.message)),catalogInterval());}
 
-app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'homestro-catalog-autopilot',enabled:process.env.HOMESTRO_CATALOG_ENABLED!=='false',intervalMs:catalogInterval(),running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
+app.get('/api/automation/status-public',(_q,res)=>res.json({ok:true,service:'homestro-catalog-autopilot',enabled:process.env.HOMESTRO_CATALOG_ENABLED==='true' && process.env.HOMESTRO_APIFY_ALLOW_PAID_RUNS==='true',intervalMs:catalogInterval(),running:catalogState.running,lastRun:catalogState.lastRun,lastError:catalogState.lastError,totals:{created:catalogState.created,rejected:catalogState.rejected,failed:catalogState.failed}}));
 
 
 app.get('/api/autopilot/status',apiKey,(_q,res)=>res.json({ok:true,enabled:process.env.HOMESTRO_AUTOPILOT_ENABLED!=='false',intervalMs:draftAutopilotInterval(),running:draftAutopilotState.running,lastRun:draftAutopilotState.lastRun,lastError:draftAutopilotState.lastError,processed:draftAutopilotState.processed,skipped:draftAutopilotState.skipped,pending:draftAutopilotState.pending,lastResult:draftAutopilotState.lastResult}));

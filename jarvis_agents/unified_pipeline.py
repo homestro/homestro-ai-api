@@ -304,6 +304,13 @@ def _human_product_name(product: dict[str, Any]) -> str:
     return (title or "Produkt bei Homestro")[:100]
 
 
+def _append_conversion_hooks(caption: str, product_url: str) -> str:
+    footer = f"PayPal & Klarna · 30 Tage Rückgaberecht · Jetzt auf homestro.de entdecken: {product_url}"
+    if "PayPal & Klarna" in caption and "30 Tage Rückgaberecht" in caption and "homestro.de" in caption:
+        return caption
+    return caption.rstrip() + "\n\n" + footer
+
+
 def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) -> tuple[str, str, str]:
     if str(product.get("handle") or "") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5":
         if copy_compliance.supports_135_languages(product):
@@ -323,6 +330,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
                 "Die Erazer XP6 verbinden Bluetooth 5.4 mit dynamischen 13-mm-Treibern und einem integrierten "
                 f"Mikrofon für Musik und Telefonate im Alltag. Details bei Homestro ansehen.\n\n{product_url}"
             )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     name = _human_product_name(product)
     product_text = " ".join(str(product.get(key) or "") for key in
@@ -339,6 +347,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "oder Laptop in verschiedene Blickwinkel an. Danach lässt er sich kompakt zusammenlegen "
             f"und mitnehmen. Details bei Homestro ansehen.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"smartphone.{0,12}halter|rückseitenhalter|saugmatte|phone.?mount", product_text, re.IGNORECASE):
         headline = "Freie Hände. Dein Handy im Blick."
@@ -349,6 +358,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Prüfe vor dem Verwenden, ob Untergrund und Hülle dafür geeignet sind. "
             f"Link in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"kopfbande? für hunde|hunde.?kopfband|dog.?head.?cover", product_text, re.IGNORECASE):
         headline = "Mehr Ruhe für ungewohnte Hundemomente."
@@ -360,6 +370,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Es ist kein Medizinprodukt und ersetzt keine tierärztliche Beratung. "
             f"Details bei Homestro ansehen.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"satin.?haube|sleep.?cap|bonnet", product_text, re.IGNORECASE):
         headline = "Morgens weniger Zeit mit Entwirren?"
@@ -371,6 +382,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Haar beschrieben. Schau dir Materialangaben und Varianten bei Homestro an und entscheide, "
             f"ob die Haube zu deiner Routine passt.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"ninja.*stiftehalter|stiftehalter|stifthalter|pen.?holder", product_text, re.IGNORECASE):
         headline = "Nie wieder den Stift suchen."
@@ -381,6 +393,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Wähle die Ausführung, die zu dir passt – zum Beispiel mit oder ohne Stift oder mit zusätzlichem "
             f"Sockel. Jetzt bei Homestro entdecken.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"schwitzgürtel|waist.?trimmer|taillengürtel", product_text, re.IGNORECASE):
         headline = "Vor dem Training passend einstellen."
@@ -392,6 +405,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "und leg den Gürtel bei Unwohlsein ab. Schau dir die Details bei Homestro an und entscheide, "
             f"ob er zu deinem Training passt.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"nagel|nail.?art|manik", product_text, re.IGNORECASE):
         headline = "Deine Nail-Art-Idee beginnt hier."
@@ -403,6 +417,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "Schritt für Schritt aus.\n\n"
             f"Jetzt bei Homestro ansehen.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     if re.search(r"tierhaar|fell.?entfern|haar.?entfern|haare auf sofa", product_text, re.IGNORECASE):
         headline = "Weniger Fell auf Sofa und Kleidung."
@@ -412,6 +427,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             "zu entfernen – schau dir die Produktdetails an und entscheide, ob es zu deinem Zuhause passt.\n\n"
             f"Bei Homestro entdecken.\n\n{product_url}"
         )
+        caption = _append_conversion_hooks(caption, product_url)
         return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
     details = html.unescape(re.sub(r"<[^>]+>", " ", str(product.get("descriptionHtml") or "")))
     details = re.sub(r"\s+", " ", details).strip()
@@ -420,6 +436,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     hook = f"Was macht {name} im Alltag leichter?"
     caption = f"{hook} {fact}" if fact else f"Ein genauerer Blick auf {name}: Wofür ist dieses Produkt gedacht?"
     caption += f"\n\nLink in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
+    caption = _append_conversion_hooks(caption, product_url)
     return tuple(copy_compliance.sanitize_text(value, product=product) for value in (headline, hook, caption))
 
 

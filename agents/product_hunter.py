@@ -357,6 +357,8 @@ async def _run_apify_actor(
     source: str, products: list[dict[str, Any]], env: dict[str, str]
 ) -> dict[str, Any]:
     """Run a configured read-only trend actor; actor-specific input is optional JSON."""
+    if env.get("HOMESTRO_APIFY_ALLOW_PAID_RUNS", "false").strip().lower() != "true":
+        return {"status": "skipped", "reason": "HOMESTRO_APIFY_PAID_RUNS_DISABLED", "matched_products": [], "signals": []}
     token = (env.get("APIFY_API_TOKEN") or "").strip()
     actor_id = (env.get(f"APIFY_{source.upper()}_TRENDS_ACTOR_ID") or "").strip()
     if not token:
@@ -614,13 +616,37 @@ async def run_once(env: dict[str, str] | None = None) -> dict[str, Any]:
 
 
 
+def _proven_ebay_winner_index() -> dict[str, dict[str, Any]]:
+    """Load the audited, explicit Shopify mapping for historical German eBay winners."""
+    path = Path(__file__).with_name("proven_ebay_winners.json")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.error("product_hunter_proven_ebay_winners_manifest_unavailable")
+        return {}
+    winners = data.get("winners") if isinstance(data, dict) else None
+    index: dict[str, dict[str, Any]] = {}
+    for winner in winners if isinstance(winners, list) else []:
+        if not isinstance(winner, dict):
+            continue
+        for value in (winner.get("shopify_product_ids") or []) + (winner.get("shopify_handles") or []):
+            key = str(value).strip()
+            if key:
+                index[key] = winner
+    return index
+
+
 def _rank_active_shopify_products(
     products: list[dict[str, Any]], trends: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     trend_rows = [row for row in trends if isinstance(row, dict)]
+    winner_index = _proven_ebay_winner_index()
     ranked: list[dict[str, Any]] = []
     for raw in products:
         if not isinstance(raw, dict) or str(raw.get("status", "")).upper() != "ACTIVE":
+            continue
+        winner = winner_index.get(str(raw.get("id") or "")) or winner_index.get(str(raw.get("handle") or ""))
+        if winner is None:
             continue
         # Active Shopify products remain eligible for dropshipping even when
         # inventory tracking is disabled or Shopify reports zero local stock.
@@ -645,7 +671,10 @@ def _rank_active_shopify_products(
         # active dropshipping products with untracked/zero local inventory.
         score = (2000 if flagship else 0) + sum(m["overlap"] * 25 for m in matches)
         ranked.append({"product": raw, "score": score, "trend_matches": matches[:5],
-                       "available_variants": len(available)})
+                       "available_variants": len(available),
+                       "proven_ebay_units": int(winner.get("units") or 0),
+                       "proven_ebay_orders": int(winner.get("orders") or 0),
+                       "proven_ebay_rank": int(winner.get("rank") or 0)})
     ranked.sort(key=lambda row: (-row["score"], str(row["product"].get("handle") or "")))
     return ranked
 
@@ -656,7 +685,7 @@ def select_from_shopify_catalog(
     """Return the strongest eligible active product without writing or selecting paid trends."""
     ranked = _rank_active_shopify_products(products, trends)
     if not ranked:
-        return {"status": "blocked", "reason": "NO_ACTIVE_IN_STOCK_SHOPIFY_PRODUCTS",
+        return {"status": "blocked", "reason": "NO_ACTIVE_PROVEN_EBAY_WINNERS_MAPPED",
                 "product": None, "trend_source": "free_google_trends_rss_de_at"}
     first = ranked[0]
     return {"status": "selected", "product": first["product"], "score": first["score"],
@@ -700,7 +729,7 @@ def select_next_active_product(
     """Pick the next eligible catalog item in a durable round-robin rotation."""
     ranked = _rank_active_shopify_products(products, trends)
     if not ranked:
-        return {"status": "blocked", "reason": "NO_ACTIVE_IN_STOCK_SHOPIFY_PRODUCTS",
+        return {"status": "blocked", "reason": "NO_ACTIVE_PROVEN_EBAY_WINNERS_MAPPED",
                 "product": None, "trend_source": "free_google_trends_rss_de_at"}
     path = Path(history_path)
     path.parent.mkdir(parents=True, exist_ok=True)

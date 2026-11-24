@@ -1,0 +1,105 @@
+{
+  "snapshot_date": "2026-11-24",
+  "source": "Shopify Admin API historical orders, Marketplace Connect eBay/eBay Germany attribution",
+  "filter": "paid, non-cancelled orders shipping/billing to DE",
+  "orders_scanned": 284,
+  "eligible_german_ebay_orders": 234,
+  "product_identity": "grouped line-item listings where SKUs overlap; top 10 ties broken by order count then German title",
+  "active_catalog_mapping_verified": "Erazer XP6 only",
+  "winners": [
+    {
+      "rank": 1,
+      "title": "Air Wasserflasche mit Geschmack Trinkflasche mit Strohhalm, auslaufsicher & wiederverwendbar",
+      "units": 66,
+      "orders": 53,
+      "skus": 10,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 2,
+      "title": "Erazer XP6 Kopfhörer mit KI Übersetzung Wireless Headphones für ASMR, Büro & Reise",
+      "units": 36,
+      "orders": 35,
+      "skus": 2,
+      "shopify_product_ids": [
+        "gid://shopify/Product/16104466776446"
+      ],
+      "shopify_handles": [
+        "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
+      ]
+    },
+    {
+      "rank": 3,
+      "title": "Air Up Trinkflasche Wasser mit Geschmack ohne Zucker inkl. 5 Duft-Pods & Strohhalm",
+      "units": 10,
+      "orders": 10,
+      "skus": 3,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 4,
+      "title": "Sportliche 1L Trinkflasche – BPA-frei, mit rutschfestem Gummi-Griff",
+      "units": 7,
+      "orders": 7,
+      "skus": 6,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 5,
+      "title": "Vibrationsgürtel Bauchtrainer Abnehmen Elektrisch / Wärmetherapie",
+      "units": 7,
+      "orders": 7,
+      "skus": 1,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 6,
+      "title": "New York Yankees Baseball Cap – verstellbare Snapback, Unisex",
+      "units": 6,
+      "orders": 2,
+      "skus": 3,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 7,
+      "title": "DC Batman MAFEX Actionfigur Robert Pattinson Filmversion (15 cm)",
+      "units": 5,
+      "orders": 5,
+      "skus": 1,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 8,
+      "title": "Jabra Elite 4 Active – True Wireless Sport-Kopfhörer mit ANC",
+      "units": 5,
+      "orders": 5,
+      "skus": 1,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 9,
+      "title": "Soundcore P20i – Kabellose Bluetooth In-Ear Kopfhörer",
+      "units": 5,
+      "orders": 5,
+      "skus": 1,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    },
+    {
+      "rank": 10,
+      "title": "Xiaomi TWS M90 Kopfhörer – Wireless Bluetooth 5.3 Gaming & Sport Earbuds",
+      "units": 5,
+      "orders": 5,
+      "skus": 1,
+      "shopify_product_ids": [],
+      "shopify_handles": []
+    }
+  ]
+}

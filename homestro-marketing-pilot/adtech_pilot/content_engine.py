@@ -30,7 +30,8 @@ def product_draft(raw):
     parsed = urlsplit(product.link)
     # A canonical suggestion targets the product page, not campaign/variant parameters.
     canonical = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', ''))
-    description = f'{title} bei Homestro entdecken. Produktdetails, Varianten und den aktuellen Preis im Shop ansehen.'
+    sales_footer = f'PayPal & Klarna. 30 Tage Rückgaberecht. Jetzt auf homestro.de entdecken: {product.link}'
+    description = f'{title} bei Homestro. {sales_footer}'
     schema = {'@context': 'https://schema.org', '@type': 'Product', 'name': title,
               'url': product.link, 'image': [product.image_link],
               'offers': {'@type': 'Offer', 'url': product.link, 'priceCurrency': 'EUR',
@@ -38,14 +39,15 @@ def product_draft(raw):
     return {
         'product_id': product.id, 'brief_version': BRIEF['version'], 'brief_hash': BRIEF_HASH,
         'source': 'validated_shopify_feed', 'source_url': product.link, 'language': 'de',
+        'product_description': description,
         'product_name_language_verified': False,
-        'ad': {'primary_text': f'{title}: Details und aktuelle Preise bei Homestro entdecken.',
+        'ad': {'primary_text': f'{title}: PayPal & Klarna. 30 Tage Rückgaberecht. Jetzt auf homestro.de entdecken: {product.link}',
                'headline': 'Bei Homestro entdecken', 'call_to_action': 'SHOP_NOW'},
-        'social': {'text': f'{title} bei Homestro. Schau dir die Produktdetails und verfügbaren Varianten im Shop an.',
+        'social': {'text': f'{title} bei Homestro. PayPal & Klarna, 30 Tage Rückgaberecht. Jetzt auf homestro.de entdecken: {product.link}',
                    'destination': product.link, 'publication_status': 'draft'},
         'seo': {'title': (title[:45] + ' | Homestro'), 'meta_description': description[:155],
                 'h1': title, 'canonical_suggestion': canonical, 'publication_status': 'draft'},
-        'geo': {'answer': f'Wo finde ich {title}? Bei Homestro: {product.link}',
+        'geo': {'answer': f'Wo finde ich {title}? Bei Homestro mit PayPal & Klarna und 30 Tage Rückgaberecht: {product.link}',
                 'product_json_ld': schema, 'basis': 'explicit_product_name_price_currency_availability_and_own_url',
                 'ai_search_inclusion_verified': False, 'publication_status': 'draft'},
         'unsupported_claims_added': False, 'paid_generation_performed': False,
