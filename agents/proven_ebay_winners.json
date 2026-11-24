@@ -5,14 +5,25 @@
   "orders_scanned": 284,
   "eligible_german_ebay_orders": 234,
   "product_identity": "grouped line-item listings where SKUs overlap; top 10 ties broken by order count then German title",
-  "active_catalog_mapping_verified": "Erazer XP6 only",
+  "active_catalog_mapping_verified": "Erazer XP6 title/model plus handle match; historic eBay SKUs are not used as Shopify variant mappings",
   "winners": [
     {
       "rank": 1,
       "title": "Air Wasserflasche mit Geschmack Trinkflasche mit Strohhalm, auslaufsicher & wiederverwendbar",
       "units": 66,
       "orders": 53,
-      "skus": 10,
+      "skus": [
+        "e98bd5ca-13dd-429b-a869-ef2baf04c89f",
+        "0fa599dd-e549-4517-9ebf-404b40205221",
+        "67fd76e9-1caa-4553-8f17-808c1aa6d9ed",
+        "ee2d8332-ce75-4df9-a917-e32cb3a29491",
+        "6ea9a01c-23e8-4849-8a8d-4dab6bcdaaf6",
+        "d6af0715-a37a-41ef-a533-b8a252bb31e2",
+        "70efb7dc-75e0-42f5-8382-ad75c5919bb9",
+        "53e06497-85ce-454e-9153-7e2c371fccd8",
+        "484a00dc-6508-43ac-823d-8781881b7bf5",
+        "123cd20d-0961-4206-87b3-f14f4b0252b4"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
@@ -21,7 +32,10 @@
       "title": "Erazer XP6 Kopfhörer mit KI Übersetzung Wireless Headphones für ASMR, Büro & Reise",
       "units": 36,
       "orders": 35,
-      "skus": 2,
+      "skus": [
+        "d1a025bc-6ed8-4432-9293-fcf18ce19e64",
+        "e104782b-ac2a-4409-b756-a4e4435e940f"
+      ],
       "shopify_product_ids": [
         "gid://shopify/Product/16104466776446"
       ],
@@ -34,25 +48,39 @@
       "title": "Air Up Trinkflasche Wasser mit Geschmack ohne Zucker inkl. 5 Duft-Pods & Strohhalm",
       "units": 10,
       "orders": 10,
-      "skus": 3,
+      "skus": [
+        "82371688-c17d-4e83-a1b9-fb1c8d8f9079",
+        "7a3303d7-5a3a-4a15-b49a-84f82f909db5",
+        "B0DJRFJTY6"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
     {
       "rank": 4,
-      "title": "Sportliche 1L Trinkflasche – BPA-frei, mit rutschfestem Gummi-Griff",
-      "units": 7,
-      "orders": 7,
-      "skus": 6,
+      "title": "Vibrationsgürtel Bauchtrainer Abnehmen Elektrisch / Wärmetherapie",
+      "units": 9,
+      "orders": 9,
+      "skus": [
+        "087b1fa0-e0e2-4d74-b8ce-bfba9e6530b1",
+        "e078b950-7939-4751-9929-3b2657b7ac13"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
     {
       "rank": 5,
-      "title": "Vibrationsgürtel Bauchtrainer Abnehmen Elektrisch / Wärmetherapie",
+      "title": "Sportliche 1L Trinkflasche – BPA-frei, mit rutschfestem Gummi-Griff",
       "units": 7,
       "orders": 7,
-      "skus": 1,
+      "skus": [
+        "fbb52788-71e0-455a-8733-fefde7037c09",
+        "6a60af9a-e666-435d-8d54-c50164af04ab",
+        "69b6fca2-9f79-454b-8979-a376829a9d36",
+        "0d959c0e-3f9f-401c-80a8-732b705f880d",
+        "64ca4177-142e-4676-ab46-3aea5e3923d2",
+        "14520a4e-e444-4549-91ae-70188b8d92da"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
@@ -61,7 +89,11 @@
       "title": "New York Yankees Baseball Cap – verstellbare Snapback, Unisex",
       "units": 6,
       "orders": 2,
-      "skus": 3,
+      "skus": [
+        "14:29",
+        "14:200001438",
+        "14:193"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
@@ -70,7 +102,9 @@
       "title": "DC Batman MAFEX Actionfigur Robert Pattinson Filmversion (15 cm)",
       "units": 5,
       "orders": 5,
-      "skus": 1,
+      "skus": [
+        "9822cf16-d2ca-43c5-a24f-09db360bd3e2"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
@@ -79,7 +113,9 @@
       "title": "Jabra Elite 4 Active – True Wireless Sport-Kopfhörer mit ANC",
       "units": 5,
       "orders": 5,
-      "skus": 1,
+      "skus": [
+        "7c6b85e1-16ab-46ee-99ad-b8afa28117ba"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
@@ -88,7 +124,9 @@
       "title": "Soundcore P20i – Kabellose Bluetooth In-Ear Kopfhörer",
       "units": 5,
       "orders": 5,
-      "skus": 1,
+      "skus": [
+        "c5367e85-509e-42b2-aafb-c6c99cafc947"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     },
@@ -97,7 +135,9 @@
       "title": "Xiaomi TWS M90 Kopfhörer – Wireless Bluetooth 5.3 Gaming & Sport Earbuds",
       "units": 5,
       "orders": 5,
-      "skus": 1,
+      "skus": [
+        "c22b3032-5ada-41e2-861a-7bd62935bcff"
+      ],
       "shopify_product_ids": [],
       "shopify_handles": []
     }
