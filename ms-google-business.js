@@ -6,6 +6,7 @@ const COOKIE = '__Host-ms-google-business';
 const STATE_TABLE = 'ms_gbp_oauth_states';
 const CONNECTION_TABLE = 'ms_gbp_connections';
 const POSTS_TABLE = 'ms_gbp_posts';
+const DAILY_TABLE = 'ms_gbp_daily_cycles';
 
 function error(code, status = 503) { return Object.assign(new Error(code), { code, status }); }
 function sha(value) { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
@@ -73,6 +74,7 @@ class GoogleBusinessPublisher {
         CREATE TABLE IF NOT EXISTS ${CONNECTION_TABLE}(id text PRIMARY KEY,encrypted_credentials text NOT NULL,status text NOT NULL,location_name text,checked_at timestamptz,last_error text,updated_at timestamptz NOT NULL DEFAULT now());
         ALTER TABLE ${CONNECTION_TABLE} ADD COLUMN IF NOT EXISTS location_name text;
         CREATE TABLE IF NOT EXISTS ${POSTS_TABLE}(id uuid PRIMARY KEY,content_hash text NOT NULL UNIQUE,payload jsonb NOT NULL,status text NOT NULL CHECK(status IN ('queued','publishing','verification_pending','published','recovery_required','failed')),remote jsonb NOT NULL DEFAULT '{}',error_code text,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),published_at timestamptz);
+        CREATE TABLE IF NOT EXISTS ${DAILY_TABLE}(cycle_date date PRIMARY KEY,post_id uuid,status text NOT NULL,created_at timestamptz NOT NULL DEFAULT now());
         ALTER TABLE ${POSTS_TABLE} DROP CONSTRAINT IF EXISTS ms_gbp_posts_status_check;
         ALTER TABLE ${POSTS_TABLE} ADD CONSTRAINT ms_gbp_posts_status_check CHECK(status IN ('queued','publishing','verification_pending','published','recovery_required','failed'));`);
     })().catch(() => { this.initialized = null; throw error('GOOGLE_BUSINESS_DATABASE_UNAVAILABLE'); });
@@ -189,6 +191,58 @@ class GoogleBusinessPublisher {
     if (!result.rows[0]) throw error('GOOGLE_DUPLICATE_POST', 409);
     return { queued: true, id: result.rows[0].id, adSpendEUR: 0 };
   }
+  async maybeQueueDailyPost(cfg, location) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23'
+    }).formatToParts(new Date(this.now())).filter(x => x.type !== 'literal').map(x => [x.type, x.value]));
+    const cycleDate = `${parts.year}-${parts.month}-${parts.day}`;
+    if (Number(parts.hour) < 10) return { skipped: 'BEFORE_DAILY_POST_TIME' };
+
+    const history = await this.pool.query(`SELECT cycle_date FROM ${DAILY_TABLE} LIMIT 1`);
+    if (!history.rows.length) {
+      await this.pool.query(`INSERT INTO ${DAILY_TABLE}(cycle_date,status) VALUES($1,'activation_day_skipped') ON CONFLICT(cycle_date) DO NOTHING`, [cycleDate]);
+      return { skipped: 'ACTIVATION_DAY_SKIPPED' };
+    }
+    const done = await this.pool.query(`SELECT 1 FROM ${DAILY_TABLE} WHERE cycle_date=$1`, [cycleDate]);
+    if (done.rows.length) return { skipped: 'DAILY_CYCLE_ALREADY_RECORDED' };
+
+    const cap = await this.pool.query(`SELECT count(*)::int AS n FROM ${POSTS_TABLE} WHERE status IN ('publishing','verification_pending','recovery_required') OR (status='published' AND published_at>=now()-interval '24 hours')`);
+    if (Number(cap.rows[0]?.n || 0) >= cfg.maxDaily) return { skipped: 'DAILY_LIMIT' };
+
+    const services = [
+      'Streicharbeiten', 'Türen und Rahmen lackieren', 'Spachtelarbeiten', 'Schleifen und Vorbereitung der Flächen',
+      'Verputzarbeiten', 'Ausbesserungen aller Art', 'Tapezierarbeiten', 'Kleinreparaturen',
+      'Laminat und Vinyl verlegen', 'Sockelleisten montieren', 'Bodenreparaturen', 'Fliesenreparaturen',
+      'Silikonfugen erneuern', 'Möbelaufbau', 'Terrassenreinigung und Terrassenverlegung',
+      'Haus- und Wohnungsrenovierungen'
+    ];
+    const hooks = [
+      'Sie planen Arbeiten in Haus oder Wohnung?',
+      'Möchten Sie Ihre Räume auffrischen?',
+      'Steht eine Renovierung in Kempten und Umgebung an?',
+      'Sie möchten einzelne Bereiche Ihres Zuhauses erneuern?',
+      'Gute Planung ist der erste Schritt zu einem gepflegten Zuhause.',
+      'Sie suchen Unterstützung für Arbeiten rund ums Zuhause?',
+      'Manchmal machen gezielte Ausbesserungen den Unterschied.',
+      'Für Ihr Zuhause planen Sie die nächsten Renovierungsarbeiten?'
+    ];
+    const dateNumber = Math.floor(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day)) / 86400000);
+    const link = 'https://ms-handwerkservice.de/?utm_source=google&utm_medium=organic&utm_campaign=gbp_daily#leistungen';
+    for (let attempt = 0; attempt < services.length * hooks.length; attempt++) {
+      const service = services[(dateNumber + attempt) % services.length];
+      const hook = hooks[(Math.floor(dateNumber / services.length) + attempt) % hooks.length];
+      const text = `${hook} MS Handwerk & Service unterstützt Sie in Kempten und Umgebung bei ${service} und weiteren Arbeiten rund um Haus und Wohnung. Saubere und zuverlässige Arbeit, faire Preise, kurzfristige Termine möglich und kostenlose Besichtigung. Fragen Sie unverbindlich an: 0176 36336476.`;
+      try {
+        const queued = await this.queue({ service, city: 'Kempten', googleBusinessProfile: { text, link } });
+        const saved = await this.pool.query(`INSERT INTO ${DAILY_TABLE}(cycle_date,post_id,status) VALUES($1,$2,'queued') ON CONFLICT(cycle_date) DO NOTHING RETURNING post_id`, [cycleDate, queued.id]);
+        if (!saved.rows.length) return { skipped: 'DAILY_CYCLE_ALREADY_RECORDED' };
+        return { queued: true, id: queued.id, service, location, adSpendEUR: 0 };
+      } catch (e) {
+        if (e.code !== 'GOOGLE_DUPLICATE_POST') throw e;
+      }
+    }
+    return { skipped: 'DAILY_COPY_VARIANTS_EXHAUSTED' };
+  }
   async tick() {
     const cfg = await this.ready();
     if (!cfg.publishingEnabled) return { skipped: 'AUTOPUBLISH_DISABLED' };
@@ -197,6 +251,8 @@ class GoogleBusinessPublisher {
     if (this.busy) return { skipped: 'WORKER_BUSY' };
     this.busy = true;
     try {
+      const dailyQueue = await this.maybeQueueDailyPost(cfg, location);
+      if (dailyQueue.queued) console.log('[ms-google-business] ' + JSON.stringify({ event: 'daily_post_queued', service: dailyQueue.service, adSpendEUR: 0 }));
       const client = await this.pool.connect(); let locked = false;
       try {
         locked = (await client.query('SELECT pg_try_advisory_lock(78123041) AS locked')).rows[0]?.locked;
