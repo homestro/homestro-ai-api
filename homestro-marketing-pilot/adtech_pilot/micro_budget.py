@@ -13,27 +13,15 @@ MAX_MICRO_DAILY_BUDGET_EUR = 5.0
 
 
 def live_ads_dry_run(env: Mapping[str, str] | None = None) -> bool:
-    """Require both live-ad kill switches to be explicitly set to false."""
-    values = os.environ if env is None else env
-    global_value = values.get("DRY_RUN", "true").strip().lower()
-    pilot_value = values.get("PILOT_AD_DRY_RUN", "true").strip().lower()
-    return global_value != "false" or pilot_value != "false"
+    """Keep paid advertising disabled; environment variables cannot unlock spend."""
+    del env
+    return True
 
 
 def configured_daily_budget_limit_eur(env: Mapping[str, str] | None = None) -> float:
-    """Read the daily cap; malformed values fail closed and the cap is €5."""
-    values = os.environ if env is None else env
-    raw_value = values.get(
-        "PILOT_AD_MAX_BUDGET_EUR",
-        values.get("MARKETING_BUDGET_LIMIT", "0"),
-    ).strip()
-    try:
-        amount = float(raw_value)
-    except (TypeError, ValueError):
-        return 0.0
-    if not math.isfinite(amount) or amount < 0:
-        return 0.0
-    return min(amount, MAX_MICRO_DAILY_BUDGET_EUR)
+    """Return the owner-requested hard cap of EUR 0.00."""
+    del env
+    return 0.0
 
 
 class MetaAccountReadiness(BaseModel):
