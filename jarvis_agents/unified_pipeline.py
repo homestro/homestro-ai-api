@@ -6,6 +6,7 @@ to existing Shopify video or the free gallery montage. Paid ads remain disabled.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import html
 import json
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -30,6 +32,159 @@ from jarvis_agents import ai_video_generator
 
 MAX_DOWNLOAD = 60 * 1024 * 1024
 ALLOWED_MEDIA_HOSTS = {"cdn.shopify.com", "cdn.shopifycdn.net"}
+HOOK_HISTORY_PATH = Path(os.getenv("JARVIS_USED_HOOKS_PATH", "/data/jarvis-used-hooks.json"))
+HOOK_CTA = "Jetzt entdecken auf homestro.de – bequem mit PayPal & Klarna."
+HOOK_HISTORY_LIMIT = 20000
+
+
+def _normalise_hook(value: str) -> str:
+    return re.sub(r"[^a-z0-9äöüß]+", " ", str(value or "").casefold()).strip()
+
+
+def _read_hook_history(path: Path = HOOK_HISTORY_PATH) -> list[dict[str, Any]] | None:
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
+        try:
+            if not path.exists():
+                return []
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("events"), list):
+                return None
+            if any(not isinstance(row, dict) for row in value["events"]):
+                return None
+            return value["events"]
+        except (OSError, ValueError, TypeError):
+            return None
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _write_hook_event(event: dict[str, Any], path: Path = HOOK_HISTORY_PATH, *, reserve: bool = False) -> bool:
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            state = {"version": 1, "events": []}
+            if path.exists():
+                state = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(state, dict) or state.get("version") != 1 or not isinstance(state.get("events"), list):
+                    return False
+            rows = state["events"]
+            if reserve and any(
+                isinstance(row, dict) and (
+                    row.get("hook_sha256") == event.get("hook_sha256")
+                    or row.get("caption_sha256") == event.get("caption_sha256")
+                ) for row in rows
+            ):
+                return False
+            existing = next((row for row in rows if isinstance(row, dict) and row.get("event_id") == event.get("event_id")), None)
+            if existing:
+                existing.update(event)
+            else:
+                rows.append(event)
+            state["events"] = rows[-HOOK_HISTORY_LIMIT:]
+            temp = path.with_suffix(path.suffix + ".tmp")
+            temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temp, path)
+            return True
+        except (OSError, ValueError, TypeError):
+            return False
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _product_cooldown_reason(product_id: str, events: list[dict[str, Any]]) -> str | None:
+    published = sorted((row for row in events if row.get("status") in {"prepared", "published"}
+                        and row.get("product_id") and row.get("created_at")),
+                       key=lambda row: str(row["created_at"]))
+    last_index = next((i for i in range(len(published) - 1, -1, -1)
+                       if str(published[i].get("product_id")) == product_id), None)
+    if last_index is None:
+        return None
+    last = published[last_index]
+    try:
+        last_at = datetime.fromisoformat(str(last["created_at"]).replace("Z", "+00:00"))
+        age = datetime.now(UTC) - last_at.astimezone(UTC)
+    except (ValueError, TypeError):
+        return "HOOK_HISTORY_TIMESTAMP_INVALID"
+    intervening = {str(row.get("product_id")) for row in published[last_index + 1:]
+                   if str(row.get("product_id")) != product_id}
+    if age < timedelta(hours=24) or len(intervening) < 4:
+        return "PRODUCT_COOLDOWN_24H_AND_FOUR_DIFFERENT_PRODUCTS"
+    return None
+
+
+def _unique_hook_options(product: dict[str, Any], proposed: str) -> list[str]:
+    handle = str(product.get("handle") or "")
+    if handle == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5":
+        if copy_compliance.supports_135_languages(product):
+            return [
+                "Fremde Durchsage auf Reisen? Der Erazer XP6 unterstützt Übersetzungen direkt am Ohr.",
+                "Sprachbarriere unterwegs? Der XP6 hilft dir laut Produktangaben mit 135 Sprachen.",
+                "Wenn dir auf Reisen die Worte fehlen: Der XP6 unterstützt Gespräche in 135 Sprachen.",
+                "Die Ansage klingt fremd? Mit dem XP6 kannst du Übersetzungen in 135 Sprachen nutzen.",
+                "Im Ausland besser verstehen, worum es geht: Der XP6 bietet Übersetzungsfunktionen für 135 Sprachen.",
+                "Gespräche unterwegs leichter einordnen: Der Erazer XP6 unterstützt Übersetzungen in 135 Sprachen.",
+            ]
+        return [
+            "Musik oder Telefonat unterwegs? Der Erazer XP6 verbindet beides kabellos.",
+            "Kabel stören unterwegs? Der XP6 ist für kabellosen Klang und Telefonate gedacht.",
+            "Du möchtest unterwegs hören und telefonieren? Der Erazer XP6 bietet beides kabellos.",
+            "Für Musik und Gespräche auf dem Weg: Entdecke die kabellosen Erazer XP6.",
+            "Dein Alltag ist in Bewegung? Der XP6 verbindet kabellosen Klang mit einem Mikrofon.",
+        ]
+    if re.search(r"was macht .+ im alltag leichter", proposed, re.IGNORECASE):
+        name = _human_product_name(product)
+        return [
+            f"Du suchst eine praktische Lösung rund um {name}? Schau dir die Details an.",
+            f"Welche Ausstattung passt zu deinem Alltag? Entdecke {name} und prüfe die Produktdetails.",
+            f"Ein konkretes Alltagsproblem im Blick? Finde heraus, ob {name} zu dir passt.",
+            f"Du möchtest eine passende Lösung auswählen? Vergleiche die Details von {name}.",
+            f"Was brauchst du im Alltag wirklich? Lerne {name} und seine Eigenschaften kennen.",
+        ]
+    starters = [
+        "Der entscheidende Moment im Alltag:",
+        "Wenn es darauf ankommt:",
+        "Kennst du diese Situation?",
+        "Eine praktische Frage für unterwegs:",
+        "Vor dem nächsten Einsatz:",
+        "Damit du leichter entscheiden kannst:",
+    ]
+    candidates = [proposed]
+    candidates.extend(f"{starter} {proposed}" for starter in starters)
+    return candidates
+
+
+def _select_unique_hook(product: dict[str, Any], proposed: str, events: list[dict[str, Any]]) -> str | None:
+    used = {_normalise_hook(str(row.get("hook") or "")) for row in events}
+    used.update({"gate b14 flug gestrichen was jetzt", "was macht produkt im alltag leichter"})
+    banned = ("gate b14",)
+    for candidate in _unique_hook_options(product, proposed):
+        normalized = _normalise_hook(candidate)
+        if not normalized or any(term in normalized for term in banned):
+            continue
+        if re.search(r"was macht .+ im alltag leichter", candidate, re.IGNORECASE):
+            continue
+        if normalized not in used:
+            return candidate
+    return None
+
+
+def _looks_like_english_supplier_banner(image_path: Path) -> bool:
+    tesseract = shutil.which("tesseract")
+    if not tesseract:
+        return False
+    try:
+        result = subprocess.run([tesseract, str(image_path), "stdout", "-l", "eng"],
+                                check=True, capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    text = re.sub(r"\s+", " ", result.stdout).casefold()
+    return bool(re.search(r"\b(?:free shipping|best seller|hot sale|new arrival|buy now|limited time|"
+                          r"special offer|big sale|top quality|100% satisfaction|aliexpress)\b", text))
 
 
 def _download(url: str, target: Path, limit: int = MAX_DOWNLOAD) -> None:
@@ -83,6 +238,10 @@ def _promo_image(product: dict[str, Any], output: Path, work: Path, headline: st
         candidate = work / f"source-{index}.img"
         try:
             _download(url, candidate, 18 * 1024 * 1024)
+            with Image.open(candidate) as opened:
+                opened.verify()
+            if _looks_like_english_supplier_banner(candidate):
+                continue
             with Image.open(candidate) as opened:
                 photo = ImageOps.fit(opened.convert("RGB"), (1000, 900), method=Image.Resampling.LANCZOS)
             break
@@ -210,6 +369,8 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
                 _download(url, candidate, 18 * 1024 * 1024)
                 with Image.open(candidate) as image:
                     image.verify()
+                if _looks_like_english_supplier_banner(candidate):
+                    continue
                 image_paths.append(candidate)
             except Exception:
                 continue
@@ -305,17 +466,17 @@ def _human_product_name(product: dict[str, Any]) -> str:
 
 
 def _append_conversion_hooks(caption: str, product_url: str) -> str:
-    footer = f"PayPal & Klarna · 30 Tage Rückgaberecht · Jetzt auf homestro.de entdecken: {product_url}"
-    if "PayPal & Klarna" in caption and "30 Tage Rückgaberecht" in caption and "homestro.de" in caption:
-        return caption
-    return caption.rstrip() + "\n\n" + footer
+    clean = re.sub(r"\n*Jetzt entdecken auf homestro\.de – bequem mit PayPal & Klarna\.?\s*$", "", caption, flags=re.IGNORECASE).rstrip()
+    if product_url and product_url not in clean:
+        clean += f"\n\n{product_url}"
+    return clean + "\n\n" + HOOK_CTA
 
 
 def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) -> tuple[str, str, str]:
     if str(product.get("handle") or "") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5":
         if copy_compliance.supports_135_languages(product):
             headline = "135 Sprachen. Kein Handy im Gesicht."
-            hook = "Gate B14. Flug gestrichen. Was jetzt?"
+            hook = "Fremde Durchsage auf Reisen? Der Erazer XP6 unterstützt Übersetzungen direkt am Ohr."
             price_text = f"für {min(prices):.2f}".replace(".", ",") + " € " if prices else ""
             caption = (
                 "Gate B14. Dein Flug ist gestrichen. Die Durchsage kommt in einer Sprache, die du nicht verstehst. "
@@ -433,7 +594,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
     details = re.sub(r"\s+", " ", details).strip()
     fact = re.split(r"(?<=[.!?])\s+", details, maxsplit=1)[0][:180].strip()
     headline = name[:70]
-    hook = f"Was macht {name} im Alltag leichter?"
+    hook = f"Du suchst eine praktische Lösung rund um {name}? Schau dir die Details an."
     caption = f"{hook} {fact}" if fact else f"Ein genauerer Blick auf {name}: Wofür ist dieses Produkt gedacht?"
     caption += f"\n\nLink in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
     caption = _append_conversion_hooks(caption, product_url)
@@ -473,10 +634,31 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         if value > 0:
             prices.append(value)
-    headline, hook, story_caption = _story_copy(product, product_url, prices)
+    history_path = Path(payload.get("hook_history_path") or HOOK_HISTORY_PATH)
+    hook_events = _read_hook_history(history_path)
+    if hook_events is None:
+        return {"status": "blocked", "reason": "HOOK_HISTORY_UNREADABLE_FAIL_CLOSED",
+                "product_id": product_id, "cost_eur": 0, "paid_ai_calls": 0}
+    cooldown_reason = _product_cooldown_reason(product_id, hook_events)
+    if cooldown_reason:
+        return {"status": "blocked", "reason": cooldown_reason, "product_id": product_id,
+                "hook_history_path": str(history_path), "cost_eur": 0, "paid_ai_calls": 0}
+    headline, proposed_hook, story_caption = _story_copy(product, product_url, prices)
+    hook = _select_unique_hook(product, proposed_hook, hook_events)
+    if not hook:
+        return {"status": "blocked", "reason": "NO_FRESH_GERMAN_HOOK_AVAILABLE",
+                "product_id": product_id, "hook_history_path": str(history_path),
+                "cost_eur": 0, "paid_ai_calls": 0}
+    if "Gate B14" in story_caption:
+        tail = story_caption.split("\n\n135 Sprachen.", 1)
+        story_caption = (hook + "\n\n135 Sprachen." + tail[1]) if len(tail) == 2 else hook
+    else:
+        story_caption = story_caption.replace(proposed_hook, "", 1).strip()
+        story_caption = hook + "\n\n" + story_caption
     if "Link in der Bio" not in story_caption:
         story_caption = re.sub(r"\n+https://homestro\.de/products/[^\s]+\s*$", "", story_caption).rstrip()
         story_caption += f"\n\nLink in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
+    story_caption = _append_conversion_hooks(story_caption, product_url)
     feed = {
         "id": product_id, "title": product.get("title"),
         "description": product.get("descriptionHtml") or "", "link": product_url,
@@ -488,6 +670,22 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         "variants": product.get("variants") or [],
         "specifications": product.get("specifications") or product.get("specs") or [],
     }
+    caption = copy_compliance.sanitize_text(story_caption, product=product)
+    event_created_at = datetime.now(UTC).isoformat()
+    hook_event = {
+        "event_id": hashlib.sha256((product_id + "\\0" + _normalise_hook(hook)).encode()).hexdigest(),
+        "product_id": product_id, "handle": str(product.get("handle") or ""),
+        "hook": hook, "hook_sha256": hashlib.sha256(_normalise_hook(hook).encode()).hexdigest(),
+        "caption_sha256": hashlib.sha256(_normalise_hook(caption).encode()).hexdigest(),
+        "created_at": event_created_at, "status": "prepared",
+    }
+    if any(row.get("hook_sha256") == hook_event["hook_sha256"]
+           or row.get("caption_sha256") == hook_event["caption_sha256"] for row in hook_events):
+        return {"status": "blocked", "reason": "HOOK_OR_CAPTION_ALREADY_USED",
+                "product_id": product_id, "cost_eur": 0, "paid_ai_calls": 0}
+    if not _write_hook_event(hook_event, history_path, reserve=True):
+        return {"status": "blocked", "reason": "HOOK_OR_CAPTION_ALREADY_USED",
+                "product_id": product_id, "cost_eur": 0, "paid_ai_calls": 0}
     creative_result = creative_seo.prepare([feed], limit=1)
     drafts = creative_result.get("drafts") or []
     if not drafts:
@@ -505,7 +703,6 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         video = _render_video(product, image_path, video_path, work, hook)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    caption = copy_compliance.sanitize_text(story_caption, product=product)
     hashtags = (["#Homestro", "#ErazerXP6", "#Kopfhoerer", "#Unterwegs", "#ReiseTipps"]
                 if product.get("handle") == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
                 else ["#Homestro", "#Training", "#Jogging", "#Fitness", "#Workout"]
@@ -562,6 +759,19 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             "youtube": youtube_result,
             "tiktok": tiktok_result,
         }
+    publication_confirmed = any(
+        isinstance(result, dict) and (result.get("publication_performed") is True or result.get("status") == "published")
+        for result in social_publication.values()
+    )
+    if publication_confirmed:
+        hook_event["status"] = "published"
+        hook_event["published_at"] = datetime.now(UTC).isoformat()
+        hook_event["channels"] = [channel for channel, result in social_publication.items()
+                                  if isinstance(result, dict) and
+                                  (result.get("publication_performed") is True or result.get("status") == "published")]
+        if not _write_hook_event(hook_event, history_path):
+            return {"status": "blocked", "reason": "HOOK_HISTORY_WRITE_FAILED",
+                    "product_id": product_id, "cost_eur": 0, "paid_ai_calls": 0}
     if isinstance(bundle, dict):
         bundle["youtube_publishing"] = social_publication["youtube"]
         bundle["tiktok_publishing"] = social_publication["tiktok"]
@@ -573,6 +783,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                         "image_path": str(image_path)},
             "creative": creative, "video": video, "tiktok_bundle": bundle,
             "social_publication": social_publication,
+            "hook_history": {"path": str(history_path), "event_id": hook_event["event_id"],
+                             "status": hook_event["status"], "cooldown_hours": 24,
+                             "different_products_required": 4},
             "cost_eur": 0, "paid_ai_calls": 0, "ad_mutations_performed": False}
 
 
