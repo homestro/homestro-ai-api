@@ -7,10 +7,50 @@ const CATEGORY_HASHTAGS=Object.freeze({
   kitchen:['#küchenhelfer','#küchenideen','#kochenmachtspaß','#haushalt','#küche'],
   default:['#homestro','#alltagshelfer','#produktidee','#onlineshopping','#deutschland']
 });
-function categoryHashtags(product={}){
-  const s=`${product.productType||''} ${product.title||''} ${(product.tags||[]).join(' ')}`.toLowerCase();
+function productContext(product={}) {
+  return `${product.productType||''} ${product.title||''} ${(product.tags||[]).join(' ')}`.toLowerCase();
+}
+function categoryHashtags(product={}) {
+  const s=productContext(product);
   const key=/hund|katze|tier|pet/.test(s)?'pet':/garten|outdoor/.test(s)?'garden':/küch|kochen|kitchen/.test(s)?'kitchen':/wohn|haushalt|home/.test(s)?'home':'default';
   return CATEGORY_HASHTAGS[key];
+}
+function problemSolutionHook(product={}) {
+  const title=String(product.title||'Dieses Produkt').trim();
+  const context=productContext(product);
+  const options=/ohr|ohren|ohrreinig|ear/.test(context)
+    ? [
+        `Die äußere Ohrpflege bei Hund oder Katze steht an? Schau dir ${title} an.`,
+        `Wenn die Ohrenpflege ansteht: Prüfe, ob ${title} zu deinem Tier passt.`,
+        `Pflege für Hund oder Katze gesucht? Entdecke die Details zu ${title}.`
+      ]
+    : /trinkflasche|wasserflasche|bottle/.test(context)
+      ? [
+          `Getränk für unterwegs dabei? Entdecke, ob ${title} zu deinem Tag passt.`,
+          `Du möchtest dein Getränk mitnehmen? Schau dir die Eigenschaften von ${title} an.`,
+          `Für den Weg, Sport oder Alltag: Prüfe, ob ${title} zu dir passt.`
+        ]
+      : /fitness|sport|training|massage|haltung|posture/.test(context)
+        ? [
+            `Training oder Entspannung geplant? Entdecke die Details zu ${title}.`,
+            `Du suchst Unterstützung für deine Routine? Prüfe, ob ${title} zu dir passt.`,
+            `Vor dem nächsten Workout: Schau dir an, was ${title} mitbringt.`
+          ]
+        : /auto|car|reise|travel|koffer|gepäck/.test(context)
+          ? [
+              `Für den nächsten Weg etwas Praktisches gesucht? Entdecke ${title}.`,
+              `Unterwegs zählt die passende Ausstattung: Prüfe die Details zu ${title}.`,
+              `Reise oder Autofahrt geplant? Schau dir an, ob ${title} zu dir passt.`
+            ]
+          : [
+              `Du suchst eine passende Lösung für deinen Alltag? Entdecke ${title}.`,
+              `Eine konkrete Alltagsfrage: Könnte ${title} zu deinen Anforderungen passen?`,
+              `Vor dem Kauf zählen die Details: Prüfe, ob ${title} zu dir passt.`
+            ];
+  const id=String(product.id||product.handle||title);
+  let hash=0;
+  for(const ch of id)hash=(hash*31+ch.codePointAt(0))>>>0;
+  return options[hash%options.length];
 }
 function benefitLines(product={}){
   const source=String(product.descriptionText||product.description||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
@@ -32,8 +72,9 @@ function buildOrganicDraft(product, channel='facebook'){
   const formatted=new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR'}).format(price);
   const benefits=benefitLines(product).map(x=>`✓ ${x}`).join('\n');
   const hashtags=categoryHashtags(product).join(' ');
-  const hook=`${title} – praktisch entdeckt ✨`;
-  const linkLine=channel==='instagram'?'Mehr entdecken: Link im Profil.':`Jetzt entdecken: ${url.href}`;
-  return {productId:String(product.id||''),channel,status:'draft_queued',caption:`${hook}\n\n${benefits}\n\n${formatted}\n${linkLine}\n\n${hashtags}`,trackedUrl:url.href,imageUrl:image.href,requiresReview:true,published:false,paidAds:false,aiRequests:0,hashtags};
+  const hook=problemSolutionHook(product);
+  const linkLine=channel==='instagram'?'Produktdetails über den Link im Profil.':`Produktdetails: ${url.href}`;
+  const cta='Jetzt entdecken auf homestro.de – bequem mit PayPal & Klarna.';
+  return {productId:String(product.id||''),channel,status:'draft_queued',caption:`${hook}\n\n${benefits}\n\n${formatted}\n${linkLine}\n\n${hashtags}\n\n${cta}`,trackedUrl:url.href,imageUrl:image.href,requiresReview:true,published:false,paidAds:false,aiRequests:0,hashtags};
 }
 module.exports={buildOrganicDraft,categoryHashtags,benefitLines};
