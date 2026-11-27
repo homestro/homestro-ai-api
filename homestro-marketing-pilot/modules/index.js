@@ -158,6 +158,14 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     };
     const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,prepareStartup:async channel=>{
       const productId='gid://shopify/Product/16104466776446';
+      const raw=await fetchProduct(graphql,productId);
+      const sourceInputs=prepareInputs&&raw?await prepareInputs(raw):null;
+      if(!sourceInputs?.contentReviewed||!sourceInputs?.germanCopy||sourceInputs.germanCopy.language!=='de'){
+        log('STARTUP_WINNER_SOURCE_UNVERIFIED',{productId,channel,contentReviewed:Boolean(sourceInputs?.contentReviewed),
+          germanCopy:Boolean(sourceInputs?.germanCopy),adSpendEUR:0});return false;
+      }
+      await store.recordGeneratedReview(productId,{contentReviewed:true,germanCopy:sourceInputs.germanCopy,
+        facts:sourceInputs.facts||[],previouslyPublished:sourceInputs.previouslyPublished||{}});
       const current=await fresh(productId);
       if(!current||current.status!=='ACTIVE'||current.rejected===true||
         !current.variants?.some(v=>v.available&&Number(v.price)>0)){
