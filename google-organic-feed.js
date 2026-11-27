@@ -5,13 +5,20 @@ function shopifyJpegUrl(raw){
  try{const u=new URL(String(raw||''));if(u.hostname!=='cdn.shopify.com'&&!(u.hostname==='homestro.de'&&u.pathname.startsWith('/cdn/shop/')))return null;u.searchParams.set('format','jpg');u.searchParams.set('width','1080');return u.href;}catch{return null;}
 }
 function cleanText(v,max=5000){return String(v??'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/\s+/g,' ').trim().slice(0,max);}
+function cleanDescription(v,fallback){
+ let text=cleanText(v||fallback,10000);
+ text=text.replace(/(?:Bezahlung\\s*&\\s*Rückgabe\\s*)?Bequem bezahlen mit\\s*PayPal\\s*&\\s*Klarna\\.\\s*Es gilt ein 30 Tage Rückgaberecht\\.\\s*Jetzt direkt bei Homestro entdecken/gi,' ');
+ text=text.replace(/[^.!?]*(?:PayPal|Klarna)[^.!?]*[.!?]?/gi,' ');
+ text=cleanText(text,5000);
+ return /\\b(?:PayPal|Klarna)\\b/i.test(text)?cleanText(fallback,5000):text;
+}
 function productType(p){
  const direct=String(p.productType||'').trim();if(direct)return direct;
  const tags=Array.isArray(p.tags)?p.tags:[];
  const fallback=tags.map(String).map(x=>x.trim()).find(x=>x&&!/^(homestro-|qa-|processed|pending|active|draft|rejected)/i.test(x));
  return fallback||'Alltag & Haushalt';
 }
-function shippingXml(price){const deCost=Number(price)>=50?'0.00':'6.99';return `<g:shipping><g:country>DE</g:country><g:service>Standard Shipping (5-10 days)</g:service><g:price>${deCost} EUR</g:price></g:shipping>`+['AT'].map(country=>`<g:shipping><g:country>${country}</g:country><g:service>EU Standard Shipping</g:service><g:price>14.99 EUR</g:price></g:shipping>`).join('');}
+function shippingXml(price){const deCost=Number(price)>=50?'0.00':'6.99';return `<g:shipping><g:country>DE</g:country><g:service>Standardversand Deutschland</g:service><g:price>${deCost} EUR</g:price></g:shipping>`+['AT'].map(country=>`<g:shipping><g:country>${country}</g:country><g:service>EU Standard Shipping</g:service><g:price>14.99 EUR</g:price></g:shipping>`).join('');}
 function cleanTitle(p){
  const title=cleanText(p.title,150).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').trim();
  const type=productType(p);
@@ -33,7 +40,7 @@ async function googleOrganicXml(graphql){
    if(!v.availableForSale||Number(v.price)<=0)continue;
    const link=new URL(p.onlineStoreUrl);link.searchParams.set('variant',String(v.id||'').split('/').pop());
    link.searchParams.set('utm_source','google');link.searchParams.set('utm_medium','organic');link.searchParams.set('utm_campaign','homestro_pilot');
-   items.push(`<item><g:id>${esc(v.id)}</g:id><g:title>${esc(cleanTitle(p))}</g:title><g:description>${esc(cleanText(p.description||p.title,5000))}</g:description><g:link>${esc(link.href)}</g:link><g:image_link>${esc(image)}</g:image_link><g:availability>in_stock</g:availability><g:price>${esc(Number(v.price).toFixed(2))} EUR</g:price><g:condition>new</g:condition><g:brand>${esc(cleanText(p.vendor,100)||'Homestro')}</g:brand><g:identifier_exists>false</g:identifier_exists><g:product_type>${esc(productType(p))}</g:product_type>${shippingXml(v.price)}</item>`);
+   items.push(`<item><g:id>${esc(v.id)}</g:id><g:title>${esc(cleanTitle(p))}</g:title><g:description>${esc(cleanDescription(p.description,p.title))}</g:description><g:link>${esc(link.href)}</g:link><g:image_link>${esc(image)}</g:image_link><g:availability>in_stock</g:availability><g:price>${esc(Number(v.price).toFixed(2))} EUR</g:price><g:condition>new</g:condition><g:brand>${esc(cleanText(p.vendor,100)||'Homestro')}</g:brand><g:identifier_exists>false</g:identifier_exists><g:product_type>${esc(productType(p))}</g:product_type>${shippingXml(v.price)}</item>`);
   }
  }
  return `<?xml version="1.0" encoding="UTF-8"?><rss xmlns:g="http://base.google.com/ns/1.0" version="2.0"><channel><title>Homestro</title><link>https://homestro.de</link><description>Homestro Produktfeed</description>${items.join('')}</channel></rss>`;
