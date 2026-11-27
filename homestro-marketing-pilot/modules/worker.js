@@ -90,8 +90,19 @@ export class Worker {
               AND (SELECT count(*) FROM marketing_posts recent WHERE recent.channel=s.channel
                 AND ((recent.status='published' AND recent.published_at>now()-interval '24 hours')
                   OR (recent.status IN ('publishing','recovery_required') AND COALESCE(recent.attempted_at,recent.updated_at)>now()-interval '24 hours'))) < $2::int
-              AND NOT EXISTS (SELECT 1 FROM marketing_posts old WHERE old.channel=s.channel
-                AND old.product_id=s.product_id AND old.id<>s.id AND old.status IN ('published','publishing','recovery_required'))
+              AND NOT EXISTS (SELECT 1 FROM marketing_posts recent_same WHERE recent_same.channel=s.channel
+                AND recent_same.product_id=s.product_id AND recent_same.id<>s.id
+                AND ((recent_same.status='published' AND recent_same.published_at>now()-interval '24 hours')
+                  OR (recent_same.status IN ('publishing','recovery_required')
+                    AND COALESCE(recent_same.attempted_at,recent_same.updated_at)>now()-interval '24 hours')))
+              AND s.product_id NOT IN (
+                SELECT recent.product_id FROM (
+                  SELECT DISTINCT ON (p.product_id) p.product_id,
+                    COALESCE(p.published_at,p.attempted_at,p.updated_at) AS activity_at
+                  FROM marketing_posts p WHERE p.channel=s.channel
+                    AND p.status IN ('published','publishing','recovery_required')
+                  ORDER BY p.product_id,COALESCE(p.published_at,p.attempted_at,p.updated_at) DESC
+                ) recent ORDER BY recent.activity_at DESC LIMIT 4)
               AND ($3::int=0 OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
                 AND spaced.status IN ('published','publishing','recovery_required')
                 AND COALESCE(spaced.published_at,spaced.attempted_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
