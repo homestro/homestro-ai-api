@@ -1605,8 +1605,7 @@ app.get('/api/brain/status',async(_req,res)=>{
  try{
   const state=JSON.parse(await brainFs.readFile(brainDataDir+'/brain-state.json','utf8'));
   const diagnostics=JSON.parse(await brainFs.readFile(brainDataDir+'/store-diagnostics.json','utf8'));
-  let posts=[];
-  try{posts=await marketingPilot.getPublishedPosts?.()||[];}catch{}
+  const posts=Array.isArray(state.last_post_ids)?state.last_post_ids:[];
   const publisherEnabled=process.env.PILOT_WORKER_ENABLED==='true'&&process.env.PILOT_PUBLISH_ENABLED==='true';
   res.set('Cache-Control','no-store').json({
    status:'ACTIVE',modules:{
@@ -1616,8 +1615,8 @@ app.get('/api/brain/status',async(_req,res)=>{
    },
    products_synced:state.products_synced||0,diagnostics_issues_found:diagnostics.issues_found||0,
    price_fixes:state.price_fixes||0,last_run_at:state.last_run_at||null,
-   last_published_product:posts[0]?.title||null,
-   last_post_ids:posts.map(p=>({id:p.platform_post_id,channel:p.channel,permalink:p.permalink,published_at:p.published_at})),
+   last_published_product:state.last_published_product||null,
+   last_post_ids:posts,
    ms_handwerk_ready:true,ad_spend_eur:0.00,
    catalog_source:state.catalog_source||null,admin_auth:state.admin_auth||'unknown'
   });
