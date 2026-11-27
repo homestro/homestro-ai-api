@@ -120,6 +120,45 @@ export class Worker {
               ORDER BY CASE WHEN s.approved_by='auto-verified-shopify-product-v1' THEN 0 ELSE 1 END,s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now()) ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job){
+          if(this.cfg.autonomyEnabled) {
+            const d=(await client.query(`WITH approved AS (
+              SELECT s.*,
+                NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts'
+                  AND plan.post_id=s.id AND plan.scheduled_for>now()) AS unscheduled,
+                (SELECT count(*) FROM marketing_posts recent WHERE recent.channel=s.channel
+                  AND ((recent.status='published' AND recent.published_at>now()-interval '24 hours')
+                    OR (recent.status IN ('publishing','recovery_required')
+                      AND COALESCE(recent.attempted_at,recent.updated_at)>now()-interval '24 hours'))) < $2::int AS under_daily_channel,
+                NOT EXISTS (SELECT 1 FROM marketing_posts recent_same WHERE recent_same.channel=s.channel
+                  AND recent_same.product_id=s.product_id AND recent_same.id<>s.id
+                  AND ((recent_same.status='published' AND recent_same.published_at>now()-interval '24 hours')
+                    OR (recent_same.status IN ('publishing','recovery_required')
+                      AND COALESCE(recent_same.attempted_at,recent_same.updated_at)>now()-interval '24 hours'))) AS not_recent_same,
+                NOT EXISTS (SELECT 1 FROM (
+                  SELECT DISTINCT ON (p.product_id) p.product_id,
+                    COALESCE(p.published_at,p.attempted_at,p.updated_at) AS activity_at
+                  FROM marketing_posts p WHERE p.channel=s.channel
+                    AND p.status IN ('published','publishing','recovery_required')
+                  ORDER BY p.product_id,COALESCE(p.published_at,p.attempted_at,p.updated_at) DESC
+                ) recent ORDER BY recent.activity_at DESC LIMIT 4) AS not_recent_four,
+                ($3::int=0 OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
+                  AND spaced.status IN ('published','publishing','recovery_required')
+                  AND COALESCE(spaced.published_at,spaced.attempted_at,spaced.updated_at)>now()-$3::int*interval '1 hour')) AS interval_clear,
+                NOT (s.product_id=ANY($1::text[])) AS not_excluded
+              FROM marketing_posts s WHERE s.status='approved' AND s.channel IN ('facebook','instagram')
+            )
+            SELECT count(*) AS approved,
+              count(*) FILTER (WHERE unscheduled) AS unscheduled,
+              count(*) FILTER (WHERE under_daily_channel) AS under_daily_channel,
+              count(*) FILTER (WHERE not_recent_same) AS not_recent_same,
+              count(*) FILTER (WHERE not_recent_four) AS not_recent_four,
+              count(*) FILTER (WHERE interval_clear) AS interval_clear,
+              count(*) FILTER (WHERE not_excluded) AS not_excluded,
+              count(*) FILTER (WHERE unscheduled AND under_daily_channel AND not_recent_same
+                AND not_recent_four AND interval_clear AND not_excluded) AS eligible
+            FROM approved`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])).rows[0];
+            log('PUBLISH_CANDIDATE_DIAGNOSTIC',{...d,publishedOrUncertainLast24h:count});
+          }
           log('PUBLISH_BLOCKED',{reason:'NO_ELIGIBLE_APPROVED_POST',publishedOrUncertainLast24h:count,limit:this.cfg.maxDailyPosts});
           return;
         }
