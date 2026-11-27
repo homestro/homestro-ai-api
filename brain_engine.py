@@ -61,9 +61,16 @@ def public_catalog():
 
 def shopify_graphql(query, variables, token, domain):
     body = json.dumps({"query": query, "variables": variables}).encode()
-    return request_json(f"https://{domain}/admin/api/2026-07/graphql.json", method="POST",
+    envelope = request_json(f"https://{domain}/admin/api/2026-07/graphql.json", method="POST",
         headers={"Accept":"application/json","Content-Type":"application/json",
                  "X-Shopify-Access-Token":token}, body=body)
+    errors = envelope.get("errors") or []
+    if errors:
+        message = " ".join(str(row.get("message") or "") for row in errors if isinstance(row, dict))
+        if "authentication required" in message.casefold() or "unauthorized" in message.casefold():
+            raise ValueError("Authentication required")
+        raise ValueError("ADMIN_GRAPHQL_QUERY_FAILED")
+    return envelope.get("data") or {}
 
 def admin_token(domain):
     direct = (os.getenv("SHOPIFY_ACCESS_TOKEN") or
