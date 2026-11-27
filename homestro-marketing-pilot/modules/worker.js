@@ -76,9 +76,11 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
 }
 export class Worker {
   constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;this.lastPublished=null;this.startupTimer=null;}
-  async tick(postId=null) {
+  async tick(postId=null,options={}) {
     if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return {status:'busy',posts:[]};}
     if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return {status:'disabled',posts:[]};}
+    const startupOverride=this.cfg.autonomyEnabled&&options?.startup===true;
+    const requiredChannel=['facebook','instagram'].includes(options?.channel)?options.channel:null;
     this.busy=true;
     let publishedPost=null;
     try {
@@ -93,10 +95,11 @@ export class Worker {
         }
         await autoApproveVerifiedDrafts({client,store:this.store,freshSnapshot:this.freshSnapshot,cfg:this.cfg});
         const job=(postId
-          ? await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND id=$1 AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now())",[postId])
+          ? await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND id=$1 AND ($2::boolean OR NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now()))",[postId,startupOverride])
           : this.cfg.autonomyEnabled
             ? await client.query(`SELECT s.* FROM marketing_posts s WHERE s.status='approved'
-              AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=s.id AND plan.scheduled_for>now())
+              AND ($4::boolean OR NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=s.id AND plan.scheduled_for>now()))
+              AND ($5::text IS NULL OR s.channel=$5)
               AND NOT (s.product_id=ANY($1::text[]))
               AND (SELECT count(*) FROM marketing_posts recent WHERE recent.channel=s.channel
                 AND ((recent.status='published' AND recent.published_at>now()-interval '24 hours')
@@ -114,10 +117,10 @@ export class Worker {
                     AND p.status IN ('published','publishing','recovery_required')
                   ORDER BY p.product_id,COALESCE(p.published_at,p.attempted_at,p.updated_at) DESC
                 ) recent ORDER BY recent.activity_at DESC LIMIT 4)
-              AND ($3::int=0 OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
+              AND ($3::int=0 OR $4::boolean OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
                 AND spaced.status IN ('published','publishing','recovery_required')
                 AND COALESCE(spaced.published_at,spaced.attempted_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
-              ORDER BY CASE WHEN s.approved_by='auto-verified-shopify-product-v1' THEN 0 ELSE 1 END,s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0])
+              ORDER BY CASE WHEN s.approved_by='auto-verified-shopify-product-v1' THEN 0 ELSE 1 END,s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0,startupOverride,requiredChannel])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now()) ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job){
           if(this.cfg.autonomyEnabled) {
@@ -173,7 +176,7 @@ export class Worker {
               (status='published' AND published_at>now()-interval '24 hours'))`,[job.channel])).rows[0].channel_used);
           if(used>=this.cfg.maxDailyPerChannel){log('PUBLISH_BLOCKED',{reason:'DAILY_CHANNEL_LIMIT',channel:job.channel});return;}
         }
-        if(this.cfg.publishEveryHours) {
+        if(this.cfg.publishEveryHours && !startupOverride) {
           const recent=Number((await client.query(`SELECT count(*) AS recent FROM marketing_posts WHERE channel=$1
             AND status IN ('published','publishing','recovery_required')
             AND COALESCE(published_at,attempted_at,updated_at)>now()-$2::int*interval '1 hour'`,[job.channel,this.cfg.publishEveryHours])).rows[0].recent);
@@ -257,7 +260,11 @@ export class Worker {
     log('PUBLISH_WORKER_STARTED',{schedulerEnabled:this.cfg.workerEnabled&&this.cfg.publishingEnabled,
       workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled,intervalMs,startupDelayMs});
     this.timer=setInterval(()=>void this.tick(),intervalMs);this.timer.unref();
-    this.startupTimer=setTimeout(()=>{this.startupTimer=null;void this.tick();},startupDelayMs);this.startupTimer.unref();
+    this.startupTimer=setTimeout(async()=>{
+      this.startupTimer=null;
+      await this.tick(null,{startup:true,channel:'facebook'});
+      await this.tick(null,{startup:true,channel:'instagram'});
+    },startupDelayMs);this.startupTimer.unref();
   }
   stop(){clearInterval(this.timer);clearTimeout(this.startupTimer);this.timer=null;this.startupTimer=null;}
 }
