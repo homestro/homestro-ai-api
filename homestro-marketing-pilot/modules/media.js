@@ -50,8 +50,18 @@ export async function downloadMedia(url,path,allowedHosts,fetchImpl=fetch,maxByt
   // Exact trusted CDN host allowlist, no redirects or arbitrary user origins (SSRF).
   if(u.protocol!=='https:' || u.username || u.password || u.port || !allowedHosts.includes(u.hostname)) fail('MEDIA_HOST_NOT_ALLOWED');
   const requestUrl=shopifyJpeg?shopifyJpegUrl(u.href):u.href;
-  const r=await fetchImpl(requestUrl,{headers:shopifyJpeg?{Accept:'image/jpeg'}:undefined,redirect:'error',signal:AbortSignal.timeout(60000)});
-  if(!r.ok || !r.body) fail('MEDIA_DOWNLOAD_FAILED');
+  const requestOptions={headers:shopifyJpeg?{Accept:'image/jpeg'}:undefined,redirect:'error',signal:AbortSignal.timeout(60000)};
+  let r=null;
+  for(let attempt=0;attempt<(shopifyJpeg?3:1);attempt++){
+    try{
+      r=await fetchImpl(requestUrl,requestOptions);
+      if(r.ok&&r.body)break;
+      if(r.status<500&&r.status!==429)break;
+      await r.body?.cancel().catch(()=>{});
+    }catch(error){if(attempt>=(shopifyJpeg?2:0))throw error;}
+    if(attempt<(shopifyJpeg?2:0))await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)));
+  }
+  if(!r?.ok || !r.body) fail('MEDIA_DOWNLOAD_FAILED');
   if(shopifyJpeg&&(r.status!==200||String(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()!=='image/jpeg'))fail('SHOPIFY_JPEG_HTTP_VERIFICATION_FAILED');
   if(Number(r.headers.get('content-length'))>maxBytes) fail('MEDIA_TOO_LARGE');
   const chunks=[];let size=0,signature=Buffer.alloc(0);
@@ -277,12 +287,17 @@ export class MediaRenderer {
       try {await stat(dest);} catch {
         const tmp=await mkdtemp(join(dir,'photo-'));
         try {
-          await downloadMedia(image,join(tmp,'input'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch,15*1024*1024,{shopifyJpeg:true});
-          await run('/usr/bin/ffmpeg',['-hide_banner','-loglevel','error','-y','-i',join(tmp,'input'),
-            '-vf','scale=1080:1350:force_original_aspect_ratio=decrease,pad=1080:1350:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1',
-            '-frames:v','1','-threads','1','-filter_threads','1','-q:v','3',join(tmp,'image.jpg')]);
-          const info=await stat(join(tmp,'image.jpg'));if(info.size>8*1024*1024)fail('INSTAGRAM_IMAGE_TOO_LARGE');
-          await rename(join(tmp,'image.jpg'),dest);
+          try{
+            await downloadMedia(image,join(tmp,'input'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch,15*1024*1024,{shopifyJpeg:true});
+            await run('/usr/bin/ffmpeg',['-hide_banner','-loglevel','error','-y','-i',join(tmp,'input'),
+              '-vf','scale=1080:1350:force_original_aspect_ratio=decrease,pad=1080:1350:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1',
+              '-frames:v','1','-threads','1','-filter_threads','1','-q:v','3',join(tmp,'image.jpg')]);
+            const info=await stat(join(tmp,'image.jpg'));if(info.size>8*1024*1024)fail('INSTAGRAM_IMAGE_TOO_LARGE');
+            await rename(join(tmp,'image.jpg'),dest);
+          }catch(error){
+            log('PRODUCT_IMAGE_SKIPPED',{reason:codeOf(error)});
+            continue;
+          }
         } finally {await rm(tmp,{recursive:true,force:true});}
       }
       let words=null,text='';
