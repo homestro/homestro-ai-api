@@ -75,7 +75,7 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
   return approved;
 }
 export class Worker {
-  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;this.lastPublished=null;}
+  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;this.lastPublished=null;this.startupTimer=null;}
   async tick(postId=null) {
     if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return {status:'busy',posts:[]};}
     if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return {status:'disabled',posts:[]};}
@@ -212,6 +212,13 @@ export class Worker {
       return publishedPost?{status:'published',posts:[publishedPost]}:{status:acquired===false?'locked':'no_eligible_post',posts:[]};
     }catch(e){log('PUBLISH_TICK_ERROR',{reason:codeOf(e)});return {status:'failed',reason:codeOf(e),posts:[]};}finally{this.busy=false;}
   }
-  start(){if(this.timer)return;log('PUBLISH_WORKER_STARTED',{workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled,intervalMs:this.cfg.intervalMs});this.timer=setInterval(()=>void this.tick(),this.cfg.intervalMs);this.timer.unref();void this.tick();}
-  stop(){clearInterval(this.timer);this.timer=null;}
+  start(){
+    if(this.timer||this.startupTimer)return;
+    const intervalMs=this.cfg.intervalMs||4*60*60*1000,startupDelayMs=30000;
+    log('PUBLISH_WORKER_STARTED',{schedulerEnabled:this.cfg.workerEnabled&&this.cfg.publishingEnabled,
+      workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled,intervalMs,startupDelayMs});
+    this.timer=setInterval(()=>void this.tick(),intervalMs);this.timer.unref();
+    this.startupTimer=setTimeout(()=>{this.startupTimer=null;void this.tick();},startupDelayMs);this.startupTimer.unref();
+  }
+  stop(){clearInterval(this.timer);clearTimeout(this.startupTimer);this.timer=null;this.startupTimer=null;}
 }
