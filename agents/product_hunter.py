@@ -645,11 +645,11 @@ def _rank_active_shopify_products(
     for raw in products:
         if not isinstance(raw, dict) or str(raw.get("status", "")).upper() != "ACTIVE":
             continue
-        winner = winner_index.get(str(raw.get("id") or "")) or winner_index.get(str(raw.get("handle") or ""))
-        if winner is None:
+        # onlineStoreUrl is populated by Shopify for products published to the
+        # Online Store sales channel; drafts and unpublished active items stay out.
+        if not str(raw.get("onlineStoreUrl") or "").strip():
             continue
-        # Active Shopify products remain eligible for dropshipping even when
-        # inventory tracking is disabled or Shopify reports zero local stock.
+        winner = winner_index.get(str(raw.get("id") or "")) or winner_index.get(str(raw.get("handle") or ""))
         variants = raw.get("variants") or []
         available = [v for v in variants if isinstance(v, dict) and v.get("availableForSale")]
         title = str(raw.get("title") or "").strip()
@@ -667,14 +667,17 @@ def _rank_active_shopify_products(
                 matches.append({"term": term[:100], "country": item.get("country"),
                                 "overlap": overlap, "traffic": item.get("approxTraffic")})
         flagship = handle == "lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"
-        # Keep availability informational only; it must not gate or rank out
-        # active dropshipping products with untracked/zero local inventory.
-        score = (2000 if flagship else 0) + sum(m["overlap"] * 25 for m in matches)
+        # Historical winners get a priority bonus; every published active
+        # Shopify product remains a rotation candidate even without an eBay map.
+        winner_rank = int(winner.get("rank") or 0) if winner else 0
+        winner_bonus = max(0, 2000 - winner_rank * 100) if winner else 0
+        score = (2000 if flagship else winner_bonus) + sum(m["overlap"] * 25 for m in matches)
         ranked.append({"product": raw, "score": score, "trend_matches": matches[:5],
                        "available_variants": len(available),
-                       "proven_ebay_units": int(winner.get("units") or 0),
-                       "proven_ebay_orders": int(winner.get("orders") or 0),
-                       "proven_ebay_rank": int(winner.get("rank") or 0)})
+                       "is_proven_ebay_winner": winner is not None,
+                       "proven_ebay_units": int(winner.get("units") or 0) if winner else 0,
+                       "proven_ebay_orders": int(winner.get("orders") or 0) if winner else 0,
+                       "proven_ebay_rank": winner_rank})
     ranked.sort(key=lambda row: (-row["score"], str(row["product"].get("handle") or "")))
     return ranked
 
@@ -685,7 +688,7 @@ def select_from_shopify_catalog(
     """Return the strongest eligible active product without writing or selecting paid trends."""
     ranked = _rank_active_shopify_products(products, trends)
     if not ranked:
-        return {"status": "blocked", "reason": "NO_ACTIVE_PROVEN_EBAY_WINNERS_MAPPED",
+        return {"status": "blocked", "reason": "NO_ACTIVE_PUBLISHED_SHOPIFY_PRODUCTS",
                 "product": None, "trend_source": "free_google_trends_rss_de_at"}
     first = ranked[0]
     return {"status": "selected", "product": first["product"], "score": first["score"],
@@ -729,7 +732,7 @@ def select_next_active_product(
     """Pick the next eligible catalog item in a durable round-robin rotation."""
     ranked = _rank_active_shopify_products(products, trends)
     if not ranked:
-        return {"status": "blocked", "reason": "NO_ACTIVE_PROVEN_EBAY_WINNERS_MAPPED",
+        return {"status": "blocked", "reason": "NO_ACTIVE_PUBLISHED_SHOPIFY_PRODUCTS",
                 "product": None, "trend_source": "free_google_trends_rss_de_at"}
     path = Path(history_path)
     path.parent.mkdir(parents=True, exist_ok=True)
