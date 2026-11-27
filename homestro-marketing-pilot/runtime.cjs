@@ -73,10 +73,9 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
     if(/^gid:\/\/shopify\/Product\/\d+$/.test(productId)){
       preparation=await current.processProduct(productId,{freeOnly:true});
     }
-    let publisher={status:'paused'};
+    let publisher={status:'paused',posts:[]};
     if(current.worker&&current.worker.cfg.workerEnabled&&current.worker.cfg.publishingEnabled){
-      await current.worker.tick();
-      publisher={status:'single_worker_tick_requested'};
+      publisher=await current.worker.tick();
     }
     return {status:'ready',preparation,publisher};
   }};
