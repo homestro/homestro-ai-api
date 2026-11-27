@@ -65,6 +65,16 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
   return {ready,processProduct:async id=>{
     try{return (await ready)?.processProduct(id)||{processed:0,status:'marketing_disabled'};}
     catch{return {processed:0,status:'pending_marketing'};}
+  },runCycle:async()=>{
+    const current=await ready;
+    if(!current?.enabled)return {status:'marketing_disabled'};
+    const catalog=await current.sync();
+    let publisher={status:'disabled'};
+    if(current.worker&&current.worker.cfg.workerEnabled&&current.worker.cfg.publishingEnabled){
+      await current.worker.tick();
+      publisher={status:'tick_requested'};
+    }
+    return {status:'completed',catalog,publisher};
   }};
 }
 module.exports={registerMarketingPilot,marketingGraphqlAllowed};
