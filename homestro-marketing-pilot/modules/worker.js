@@ -189,6 +189,10 @@ export class Worker {
           // No automatic retry of writes: timeout may mean the platform already accepted publication.
           await this.store.setStatus(job.id,'recovery_required',codeOf(e));
           log('RECOVERY_REQUIRED',{postId:job.id,productId:job.product_id,channel:job.channel,phase:remote?.phase||'preflight',reason:codeOf(e)});
+          if(this.cfg.publishOnce){
+            this.cfg.publishingEnabled=false;this.cfg.workerEnabled=false;this.stop();
+            log('ONE_SHOT_HALTED',{postId:job.id,result:'recovery_required',reason:codeOf(e)});
+          }
         }
       });
       if(acquired===false)log('PUBLISH_BLOCKED',{reason:'WORKER_DATABASE_LOCK_BUSY'});
