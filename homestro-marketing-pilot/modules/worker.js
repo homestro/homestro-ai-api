@@ -67,9 +67,10 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
 export class Worker {
   constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;}
   async tick(postId=null) {
-    if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return;}
-    if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return;}
+    if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return {status:'busy',posts:[]};}
+    if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return {status:'disabled',posts:[]};}
     this.busy=true;
+    let publishedPost=null;
     try {
       const acquired=await this.store.withWorkerLock(async client=>{
         const count=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE
@@ -176,6 +177,7 @@ export class Worker {
         try {
           await this.meta.publish(job,async state=>{remote=state;await this.store.checkpoint(job.id,state);});
           await this.store.setStatus(job.id,'published');log('PUBLISHED',{postId:job.id,productId:job.product_id,channel:job.channel,title:job.payload.title||null});
+          publishedPost={localPostId:job.id,remotePostId:remote?.postId||null,productId:job.product_id,channel:job.channel,permalink:remote?.permalink||null};
           if(this.cfg.autonomyEnabled && remote?.postId) {
             try {
               const p=await this.meta.request(String(remote.postId),{fields:job.channel==='instagram'?'id,permalink,media_type':'id,permalink_url'});
@@ -196,7 +198,8 @@ export class Worker {
         }
       });
       if(acquired===false)log('PUBLISH_BLOCKED',{reason:'WORKER_DATABASE_LOCK_BUSY'});
-    }catch(e){log('PUBLISH_TICK_ERROR',{reason:codeOf(e)});}finally{this.busy=false;}
+      return publishedPost?{status:'published',posts:[publishedPost]}:{status:acquired===false?'locked':'no_eligible_post',posts:[]};
+    }catch(e){log('PUBLISH_TICK_ERROR',{reason:codeOf(e)});return {status:'failed',reason:codeOf(e),posts:[]};}finally{this.busy=false;}
   }
   start(){if(this.timer)return;log('PUBLISH_WORKER_STARTED',{workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled,intervalMs:this.cfg.intervalMs});this.timer=setInterval(()=>void this.tick(),this.cfg.intervalMs);this.timer.unref();void this.tick();}
   stop(){clearInterval(this.timer);this.timer=null;}
