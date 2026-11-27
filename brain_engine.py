@@ -260,7 +260,7 @@ def run():
         rotation = (prior.get("rotation_history") or []) + [event]
         prior.update({"last_selected_product":candidate.get("title"),
             "last_selected_product_id":product_id,"last_hook":hook,"last_caption":caption,
-            "last_prepared_at":event["at"],"rotation_history":rotation[-500]})
+            "last_prepared_at":event["at"],"rotation_history":rotation[-500:]})
     ms = update_ms_campaigns()
     prior.update({"status":"ACTIVE","last_run_at":now_iso(),"products_synced":len(products),
         "diagnostics_issues_found":len(issues),"price_fixes":fixed,"obsolete_tags_removed":cleaned,
