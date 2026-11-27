@@ -156,7 +156,22 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         log(codeOf(e),{productId:id});return {processed:0,status:'pending_marketing'};
       }
     };
-    const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,ensureImportedAssets:(job,source)=>{
+    const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,prepareStartup:async channel=>{
+      const products=await store.feedRows();
+      const preferred='gid://shopify/Product/16104466776446';
+      products.sort((a,b)=>Number(b.id===preferred)-Number(a.id===preferred));
+      for(const product of products){
+        if(!product?.id||product.status!=='ACTIVE'||product.rejected===true||product.contentReviewed!==true||
+          product.localized?.language!=='de'||!product.asset||product.asset.previewOnly||
+          product.previouslyPublished?.[channel])continue;
+        const current=await fresh(product.id);
+        if(!current||current.status!=='ACTIVE'||current.rejected===true||current.contentReviewed!==true||
+          current.revision!==product.revision||!current.variants?.some(v=>v.available&&Number(v.price)>0))continue;
+        const result=await processProduct(product.id,{freeOnly:true});
+        if((result?.queued||0)>0){log('STARTUP_PRODUCT_PREPARED',{productId:product.id,channel,queued:result.queued,adSpendEUR:0});return true;}
+      }
+      log('STARTUP_NO_SAFE_ACTIVE_PRODUCT',{channel,adSpendEUR:0});return false;
+    },ensureImportedAssets:(job,source)=>{
       if(!importedMedia)fail('IMPORTED_ASSET_VERIFIER_UNAVAILABLE');return importedMedia.ensure(job,source);
     }});
     let catalogBrain=null,brainTimer;
