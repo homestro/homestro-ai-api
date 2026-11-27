@@ -7,7 +7,7 @@ rotation/content state. Social publication remains delegated to the reviewed
 Meta/Zernio publisher in the Node runtime.
 """
 from __future__ import annotations
-import json, os, random, re, sys, tempfile
+import json, os, random, re, sys, tempfile, traceback
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -282,7 +282,12 @@ def main():
         result = run()
         print(json.dumps(result,ensure_ascii=False))
     except Exception as exc:
-        print(json.dumps({"status":"FAILED","reason":str(exc)[:180]},ensure_ascii=False))
+        frames = traceback.extract_tb(sys.exc_info()[2])
+        origin = frames[-1] if frames else None
+        detail = str(exc)[:140]
+        if origin:
+            detail += " at " + origin.name + ":" + str(origin.lineno)
+        print(json.dumps({"status":"FAILED","reason":detail},ensure_ascii=False))
         sys.exit(1)
 
 if __name__ == "__main__":
