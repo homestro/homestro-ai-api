@@ -278,8 +278,12 @@ def main():
         state = read_json(DATA_DIR/"brain-state.json", {})
         print(json.dumps(state,ensure_ascii=False))
         return
-    result = run()
-    print(json.dumps(result,ensure_ascii=False))
+    try:
+        result = run()
+        print(json.dumps(result,ensure_ascii=False))
+    except Exception as exc:
+        print(json.dumps({"status":"FAILED","reason":str(exc)[:180]},ensure_ascii=False))
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
