@@ -8,6 +8,11 @@ export function validGTIN(s) {
   const a=[...s].map(Number);const check=a.pop();
   return (10-a.reverse().reduce((sum,n,i)=>sum+n*(i%2===0?3:1),0)%10)%10===check;
 }
+function feedDescription(value) {
+  return String(value??'')
+    .replace(/[^.!?\r\n]*(?:PayPal|Klarna)[^.!?\r\n]*[.!?]?/gi,' ')
+    .replace(/\s+/g,' ').trim().slice(0,5000);
+}
 function googleCategory(p) {
   const text=[p.title,p.productType,p.localized?.title,p.localized?.searchTitle].join(' ').toLocaleLowerCase('de-DE');
   if(/\b(kopfhoerer|kopfhörer|headphones?|headsets?|erazer xp6)\b/i.test(text))return '543626';
@@ -27,7 +32,7 @@ export function generateFeed(products,cfg) {
       if(!Number.isFinite(v.price) || v.price<=0)continue;
       const link=new URL(trackingLink(p.url,'google','free_listings'));link.searchParams.set('variant',v.id.split('/').pop());
       let content=tag('id',v.id)+tag('item_group_id',p.id)+tag('title',p.localized.searchTitle.slice(0,150))+
-        tag('description',p.localized.description.slice(0,5000))+tag('link',link.toString())+
+        tag('description',feedDescription(p.localized.description))+tag('link',link.toString())+
         tag('image_link',image)+tag('price',v.price.toFixed(2)+' EUR')+
         tag('availability',v.available?'in_stock':'out_of_stock')+tag('condition',p.condition);
       if(category)content+=tag('google_product_category',category);
