@@ -8,6 +8,7 @@ Meta/Zernio publisher in the Node runtime.
 """
 from __future__ import annotations
 import json, os, random, re, sys, tempfile
+from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -81,8 +82,8 @@ def admin_token(domain):
     secret = (os.getenv("SHOPIFY_CLIENT_SECRET") or "").strip()
     if not client_id or not secret:
         return None, "credentials_missing"
-    body = ("client_id=" + client_id + "&client_secret=" + secret +
-            "&grant_type=client_credentials").encode()
+    body = urlencode({"client_id":client_id,"client_secret":secret,
+                       "grant_type":"client_credentials"}).encode()
     data = request_json(f"https://{domain}/admin/oauth/access_token", method="POST",
         headers={"Accept":"application/json","Content-Type":"application/x-www-form-urlencoded"}, body=body)
     token = data.get("access_token")
@@ -95,7 +96,8 @@ def admin_catalog(token, domain):
       products(first:250,after:$after,query:"status:active") {
         nodes { id title handle status onlineStoreUrl tags variants(first:100) {
           nodes { id price compareAtPrice }
-        } pageInfo { hasNextPage endCursor }
+        } }
+        pageInfo { hasNextPage endCursor }
       }
     }"""
     rows, after = [], None
