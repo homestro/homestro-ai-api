@@ -1244,7 +1244,7 @@ async function runDraftImageQA(){
   const token=await getClientToken();
   // Erazer XP6 is already ACTIVE, so inspect its existing gallery first without
   // editing its live listing or changing its status.
-  const activeData=await shopifyGraphQL('query($id:ID!){product(id:$id){id title status description productType media(first:50){pageInfo{hasNextPage} nodes{id mediaContentType status alt ... on MediaImage{image{url width height}}}}}}}',{id:'gid://shopify/Product/16104466776446'},token);
+  const activeData=await shopifyGraphQL('query($id:ID!){product(id:$id){id title status description productType media(first:50){pageInfo{hasNextPage} nodes{id mediaContentType status alt ... on MediaImage{image{url width height}}}}}}',{id:'gid://shopify/Product/16104466776446'},token);
   const active=activeData.product;
   if(active&&/erazer\s*xp6/i.test(String(active.title||''))&&String(active.status)==='ACTIVE'){
    const images=(active.media?.nodes||[]).filter(m=>String(m.mediaContentType||'')==='IMAGE'&&m.image?.url);
