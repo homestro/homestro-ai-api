@@ -65,15 +65,20 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
   return {ready,processProduct:async id=>{
     try{return (await ready)?.processProduct(id)||{processed:0,status:'marketing_disabled'};}
     catch{return {processed:0,status:'pending_marketing'};}
-  },runCycle:async()=>{
+  },runCycle:async(brainResult={})=>{
     const current=await ready;
     if(!current?.enabled)return {status:'marketing_disabled'};
+    let preparation={status:'no_selected_active_product'};
+    const productId=String(brainResult?.selected_product_id||'');
+    if(/^gid:\/\/shopify\/Product\/\d+$/.test(productId)){
+      preparation=await current.processProduct(productId,{freeOnly:true});
+    }
     let publisher={status:'paused'};
     if(current.worker&&current.worker.cfg.workerEnabled&&current.worker.cfg.publishingEnabled){
       await current.worker.tick();
       publisher={status:'single_worker_tick_requested'};
     }
-    return {status:'ready',publisher};
+    return {status:'ready',preparation,publisher};
   }};
 }
 module.exports={registerMarketingPilot,marketingGraphqlAllowed};
