@@ -1628,6 +1628,18 @@ function runUnifiedBrainCycle(){
   try{
    if(typeof marketingPilot.runCycle==='function')marketing=await marketingPilot.runCycle(result);
   }catch(error){marketing={status:'failed',reason:String(error?.message||'MARKETING_CYCLE_FAILED').slice(0,100)};}
+  const published=Array.isArray(marketing?.publisher?.posts)?marketing.publisher.posts:[];
+  if(published.length){
+   try{
+    const statePath=brainPath.replace(/brain_engine\.py$/,'brain-state.json');
+    const state=JSON.parse(await brainFs.readFile(statePath,'utf8'));
+    const ids=published.map(p=>p.remotePostId||p.localPostId).filter(Boolean);
+    state.last_post_ids=[...new Set([...ids,...(Array.isArray(state.last_post_ids)?state.last_post_ids:[])])].slice(0,50);
+    state.last_published_product=published.at(-1)?.productId||state.last_published_product||null;
+    state.last_published_at=new Date().toISOString();
+    const temp=statePath+'.tmp';await brainFs.writeFile(temp,JSON.stringify(state));await brainFs.rename(temp,statePath);
+   }catch(error){console.error('[brain-engine] POST_STATUS_PERSIST_FAILED '+String(error?.message||'IO_ERROR').slice(0,100));}
+  }
   brainLastCycle={...result,marketing_cycle:marketing,completed_at:new Date().toISOString()};
   return brainLastCycle;
  })().finally(()=>{brainRunPromise=null;});
@@ -1642,7 +1654,7 @@ app.get('/api/brain/status',async(_req,res)=>{
   res.set('Cache-Control','no-store').json({
    status:'ACTIVE',modules:{
     store_doctor:{status:state.admin_auth==='authenticated'?'ACTIVE':'DEGRADED',admin_auth:state.admin_auth,price_fixes:state.price_fixes||0},
-    content_publisher:{status:publisherEnabled?'ACTIVE':'PAUSED',worker_enabled:process.env.PILOT_WORKER_ENABLED==='true',publishing_enabled:process.env.PILOT_PUBLISH_ENABLED==='true',last_cycle:brainLastCycle?.marketing_cycle?.status||null},
+    content_publisher:{status:publisherEnabled?'ACTIVE':'PAUSED',worker_enabled:process.env.PILOT_WORKER_ENABLED==='true',publishing_enabled:process.env.PILOT_PUBLISH_ENABLED==='true',last_cycle:brainLastCycle?.marketing_cycle?.publisher?.status||brainLastCycle?.marketing_cycle?.status||null,last_cycle_at:brainLastCycle?.completed_at||null,last_cycle_reason:brainLastCycle?.marketing_cycle?.publisher?.reason||null},
     roas_brain:{status:'READY_FOR_PERFORMANCE_DATA',ad_spend_eur:0.00}
    },
    products_synced:state.products_synced||0,diagnostics_issues_found:diagnostics.issues_found||0,
@@ -1661,10 +1673,14 @@ app.post('/api/brain/run-now',apiKey,async(_req,res)=>{
  try{res.json(await runUnifiedBrainCycle());}
  catch(error){res.status(502).json({status:'FAILED',reason:String(error?.message||'BRAIN_CYCLE_FAILED').slice(0,100),ad_spend_eur:0.00});}
 });
+function logBrainFailure(error){
+ brainLastCycle={status:'FAILED',reason:String(error?.message||'BRAIN_CYCLE_FAILED').slice(0,120),completed_at:new Date().toISOString(),marketing_cycle:{status:'FAILED'}};
+ console.error('[brain-engine] '+brainLastCycle.reason);
+}
 setTimeout(()=>{runUnifiedBrainCycle()
- .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,products_cleaned_count:result.products_cleaned_count,price_fixes:result.price_fixes,product_types_filled:result.product_types_filled,handles_cleaned:result.handles_cleaned,marketing:result.marketing_cycle?.status,ad_spend_eur:0})))
- .catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED')));},30000).unref();
+ .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,products_cleaned_count:result.products_cleaned_count,price_fixes:result.price_fixes,product_types_filled:result.product_types_filled,handles_cleaned:result.handles_cleaned,marketing:result.marketing_cycle?.publisher?.status||result.marketing_cycle?.status,last_post_ids:result.marketing_cycle?.publisher?.posts?.map(p=>p.remotePostId).filter(Boolean)||[],ad_spend_eur:0})))
+ .catch(logBrainFailure);},30000).unref();
 const brainTimer=setInterval(()=>{runUnifiedBrainCycle()
- .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})))
- .catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED')));},4*60*60*1000);
+ .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.publisher?.status||result.marketing_cycle?.status,last_post_ids:result.marketing_cycle?.publisher?.posts?.map(p=>p.remotePostId).filter(Boolean)||[],ad_spend_eur:0})))
+ .catch(logBrainFailure);},4*60*60*1000);
 brainTimer.unref();
