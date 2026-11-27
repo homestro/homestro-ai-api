@@ -1594,7 +1594,7 @@ function runUnifiedBrainCycle(){
   });
   let marketing={status:'unavailable'};
   try{
-   if(typeof marketingPilot.runCycle==='function')marketing=await marketingPilot.runCycle();
+   if(typeof marketingPilot.runCycle==='function')marketing=await marketingPilot.runCycle(result);
   }catch(error){marketing={status:'failed',reason:String(error?.message||'MARKETING_CYCLE_FAILED').slice(0,100)};}
   brainLastCycle={...result,marketing_cycle:marketing,completed_at:new Date().toISOString()};
   return brainLastCycle;
