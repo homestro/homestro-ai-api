@@ -62,8 +62,8 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
       return null;
     }
   })();
-  return {ready,processProduct:async id=>{
-    try{return (await ready)?.processProduct(id)||{processed:0,status:'marketing_disabled'};}
+  return {ready,processProduct:async (id,options)=>{
+    try{return (await ready)?.processProduct(id,options)||{processed:0,status:'marketing_disabled'};}
     catch{return {processed:0,status:'pending_marketing'};}
   },runCycle:async(brainResult={})=>{
     const current=await ready;
