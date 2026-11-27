@@ -42,6 +42,27 @@ export async function approveReviewed(store,cfg) {
       AND old.payload->>'videoURL' IS NOT DISTINCT FROM s.payload->>'videoURL'
       AND old.payload->'imageURLs' IS NOT DISTINCT FROM s.payload->'imageURLs')
     RETURNING s.id,s.channel`,[cfg.excludedProductIds||[],cfg.publicOrigin]);
+  if(!result.rowCount) {
+    const d=await store.pool.query(`WITH q AS (
+      SELECT s.*,p.status AS product_state,p.document AS doc
+      FROM marketing_posts s LEFT JOIN marketing_products p ON p.id=s.product_id
+      WHERE s.status='draft_queued' AND s.channel IN ('facebook','instagram')
+        AND s.product_id LIKE 'gid://shopify/Product/%'
+    )
+    SELECT count(*) AS queued,
+      count(*) FILTER (WHERE product_state='ready') AS product_ready,
+      count(*) FILTER (WHERE doc->>'status'='ACTIVE') AS product_active,
+      count(*) FILTER (WHERE doc->>'contentReviewed'='true') AS content_reviewed,
+      count(*) FILTER (WHERE jsonb_typeof(doc->'variants')='array') AS variants_array,
+      count(*) FILTER (WHERE payload->>'adSpendEUR'='0') AS zero_spend_flag,
+      count(*) FILTER (WHERE COALESCE(payload->>'requiresReview','false')='false') AS review_clear,
+      count(*) FILTER (WHERE COALESCE(payload->>'importedMedia','false')<>'true') AS no_imported_media,
+      count(*) FILTER (WHERE payload->>'productRevision'=doc->>'revision') AS revision_match,
+      count(*) FILTER (WHERE length(COALESCE(payload->>'caption','')) BETWEEN 20 AND 2200) AS caption_length_ok,
+      count(*) FILTER (WHERE COALESCE(payload->>'caption','') !~* '(PayPal|Klarna|Gate B14|Was macht .+ im Alltag leichter)') AS claims_clear
+    FROM q`).then(r=>r.rows[0]);
+    log('AUTONOMY_APPROVAL_DIAGNOSTIC',d);
+  }
   log('AUTONOMY_APPROVAL',{policy:'homestro-reviewed-organic-v1',approved:result.rowCount});
 }
 
