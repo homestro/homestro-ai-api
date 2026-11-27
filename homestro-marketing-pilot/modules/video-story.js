@@ -21,8 +21,11 @@ export function storyAss(copy,script,duration) {
   add(0,duration,'Brand','HOMESTRO');add(0,duration,'Footer','homestro.de');
   const benefits=(copy.benefits||[]).map(x=>clean(x.text||x)).filter(Boolean);
   const evidence=clean([copy.title,copy.description,...benefits].join(' ')).toLowerCase();
+  const candidate=clean(copy.hook);
+  const banned=/was\s+macht\s+.{1,120}\s+im\s+alltag\s+leichter|gate\s*b14/i;
   const hook=/loses fell|entwirren|fellpflege/.test(evidence)?'Loses Fell? Zeit für Pflege.':
-    /aufbewahr|organisi|ordnung/.test(evidence)?'Mehr Ordnung im Alltag?':copy.hook||copy.title;
+    /aufbewahr|organisi|ordnung/.test(evidence)?'Mehr Ordnung im Alltag?':
+    candidate&&!banned.test(candidate)?candidate:clean(script).split(/[.!?]/)[0]||copy.title;
   const headlines=[hook,benefits[0]||copy.title,benefits[1]||copy.title,'Jetzt bei Homestro entdecken'];
   const boundaries=[0,duration*.22,duration*.47,duration*.74,duration];
   headlines.forEach((s,i)=>add(boundaries[i],boundaries[i+1],'Head',wrapStoryText(s,27,2)));
