@@ -26,8 +26,8 @@ export const PRODUCT_QUERY=`query PilotProduct($id:ID!, $mediaAfter:String, $var
   }
 }`;
 export const CATALOG_QUERY=`query PilotCatalog($after:String) {
-  products(first:30,after:$after,query:"status:active OR status:draft OR status:archived") {
-    nodes { id } pageInfo { hasNextPage endCursor }
+  products(first:100,after:$after,query:"status:active") {
+    nodes { id status onlineStoreUrl } pageInfo { hasNextPage endCursor }
   }
 }`;
 export function createShopifyClient({domain,token,version='2026-07',fetchImpl=fetch}) {
@@ -44,10 +44,8 @@ export function createShopifyClient({domain,token,version='2026-07',fetchImpl=fe
 function canonicalProductUrl(p) {
   const raw=String(p?.onlineStoreUrl||'').trim();
   try { const u=new URL(raw); if(u.origin==='https://homestro.de' && u.pathname.startsWith('/products/')) return u.toString(); } catch {}
-  // Shopify can legitimately return no onlineStoreUrl while the product handle is usable on the primary storefront.
-  // Build only from Shopify's own handle; never accept or invent an external host.
-  if(p?.status==='ACTIVE' && /^[a-z0-9][a-z0-9-]*$/i.test(String(p.handle||''))) return `https://homestro.de/products/${p.handle}`;
-  return raw || null;
+  // A generated handle URL does not prove Online Store publication; keep it blocked.
+  return null;
 }
 export async function fetchProduct(graphql,id) {
   let mediaAfter=null,variantsAfter=null, result, media=[],variants=[], first=true;
@@ -63,13 +61,17 @@ export async function fetchProduct(graphql,id) {
   fail('PRODUCT_PAGINATION_LIMIT');
 }
 export async function syncCatalog(graphql,onProduct) {
-  let after=null,processed=0,errors=0,pending=0;
+  let after=null,processed=0,errors=0,pending=0,skippedUnpublished=0;
   for(let page=0;page<1000;page++) {
     const {products}=await graphql(CATALOG_QUERY,{after});
     for(const p of products.nodes) {
+      const url=String(p.onlineStoreUrl||'');
+      let publishedOnStore=false;
+      try {const parsed=new URL(url);publishedOnStore=parsed.protocol==='https:'&&parsed.hostname==='homestro.de'&&parsed.pathname.startsWith('/products/');} catch {}
+      if(p.status!=='ACTIVE'||!publishedOnStore){skippedUnpublished++;continue;}
       try {const r=await onProduct(p.id);processed+=r.processed||0;if(r.status==='pending_marketing')pending++;if(!r.processed)errors++;} catch {errors++;}
     }
-    if(!products.pageInfo.hasNextPage) return {processed,errors,pending};
+    if(!products.pageInfo.hasNextPage) return {processed,errors,pending,skippedUnpublished};
     after=products.pageInfo.endCursor;
   }
   fail('CATALOG_PAGINATION_LIMIT');
