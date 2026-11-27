@@ -9,6 +9,8 @@ import os
 import re
 import sqlite3
 import fcntl
+import urllib.error
+import urllib.request
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -465,6 +467,37 @@ async def _scan_all_trends(products: list[dict[str, Any]], env: dict[str, str]) 
     }
 
 
+def _read_public_shopify_products_json() -> bytes:
+    """Use Shopify's public published-products endpoint when an authenticated feed rejects access."""
+    url = "https://homestro.de/products.json?limit=250"
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": "HomestroProductHunter/1.0"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = response.read(10 * 1024 * 1024 + 1)
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise ValueError("PUBLIC_SHOPIFY_CATALOG_UNAVAILABLE") from exc
+    if len(payload) > 10 * 1024 * 1024:
+        raise ValueError("PUBLIC_SHOPIFY_CATALOG_TOO_LARGE")
+    try:
+        decoded = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("PUBLIC_SHOPIFY_CATALOG_INVALID_JSON") from exc
+    rows = decoded.get("products") if isinstance(decoded, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("PUBLIC_SHOPIFY_CATALOG_MISSING_PRODUCTS")
+    # Shopify's public products.json only lists Online Store-published products.
+    rows = [
+        row for row in rows
+        if isinstance(row, dict)
+        and (not row.get("status") or str(row.get("status")).upper() == "ACTIVE")
+        and str(row.get("handle") or "").strip()
+        and isinstance(row.get("variants"), list)
+    ]
+    return json.dumps({"products": rows}, ensure_ascii=False).encode("utf-8")
+
+
 async def _read_feed(env: dict[str, str]) -> bytes:
     feed_path = env.get("PILOT_PRODUCT_FEED_PATH", "").strip()
     if feed_path:
@@ -485,6 +518,9 @@ async def _read_feed(env: dict[str, str]) -> bytes:
         timeout=httpx.Timeout(20, connect=5), follow_redirects=False
     ) as client:
         response = await client.get(feed_url)
+        if "authentication required" in response.text.casefold():
+            logger.warning("product_hunter_authenticated_feed_rejected_using_public_shopify_catalog")
+            return _read_public_shopify_products_json()
         response.raise_for_status()
         return response.content
 
