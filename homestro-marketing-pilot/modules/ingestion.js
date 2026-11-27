@@ -82,7 +82,7 @@ export class Ingestion {
       }
       if(reasons.length){
         await this.store.saveProduct(p,'pending_marketing',reasons);
-        log('CONTENT_PREPARED',{productId:p.id,prepared:p.localizationPrepared===true,queued,publishable:false});
+        log('CONTENT_PREPARED',{productId:p.id,prepared:p.localizationPrepared===true,queued,publishable:false,reasons:[...new Set(reasons)]});
         return {processed:1,status:'pending_marketing',reasons,queued,assetFormat:asset?.format||null};
       }
       await this.store.saveProduct(p,'ready',[]);
