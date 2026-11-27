@@ -173,6 +173,18 @@ async function dailyVideoCount(dir) {
 async function encode(args,cwd,timeout=180000) {
   return run('/usr/bin/ffmpeg',args,timeout,cwd);
 }
+async function assertMetaReelSpec(file) {
+  const result=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_streams','-of','json',file]));
+  const video=(result.streams||[]).find(stream=>stream.codec_type==='video');
+  const audio=(result.streams||[]).find(stream=>stream.codec_type==='audio');
+  const size=(await stat(file)).size;
+  if(!video||video.codec_name!=='h264'||video.width!==1080||video.height!==1920||
+     video.pix_fmt!=='yuv420p'||video.avg_frame_rate!=='30/1'||
+     !audio||audio.codec_name!=='aac'||Number(audio.sample_rate)!==44100||audio.channels!==2||size<=10000)
+    fail('META_REEL_SPEC_INVALID');
+  return {width:video.width,height:video.height,fps:video.avg_frame_rate,pixelFormat:video.pix_fmt,
+    audioCodec:audio.codec_name,audioSampleRate:Number(audio.sample_rate),audioChannels:audio.channels,size};
+}
 export class MediaRenderer {
   constructor(cfg) {this.cfg=cfg;}
   async render(product) {
@@ -193,24 +205,29 @@ export class MediaRenderer {
       }
     }
     if(!selected.videoURL) return this.renderImageReel(product,selected);
-    const key=hash({media:selected,hook:product.localized.hook,renderVersion:3});
+    const key=hash({media:selected,hook:product.localized.hook,renderVersion:4});
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const output=join(dir,key+'.mp4');
-    try {await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch{}
+    try {await stat(output);await assertMetaReelSpec(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch{}
     const tmp=await mkdtemp(join(dir,'render-'));
     try {
       const wrapped=product.localized.hook.match(/.{1,32}(?:\s|$)|.{1,32}/g)?.map(x=>x.trim()).join('\n')||'';
       await writeFile(join(tmp,'hook.txt'),wrapped,'utf8');
       const hook=`drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=hook.txt:expansion=none:fontsize=32:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=12:x=(w-tw)/2:y=70:enable='lt(t,3)'`;
-      const vf=`scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x151515,setsar=1,fps=30,${hook}`;
+      const vf=`scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x151515,setsar=1,fps=30,format=yuv420p,${hook}`;
       const args=['-hide_banner','-loglevel','error','-y'];
       await downloadMedia(selected.videoURL,join(tmp,'source.mp4'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch);
-      const probe=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_format','-of','json',join(tmp,'source.mp4')]));
+      const probe=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_streams','-show_format','-of','json',join(tmp,'source.mp4')]));
+      const hasAudio=(probe.streams||[]).some(stream=>stream.codec_type==='audio');
       if(Number(probe.format?.duration)<4 || !Number.isFinite(Number(probe.format?.duration))) fail('VIDEO_TOO_SHORT');
-      args.push('-i',join(tmp,'source.mp4'),'-t','30','-vf',vf,'-map','0:v:0','-map','0:a:0?');
-      args.push('-threads','1','-filter_threads','1','-filter_complex_threads','1',
-        '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
+      args.push('-i',join(tmp,'source.mp4'));
+      if(!hasAudio)args.push('-f','lavfi','-t','30','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
+      args.push('-t','30','-vf',vf,'-map','0:v:0','-map',hasAudio?'0:a:0':'1:a:0',
+        '-threads','1','-filter_threads','1','-filter_complex_threads','1',
+        '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p',
+        '-c:a','aac','-ar','44100','-ac','2','-b:a','128k','-shortest','-movflags','+faststart',join(tmp,'out.mp4'));
       await encode(args,tmp);
+      await assertMetaReelSpec(join(tmp,'out.mp4'));
       await rename(join(tmp,'out.mp4'),output);
       return {format:'reels',videoURL:this.url(key),imageURLs:[]};
     } finally {await rm(tmp,{recursive:true,force:true});}
@@ -223,10 +240,10 @@ export class MediaRenderer {
       return gallery;
     }
     const c=product.localized||{},script=fallbackScript(product);
-    const key=hash({videoEngine:6,id:product.id,revision:product.revision||null,script,shots:photos});
+    const key=hash({videoEngine:7,id:product.id,revision:product.revision||null,script,shots:photos});
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const output=join(dir,key+'.mp4');
-    try {await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch {}
+    try {await stat(output);await assertMetaReelSpec(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch {}
     const files=photos.map(url=>join(dir,new URL(url).pathname.split('/').pop()));
     const uniqueFiles=[...new Set(files)].slice(0,4);
     // Repeat 1–2 verified photos as distinct crops so the Reel still has multiple moving beats.
@@ -238,19 +255,22 @@ export class MediaRenderer {
       const args=['-hide_banner','-loglevel','error','-y'];
       for(const file of shots)args.push('-loop','1','-t',segment.toFixed(3),'-i',file);
       const panX=[20,-24,28,-18],panY=[25,-20,-16,22];
-      shots.forEach((_,i)=>filters.push('['+i+':v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,'+
-        "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+"+panX[i%4]+"*sin(on/48)':y='(ih-ih/zoom)/2+"+panY[i%4]+"*cos(on/52)':d=1:s=720x1280:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
+      shots.forEach((_,i)=>filters.push('['+i+':v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,'+
+        "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+"+panX[i%4]+"*sin(on/48)':y='(ih-ih/zoom)/2+"+panY[i%4]+"*cos(on/52)':d=1:s=1080x1920:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
       let current='v0';
       for(let i=1;i<shots.length;i++){
         const next='x'+i,offset=(i*(segment-fade)).toFixed(3);
         filters.push('['+current+'][v'+i+']xfade=transition=fade:duration='+fade+':offset='+offset+'['+next+']');
         current=next;
       }
+      args.push('-f','lavfi','-t',String(duration),'-i','anullsrc=channel_layout=stereo:sample_rate=44100');
       filters.push('['+current+']ass=story.ass[v]');
-      args.push('-filter_complex',filters.join(';'),'-map','[v]','-an','-t',String(duration),
+      args.push('-filter_complex',filters.join(';'),'-map','[v]','-map',String(shots.length)+':a:0','-t',String(duration),
         '-threads','1','-filter_threads','1','-filter_complex_threads','1',
-        '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',join(tmp,'out.mp4'));
+        '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p',
+        '-c:a','aac','-ar','44100','-ac','2','-b:a','128k','-shortest','-movflags','+faststart',join(tmp,'out.mp4'));
       await encode(args,tmp,240000);
+      await assertMetaReelSpec(join(tmp,'out.mp4'));
       await rename(join(tmp,'out.mp4'),output);
       log('ORGANIC_REEL_READY',{productId:product.id,angles:shots.length,render:'ffmpeg_zoompan',paidGeneration:false});
       return {format:'reels',videoURL:this.url(key),imageURLs:[]};
@@ -261,13 +281,13 @@ export class MediaRenderer {
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const source=selected.videoURL?{video:selected.videoURL}:{image:selected.images[0]};
     const c=product.localized||{};
-    const version={videoEngine:4,source,id:product.id,title:c.title,description:c.description,hook:c.hook,benefits:c.benefits,
+    const version={videoEngine:5,source,id:product.id,title:c.title,description:c.description,hook:c.hook,benefits:c.benefits,
       scriptModel:this.cfg.videoScriptModel||'gpt-4o-mini',ttsModel:this.cfg.videoTtsModel||'gpt-4o-mini-tts',voice:this.cfg.videoTtsVoice||'coral'};
-    const audioKey=hash(version),key=hash({...version,videoEngine:5,shots:selected.images.slice(0,4)}),output=join(dir,key+'.mp4'),scriptPath=join(dir,audioKey+'.script.txt'),speechPath=join(dir,audioKey+'.speech.mp3');
+    const audioKey=hash(version),key=hash({...version,videoEngine:6,shots:selected.images.slice(0,4)}),output=join(dir,key+'.mp4'),scriptPath=join(dir,audioKey+'.script.txt'),speechPath=join(dir,audioKey+'.speech.mp3');
     let script,speech;
     try{script=(await readFile(scriptPath,'utf8')).trim();}catch{}
     try{speech=await readFile(speechPath);}catch{}
-    try{await stat(output);log('AI_VIDEO_READY',{productId:product.id,videoURL:this.url(key),voiceover:true,cached:true});return {format:'reels',videoURL:this.url(key),imageURLs:[],videoScript:script||null,voiceover:true};}catch{}
+    try{await stat(output);await assertMetaReelSpec(output);log('AI_VIDEO_READY',{productId:product.id,videoURL:this.url(key),voiceover:true,cached:true});return {format:'reels',videoURL:this.url(key),imageURLs:[],videoScript:script||null,voiceover:true};}catch{}
     const tmp=await mkdtemp(join(dir,'render-'));
     try{
       // Check the daily voice quota before spending tokens on either a script or speech.
@@ -292,7 +312,7 @@ export class MediaRenderer {
         const info=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_format','-of','json',join(tmp,'source.mp4')]));
         if(Number(info.format?.duration)<2||!Number.isFinite(Number(info.format?.duration)))fail('VIDEO_TOO_SHORT');
         args.push('-stream_loop','-1','-i',join(tmp,'source.mp4'),'-i',speechPath,'-map','0:v:0','-map','1:a:0','-t',String(duration),
-          '-vf',"scale=680:680:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:265:color=0xf4f4ef,setsar=1,fps=30,ass=story.ass");
+          '-vf',"scale=1020:1020:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:410:color=0xf4f4ef,setsar=1,fps=30,format=yuv420p,ass=story.ass");
       } else {
         // OCR-rank distinct product angles, then animate each scene with Ken Burns motion.
         const photos=await this.carousel(selected.images);
@@ -302,8 +322,8 @@ export class MediaRenderer {
         for(const file of shots)args.push('-loop','1','-i',file);
         args.push('-i',speechPath);
         const fade=0.25,segment=(duration+fade*(shots.length-1))/shots.length,filters=[];
-        shots.forEach((_,i)=>filters.push('['+i+':v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,'+
-          "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+sin(on/48)*20':y='(ih-ih/zoom)/2+cos(on/52)*25':d=1:s=720x1280:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
+        shots.forEach((_,i)=>filters.push('['+i+':v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,'+
+          "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+sin(on/48)*20':y='(ih-ih/zoom)/2+cos(on/52)*25':d=1:s=1080x1920:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
         let current='v0';
         for(let i=1;i<shots.length;i++){
           const next='x'+i,offset=(i*(segment-fade)).toFixed(3);
@@ -315,8 +335,9 @@ export class MediaRenderer {
       }
       args.push('-threads','1','-filter_threads','1','-filter_complex_threads','1',
         '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p',
-        '-af','loudnorm=I=-16:TP=-1.5:LRA=11','-c:a','aac','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
+        '-af','loudnorm=I=-16:TP=-1.5:LRA=11','-c:a','aac','-ar','44100','-ac','2','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
       await encode(args,tmp,240000);
+      await assertMetaReelSpec(join(tmp,'out.mp4'));
       await rename(join(tmp,'out.mp4'),output);
       log('AI_VIDEO_READY',{productId:product.id,videoURL:this.url(key),voiceover:true,cached:false,duration});
       return {format:'reels',videoURL:this.url(key),imageURLs:[],videoScript:script,voiceover:true};

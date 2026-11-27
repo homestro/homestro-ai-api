@@ -1,4 +1,17 @@
 import {fail,sleep,log} from './core.js';
+import {readFile,stat} from 'node:fs/promises';
+import {join} from 'node:path';
+
+function safeMetaText(value) {
+  return String(value||'').replace(/https?:\/\/\S+/g,'[URL]').replace(/[A-Za-z0-9_-]{40,}/g,'[REDACTED]').slice(0,2000);
+}
+function metaErrorJSON(body) {
+  const error=body?.error||body||{};
+  if(!error||typeof error!=='object')return {raw:safeMetaText(error)};
+  return {type:error.type||null,message:safeMetaText(error.message),code:error.code??null,
+    error_subcode:error.error_subcode??null,error_user_title:safeMetaText(error.error_user_title),
+    error_user_msg:safeMetaText(error.error_user_msg),fbtrace_id:error.fbtrace_id||null};
+}
 
 export class MetaOrganic {
   constructor(cfg,fetchImpl=fetch) {this.cfg=cfg;this.fetch=fetchImpl;}
@@ -39,6 +52,51 @@ export class MetaOrganic {
     while(Date.now()<deadline){const state=await read();if(isReady(state))return state;await sleep(5000);}
     fail('META_PROCESSING_TIMEOUT');
   }
+  async verifyInstagramMp4(url) {
+    let response;
+    try {
+      response=await this.fetch(url,{method:'HEAD',redirect:'error',signal:AbortSignal.timeout(20000)});
+    } catch { fail('INSTAGRAM_MP4_HEAD_FAILED'); }
+    const contentType=String(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+    const contentLength=Number(response.headers.get('content-length')||0);
+    if(response.status!==200||contentType!=='video/mp4'||contentLength<=10000) {
+      log('META_INSTAGRAM_VIDEO_PREFLIGHT_FAILED',{httpStatus:response.status,contentType,contentLength});
+      fail('INSTAGRAM_MP4_PREFLIGHT_FAILED');
+    }
+    return {httpStatus:response.status,contentType,contentLength};
+  }
+  async publishFacebookVideo(job,checkpoint) {
+    const p=job.payload,asset=new URL(p.videoURL);
+    const match=asset.pathname.match(/^\/marketing-assets\/([a-f0-9]{64})\.mp4$/);
+    if(asset.origin!==this.cfg.publicOrigin||!match)fail('UNTRUSTED_PUBLISH_ASSET');
+    const filePath=join(this.cfg.dataDir||'/data/marketing','assets',match[1]+'.mp4');
+    let bytes,info;
+    try {[bytes,info]=await Promise.all([readFile(filePath),stat(filePath)]);}
+    catch {fail('LOCAL_REEL_ASSET_MISSING');}
+    if(info.size<=10000||bytes.length!==info.size)fail('LOCAL_REEL_ASSET_INVALID');
+    const credentials=await this.credentials();
+    const form=new FormData();
+    form.append('source',new Blob([bytes],{type:'video/mp4'}),'homestro-reel.mp4');
+    form.append('title',String(p.title||'Homestro Reel').slice(0,100));
+    form.append('description',String(p.caption||''));
+    form.append('published','true');
+    await checkpoint({phase:'fb_direct_upload_intent',assetBytes:info.size});
+    const endpoint=new URL(`https://graph-video.facebook.com/${this.cfg.graphVersion}/${this.cfg.pageId}/videos`);
+    let response,body;
+    try {
+      response=await this.fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${credentials.token}`},
+        body:form,signal:AbortSignal.timeout(120000),redirect:'error'});
+      body=await response.json();
+    } catch {fail('FB_BINARY_UPLOAD_TRANSPORT_FAILED');}
+    if(!response.ok||body?.error||!/^\\d+$/.test(String(body?.id||''))) {
+      log('META_API_ERROR',{stage:'facebook_direct_binary_upload',httpStatus:response.status,metaError:metaErrorJSON(body)});
+      if(body?.error?.code===190)await this.cfg.onCredentialError?.({metaCode:190},credentials);
+      fail(body?.error?.code===190?'META_REAUTH_REQUIRED':'FB_BINARY_UPLOAD_FAILED');
+    }
+    const postId=String(body.id);
+    await checkpoint({phase:'published',postId,upload:'direct_multipart',permalink:body.permalink_url||null});
+    return postId;
+  }
   async publish(job,checkpoint) {
     if(!this.cfg.publishingEnabled)fail('PUBLISHING_DISABLED');
     if(job.status!=='publishing' || !job.approved_by || !job.approved_at || job.payload.adSpendEUR!==0)
@@ -56,13 +114,19 @@ export class MetaOrganic {
     if(p.format!=='reels')fail('INVALID_POST_FORMAT');
     // Every mutation intent is durable before network I/O. Uncertain results are never retried automatically.
     if(job.channel==='instagram') {
+      const preflight=await this.verifyInstagramMp4(p.videoURL);
+      log('META_INSTAGRAM_VIDEO_PREFLIGHT_OK',{...preflight});
       await checkpoint({phase:'ig_create_intent'});
       const c=await this.request(`${this.cfg.instagramId}/media`,{method:'POST',body:{
         media_type:'REELS',video_url:p.videoURL,caption:p.caption,share_to_feed:'true'}});
       if(!/^\d+$/.test(String(c.id)))fail('META_CONTAINER_MISSING');
       await checkpoint({phase:'ig_processing',containerId:c.id});
-      await this.poll(()=>this.request(c.id,{fields:'status_code'}),s=>{
-        if(['ERROR','EXPIRED'].includes(s.status_code))fail('IG_CONTAINER_FAILED');
+      await this.poll(()=>this.request(c.id,{fields:'status_code,status'}),s=>{
+        if(['ERROR','EXPIRED'].includes(s.status_code)){
+          log('META_CONTAINER_ERROR',{channel:'instagram',containerId:c.id,statusCode:s.status_code,
+            status:s.status||null,metaError:metaErrorJSON(s)});
+          fail('IG_CONTAINER_FAILED');
+        }
         return s.status_code==='FINISHED';
       });
       await checkpoint({phase:'ig_publish_intent',containerId:c.id});
@@ -72,35 +136,7 @@ export class MetaOrganic {
       return post.id;
     }
     if(job.channel!=='facebook')fail('INVALID_CHANNEL');
-    await checkpoint({phase:'fb_start_intent'});
-    const s=await this.request(`${this.cfg.pageId}/video_reels`,{method:'POST',body:{upload_phase:'start'}});
-    if(!/^\d+$/.test(String(s.video_id)))fail('META_CONTAINER_MISSING');
-    const upload=new URL(s.upload_url);
-    if(upload.origin!=='https://rupload.facebook.com' ||
-       !new RegExp(`^/video-upload/v\\d+\\.\\d+/${s.video_id}$`).test(upload.pathname))fail('UNTRUSTED_UPLOAD_URL');
-    await checkpoint({phase:'fb_upload_intent',videoId:s.video_id});
-    const uploadCredentials=await this.credentials();
-    const r=await this.fetch(upload,{method:'POST',headers:{Authorization:`OAuth ${uploadCredentials.token}`,
-      file_url:p.videoURL},signal:AbortSignal.timeout(60000),redirect:'error'});
-    const uploaded=await r.json();
-    if(uploaded.error?.code===190){await this.cfg.onCredentialError?.({metaCode:190},uploadCredentials);fail('META_REAUTH_REQUIRED');}
-    if(!r.ok || !uploaded.success)fail('FB_UPLOAD_FAILED');
-    await checkpoint({phase:'fb_uploaded',videoId:s.video_id});
-    await this.poll(()=>this.request(s.video_id,{fields:'status'}),s=>{
-      if(s.status?.uploading_phase?.status==='error')fail('FB_UPLOAD_FAILED');
-      return s.status?.uploading_phase?.status==='complete';
-    });
-    // Facebook finish initiates assembly/encoding. Do not wait for encoding before finish.
-    await checkpoint({phase:'fb_publish_intent',videoId:s.video_id});
-    const finished=await this.request(`${this.cfg.pageId}/video_reels`,{method:'POST',body:{
-      upload_phase:'finish',video_state:'PUBLISHED',video_id:s.video_id,description:p.caption,title:p.title}});
-    if(!finished.success)fail('META_PUBLISH_UNCONFIRMED');
-    await this.poll(()=>this.request(s.video_id,{fields:'status'}),s=>{
-      if(s.status?.processing_phase?.status==='error' || s.status?.publishing_phase?.status==='error')fail('FB_PROCESSING_FAILED');
-      return s.status?.publishing_phase?.status==='complete';
-    });
-    await checkpoint({phase:'published',videoId:s.video_id,postId:s.video_id});
-    return s.video_id;
+    return this.publishFacebookVideo(job,checkpoint);
   }
   async verifyJpegAsset(url) {
     const response=await this.fetch(url,{headers:{Accept:'image/jpeg'},signal:AbortSignal.timeout(20000),redirect:'error'});
@@ -124,7 +160,7 @@ export class MetaOrganic {
         if(!/^\d+$/.test(String(c.id)))fail('META_CONTAINER_MISSING');
         children.push(c.id);await checkpoint({phase:'ig_image_processing',children:[...children]});
         await this.poll(()=>this.request(c.id,{fields:'status_code'}),s=>{
-          if(['ERROR','EXPIRED'].includes(s.status_code))fail('IG_CONTAINER_FAILED');return s.status_code==='FINISHED';
+          if(['ERROR','EXPIRED'].includes(s.status_code)){log('META_CONTAINER_ERROR',{channel:'instagram',containerId:c.id,statusCode:s.status_code,status:s.status||null,metaError:metaErrorJSON(s)});fail('IG_CONTAINER_FAILED');}return s.status_code==='FINISHED';
         });
       }
       let containerId=children[0];

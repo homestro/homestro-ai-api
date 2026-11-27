@@ -158,6 +158,12 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
     };
     const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,prepareStartup:async channel=>{
       const productId='gid://shopify/Product/16104466776446';
+      const reset=await pool.query(`UPDATE marketing_posts SET status='superseded',error_code='SAFE_RETRY_REENCODED_ASSET',updated_at=now()
+        WHERE product_id=$1 AND channel=$2 AND status='recovery_required' AND remote->>'postId' IS NULL
+          AND ((channel='facebook' AND remote->>'phase'='fb_upload_intent' AND remote->>'videoId' IS NOT NULL)
+            OR (channel='instagram' AND remote->>'phase'='ig_processing' AND remote->>'containerId' IS NOT NULL))
+        RETURNING id`,[productId,channel]);
+      if(reset.rowCount)log('STARTUP_SAFE_RECOVERY_RESET',{productId,channel,count:reset.rowCount,reason:'pre_publish_checkpoint_no_post_id',adSpendEUR:0});
       const raw=await fetchProduct(graphql,productId);
       const sourceInputs=prepareInputs&&raw?await prepareInputs(raw):null;
       if(!sourceInputs?.contentReviewed||!sourceInputs?.germanCopy||sourceInputs.germanCopy.language!=='de'){
