@@ -75,7 +75,7 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
   return approved;
 }
 export class Worker {
-  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;this.lastPublished=null;this.startupTimer=null;}
+  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets,prepareStartup}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets,prepareStartup});this.busy=false;this.lastPublished=null;this.startupTimer=null;}
   async tick(postId=null,options={}) {
     if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return {status:'busy',posts:[]};}
     if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return {status:'disabled',posts:[]};}
@@ -84,6 +84,10 @@ export class Worker {
     this.busy=true;
     let publishedPost=null;
     try {
+      if(startupOverride&&requiredChannel&&this.prepareStartup) {
+        try { await this.prepareStartup(requiredChannel); }
+        catch(e) { log('STARTUP_PRODUCT_PREPARATION_FAILED',{channel:requiredChannel,reason:codeOf(e)}); }
+      }
       const acquired=await this.store.withWorkerLock(async client=>{
         const count=Number((await client.query(`SELECT count(*) FROM marketing_posts WHERE
           (status='published' AND published_at>now()-interval '24 hours') OR (status IN ('publishing','recovery_required') AND COALESCE(attempted_at,updated_at)>now()-interval '24 hours')`)).rows[0].count);
@@ -100,6 +104,9 @@ export class Worker {
             ? await client.query(`SELECT s.* FROM marketing_posts s WHERE s.status='approved'
               AND ($4::boolean OR NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=s.id AND plan.scheduled_for>now()))
               AND ($5::text IS NULL OR s.channel=$5)
+              AND EXISTS (SELECT 1 FROM marketing_products current_product WHERE current_product.id=s.product_id
+                AND current_product.status='ready' AND current_product.document->>'status'='ACTIVE'
+                AND current_product.document->>'revision'=s.payload->>'productRevision')
               AND NOT (s.product_id=ANY($1::text[]))
               AND (SELECT count(*) FROM marketing_posts recent WHERE recent.channel=s.channel
                 AND ((recent.status='published' AND recent.published_at>now()-interval '24 hours')
@@ -120,7 +127,7 @@ export class Worker {
               AND ($3::int=0 OR $4::boolean OR NOT EXISTS (SELECT 1 FROM marketing_posts spaced WHERE spaced.channel=s.channel
                 AND spaced.status IN ('published','publishing','recovery_required')
                 AND COALESCE(spaced.published_at,spaced.attempted_at,spaced.updated_at)>now()-$3::int*interval '1 hour'))
-              ORDER BY CASE WHEN s.approved_by='auto-verified-shopify-product-v1' THEN 0 ELSE 1 END,s.approved_at LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0,startupOverride,requiredChannel])
+              ORDER BY CASE WHEN s.approved_by='auto-verified-shopify-product-v1' THEN 0 ELSE 1 END,s.approved_at DESC LIMIT 1`,[this.cfg.excludedProductIds||[],this.cfg.maxDailyPerChannel,this.cfg.publishEveryHours||0,startupOverride,requiredChannel])
             : await client.query("SELECT * FROM marketing_posts WHERE status='approved' AND NOT EXISTS (SELECT 1 FROM marketing_publication_schedule plan WHERE plan.queue='marketing_posts' AND plan.post_id=marketing_posts.id AND plan.scheduled_for>now()) ORDER BY approved_at LIMIT 1")).rows[0];
         if(!job){
           if(this.cfg.autonomyEnabled) {
