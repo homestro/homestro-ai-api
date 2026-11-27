@@ -1584,8 +1584,12 @@ function runUnifiedBrainCycle(){
    child.on('error',error=>{clearTimeout(timer);reject(error);});
    child.on('close',code=>{
     clearTimeout(timer);
-    if(code!==0)return reject(new Error('BRAIN_ENGINE_EXIT_'+code));
-    try{resolve(JSON.parse(stdout.trim().split(/\\r?\\n/).at(-1)));}catch{return reject(new Error('BRAIN_ENGINE_INVALID_OUTPUT'));}
+    const output=stdout.trim().split(/\\r?\\n/).at(-1);
+    if(code!==0){
+     try{const failure=JSON.parse(output);return reject(new Error(String(failure.reason||'BRAIN_ENGINE_EXIT_'+code).slice(0,180)));}
+     catch{return reject(new Error('BRAIN_ENGINE_EXIT_'+code));}
+    }
+    try{resolve(JSON.parse(output));}catch{return reject(new Error('BRAIN_ENGINE_INVALID_OUTPUT'));}
    });
   });
   let marketing={status:'unavailable'};
