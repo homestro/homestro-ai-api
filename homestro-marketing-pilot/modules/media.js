@@ -3,7 +3,7 @@ import {storyAss} from './video-story.js';
 import {mkdir,mkdtemp,readFile,writeFile,rename,rm,stat,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
-import {hash,fail,log} from './core.js';
+import {hash,fail,log,codeOf} from './core.js';
 
 export function extractMedia(nodes=[]) {
   const videos=nodes.filter(n=>n.mediaContentType==='VIDEO' && n.status==='READY')
