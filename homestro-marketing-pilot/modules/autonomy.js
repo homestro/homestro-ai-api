@@ -37,7 +37,10 @@ export async function approveReviewed(store,cfg) {
     AND s.payload->>'productRevision'=p.document->>'revision'
     AND NOT (s.product_id=ANY($1::text[]))
     AND NOT EXISTS (SELECT 1 FROM marketing_posts old WHERE old.product_id=s.product_id
-      AND old.channel=s.channel AND old.status IN ('published','publishing','recovery_required'))
+      AND old.channel=s.channel AND old.status IN ('published','publishing','recovery_required')
+      AND old.payload->>'caption'=s.payload->>'caption'
+      AND old.payload->>'videoURL' IS NOT DISTINCT FROM s.payload->>'videoURL'
+      AND old.payload->'imageURLs' IS NOT DISTINCT FROM s.payload->'imageURLs')
     RETURNING s.id,s.channel`,[cfg.excludedProductIds||[],cfg.publicOrigin]);
   log('AUTONOMY_APPROVAL',{policy:'homestro-reviewed-organic-v1',approved:result.rowCount});
 }
