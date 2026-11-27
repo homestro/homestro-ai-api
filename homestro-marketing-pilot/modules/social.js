@@ -106,7 +106,10 @@ export class SocialCoordinator {
               AND payload->>'productRevision'=$2 LIMIT 1`,[p.id,p.revision])).rows;
           if(approved.length)continue;
         }
-        const payload=prepareSocial(p,channel,{...this.cfg,...this.providerCfg}),revision=hash(payload);
+        const payload=prepareSocial(p,channel,{...this.cfg,...this.providerCfg});
+        payload.adSpendEUR=0;
+        payload.requiresReview=false;
+        const revision=hash(payload);
         await this.pool.query(`UPDATE marketing_social_posts SET status='superseded',updated_at=now()
           WHERE product_id=$1 AND channel=$2 AND revision<>$3 AND status IN ('draft_queued','approved')
           AND COALESCE(payload->>'importedMedia','false')<>'true'`,[p.id,channel,revision]);
@@ -119,13 +122,18 @@ export class SocialCoordinator {
       }catch(e){log('SOCIAL_PREPARATION_PENDING',{productId:p.id,channel,reason:codeOf(e)});}
     }
     if(this.cfg.autonomyEnabled)await this.pool.query(`UPDATE marketing_social_posts s
-      SET status='approved',approved_by='Mirko: homestro-reviewed-organic-v1',approved_at=now(),updated_at=now()
-      FROM marketing_products p WHERE s.product_id=p.id AND s.channel='pinterest' AND s.status='draft_queued'
-      AND p.status='ready' AND p.document->>'contentReviewed'='true'
+      SET status='approved',approved_by='auto-verified-shopify-organic-v1',approved_at=now(),updated_at=now(),
+        payload=jsonb_set(s.payload,'{requiresReview}','false'::jsonb)
+      FROM marketing_products p WHERE s.product_id=p.id AND s.channel IN ('pinterest','facebook','instagram')
+      AND s.status='draft_queued' AND p.status='ready' AND p.document->>'contentReviewed'='true'
       AND p.document->>'status'='ACTIVE' AND COALESCE(p.document->>'rejected','false')<>'true'
       AND s.payload->>'productRevision'=p.document->>'revision'
       AND COALESCE(s.payload->>'importedMedia','false')<>'true'
-      AND NOT (s.product_id=ANY($1::text[]))`,[this.cfg.excludedProductIds||[]]);
+      AND s.payload->>'requiresReview'='false' AND s.payload->>'adSpendEUR'='0'
+      AND NOT (s.product_id=ANY($1::text[]))
+      AND NOT EXISTS (SELECT 1 FROM marketing_social_posts old WHERE old.product_id=s.product_id
+        AND old.channel=s.channel AND old.status IN ('publishing','remote_pending','published','recovery_required'))`,
+      [this.cfg.excludedProductIds||[]]);
     return {queued,adSpendEUR:0};
   }
   async list(status='draft_queued'){

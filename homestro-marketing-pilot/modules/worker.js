@@ -23,7 +23,10 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
       const payload=job.payload||{},stored=await store.product(job.product_id);
       const current=await freshSnapshot(job.product_id);
       const localized=current?.localized||current?.germanCopy||stored?.document?.localized||stored?.document?.germanCopy;
-      const images=payload.imageURLs;
+      const images=payload.imageURLs,source=extractMedia(current?.media||[]);
+      const isReel=payload.format==='reels'&&Array.isArray(images)&&images.length===0&&
+        typeof payload.videoURL==='string'&&payload.requiresReview!==true&&
+        /^https:\/\/[a-z0-9.-]+\/marketing-assets\/[a-f0-9]{64}\.mp4$/.test(payload.videoURL);
       if(!current||stored?.status!=='ready'||current.status!=='ACTIVE'||current.rejected===true||
         !current.contentReviewed||current.revision!==payload.productRevision||
         stored.document?.revision!==current.revision||localized?.language!=='de'||
@@ -31,12 +34,19 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
         typeof payload.caption!=='string'||payload.caption.length<20||payload.caption.length>2200||
         !payload.caption.includes(localized.hook)||!sourceLooksGerman(payload.caption)||
         !current.variants?.some(v=>v.available&&Number(v.price)>0)||
-        !['image','carousel'].includes(payload.format)||payload.videoURL||
-        !Array.isArray(images)||images.length<1||images.length>10)continue;
-      const sourceImages=extractMedia(current.media||[]).images;
-      if(!sourceImages.length)continue;
+        (!isReel&&!['image','carousel'].includes(payload.format))||(!isReel&&payload.videoURL)||
+        (isReel&&!['image','video'].some(k=>k==='video'?Boolean(source.videoURL):source.images.length>=3))||
+        (!isReel&&(!Array.isArray(images)||images.length<1||images.length>10)))continue;
+      const sourceImages=source.images;
+      if(!sourceImages.length&&!source.videoURL)continue;
       let imageIsProductPhoto=false;
-      if(payload.importedMedia===true) {
+      if(isReel) {
+        try {
+          const u=new URL(payload.videoURL);
+          imageIsProductPhoto=u.origin===cfg.publicOrigin&&!u.search&&!u.hash&&
+            /^\/marketing-assets\/[a-f0-9]{64}\.mp4$/.test(u.pathname);
+        } catch { imageIsProductPhoto=false; }
+      } else if(payload.importedMedia===true) {
         const imported=(await client.query("SELECT checksum,product_id,product_revision,metadata,asset,state FROM marketing_imported_media WHERE job_id=$1",[payload.importedJobId])).rows[0];
         const asset=imported?.asset||{};
         imageIsProductPhoto=Boolean(imported&&imported.state==='queued'&&
@@ -55,7 +65,7 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
         });
       }
       if(!imageIsProductPhoto)continue;
-      const changed=await client.query("UPDATE marketing_posts SET status='approved',approved_by='auto-verified-shopify-product-v1',approved_at=now(),updated_at=now(),payload=jsonb_set(payload,'{requiresVisualReview}','false'::jsonb) WHERE id=$1 AND status='draft_queued' AND product_id=$2 AND payload->>'productRevision'=$3 RETURNING id",[job.id,job.product_id,current.revision]);
+      const changed=await client.query("UPDATE marketing_posts SET status='approved',approved_by='auto-verified-shopify-product-v1',approved_at=now(),updated_at=now(),payload=jsonb_set(jsonb_set(payload,'{requiresVisualReview}','false'::jsonb),'{requiresReview}','false'::jsonb) WHERE id=$1 AND status='draft_queued' AND product_id=$2 AND payload->>'productRevision'=$3 RETURNING id",[job.id,job.product_id,current.revision]);
       approved+=changed.rowCount;
     } catch {
       // A stale or temporarily unavailable source remains in draft_queued.

@@ -45,7 +45,7 @@ function priceForCost(cost, currentPrice, rules = {}) {
   const denominator = 1 - commission - ad;
   if (!Number.isFinite(denominator) || denominator <= 0) return null;
   const profitFloor = (landed + orderFee + minProfit) / denominator;
-  const target = Math.max(minPrice, profitFloor, Number(currentPrice) || 0);
+  const target = Math.max(minPrice, profitFloor);
   return Number((Math.ceil((target - 1e-9) * 10) / 10).toFixed(2));
 }
 

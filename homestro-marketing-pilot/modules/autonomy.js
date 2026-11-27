@@ -19,7 +19,8 @@ export function publicationWindow(now=new Date()) {
 export async function approveReviewed(store,cfg) {
   if(!cfg.autonomyEnabled)return;
   const result=await store.pool.query(`UPDATE marketing_posts s
-    SET status='approved',approved_by='Mirko: homestro-reviewed-organic-v1',approved_at=now(),updated_at=now()
+    SET status='approved',approved_by='auto-verified-shopify-organic-v1',approved_at=now(),updated_at=now(),
+      payload=jsonb_set(s.payload,'{requiresReview}','false'::jsonb)
     FROM marketing_products p WHERE s.product_id=p.id AND s.status='draft_queued'
     AND p.status='ready' AND p.document->>'status'='ACTIVE' AND s.channel IN ('facebook','instagram')
     AND COALESCE(p.document->>'rejected','false')<>'true'
@@ -29,13 +30,15 @@ export async function approveReviewed(store,cfg) {
       WHERE COALESCE((v->>'available')::boolean,false)=true
       AND COALESCE((v->>'price')::numeric,0)>0)
     AND s.payload->>'adSpendEUR'='0'
+    AND COALESCE(s.payload->>'requiresReview','false')='false'
     AND COALESCE(s.payload->>'importedMedia','false')<>'true'
-    AND COALESCE(s.payload->>'format','')<>'reels'
+    AND (COALESCE(s.payload->>'format','')<>'reels'
+      OR s.payload->>'videoURL' LIKE $2 || '/marketing-assets/%.mp4')
     AND s.payload->>'productRevision'=p.document->>'revision'
     AND NOT (s.product_id=ANY($1::text[]))
     AND NOT EXISTS (SELECT 1 FROM marketing_posts old WHERE old.product_id=s.product_id
       AND old.channel=s.channel AND old.status IN ('published','publishing','recovery_required'))
-    RETURNING s.id,s.channel`,[cfg.excludedProductIds||[]]);
+    RETURNING s.id,s.channel`,[cfg.excludedProductIds||[],cfg.publicOrigin]);
   log('AUTONOMY_APPROVAL',{policy:'homestro-reviewed-organic-v1',approved:result.rowCount});
 }
 

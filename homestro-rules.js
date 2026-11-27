@@ -2,7 +2,7 @@
 
 const DEFAULT_PRODUCT_RULES = Object.freeze({
   maxCost: 15,
-  minSellingPrice: 34.9,
+  minSellingPrice: 0,
   minRatio: 3,
   minSold: 1000,
   minNetProfit: 10,

@@ -184,12 +184,15 @@ export class MediaRenderer {
         // Optional narration must not stop the entire organic photo pipeline.
         // Keep cached/provider backoff and voice quotas intact; use existing
         // product media without claiming an AI voice was generated.
-        if(!['AI_VIDEO_DAILY_LIMIT','OPENAI_RATE_LIMIT','OPENAI_QUOTA_EXCEEDED',
-          'OPENAI_AUTH_FAILED','OPENAI_DIAGNOSTIC_STATE_UNREADABLE','OPENAI_API_KEY_REQUIRED'].includes(e?.code))throw e;
-        log('AI_VIDEO_DEFERRED',{productId:product.id,reason:e.code});
+        if(!['AI_VIDEO_DAILY_LIMIT','OPENAI_RATE_LIMIT','OPENAI_QUOTA_EXCEEDED','OPENAI_QUOTA_EXHAUSTED',
+          'OPENAI_INSUFFICIENT_QUOTA','insufficient_quota','OPENAI_AUTH_FAILED','OPENAI_DIAGNOSTIC_STATE_UNREADABLE','OPENAI_API_KEY_REQUIRED'].includes(e?.code))throw e;
+        if(/QUOTA|insufficient_quota/i.test(String(e?.code||'')))
+          log('OPENAI_QUOTA_EXHAUSTED',{productId:product.id,fallback:'verified_shopify_jpeg'});
+        else log('AI_VIDEO_DEFERRED',{productId:product.id,reason:e.code,fallback:'verified_shopify_jpeg'});
+        return this.renderImageReel(product,selected);
       }
     }
-    if(!selected.videoURL) return this.carousel(selected.images);
+    if(!selected.videoURL) return this.renderImageReel(product,selected);
     const key=hash({media:selected,hook:product.localized.hook,renderVersion:3});
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const output=join(dir,key+'.mp4');
@@ -209,6 +212,44 @@ export class MediaRenderer {
         '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-movflags','+faststart',join(tmp,'out.mp4'));
       await encode(args,tmp);
       await rename(join(tmp,'out.mp4'),output);
+      return {format:'reels',videoURL:this.url(key),imageURLs:[]};
+    } finally {await rm(tmp,{recursive:true,force:true});}
+  }
+  async renderImageReel(product,selected) {
+    const gallery=await this.carousel(selected.images);
+    const photos=gallery.imageURLs.slice(0,4);
+    if(photos.length<3) {
+      log('REEL_SKIPPED',{productId:product.id,reason:'INSUFFICIENT_CLEAN_PRODUCT_ANGLES',cleanAngles:photos.length});
+      return gallery;
+    }
+    const c=product.localized||{},script=fallbackScript(product);
+    const key=hash({videoEngine:6,id:product.id,revision:product.revision||null,script,shots:photos});
+    const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
+    const output=join(dir,key+'.mp4');
+    try {await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch {}
+    const files=photos.map(url=>join(dir,new URL(url).pathname.split('/').pop()));
+    const shots=[...new Set(files)].slice(0,4);
+    const duration=10,fade=0.25,segment=(duration+fade*(shots.length-1))/shots.length,filters=[];
+    const tmp=await mkdtemp(join(dir,'reel-'));
+    try {
+      await writeFile(join(tmp,'story.ass'),storyAss(c,script,duration),'utf8');
+      const args=['-hide_banner','-loglevel','error','-y'];
+      for(const file of shots)args.push('-loop','1','-t',segment.toFixed(3),'-i',file);
+      shots.forEach((_,i)=>filters.push('['+i+':v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,'+
+        "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+sin(on/48)*20':y='(ih-ih/zoom)/2+cos(on/52)*25':d=1:s=720x1280:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
+      let current='v0';
+      for(let i=1;i<shots.length;i++){
+        const next='x'+i,offset=(i*(segment-fade)).toFixed(3);
+        filters.push('['+current+'][v'+i+']xfade=transition=fade:duration='+fade+':offset='+offset+'['+next+']');
+        current=next;
+      }
+      filters.push('['+current+']ass=story.ass[v]');
+      args.push('-filter_complex',filters.join(';'),'-map','[v]','-an','-t',String(duration),
+        '-threads','1','-filter_threads','1','-filter_complex_threads','1',
+        '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',join(tmp,'out.mp4'));
+      await encode(args,tmp,240000);
+      await rename(join(tmp,'out.mp4'),output);
+      log('ORGANIC_REEL_READY',{productId:product.id,angles:shots.length,render:'ffmpeg_zoompan',paidGeneration:false});
       return {format:'reels',videoURL:this.url(key),imageURLs:[]};
     } finally {await rm(tmp,{recursive:true,force:true});}
   }
