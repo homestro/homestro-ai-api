@@ -134,7 +134,7 @@ export class Worker {
                   AND ((recent_same.status='published' AND recent_same.published_at>now()-interval '24 hours')
                     OR (recent_same.status IN ('publishing','recovery_required')
                       AND COALESCE(recent_same.attempted_at,recent_same.updated_at)>now()-interval '24 hours'))) AS not_recent_same,
-                NOT EXISTS (SELECT 1 FROM (
+                s.product_id NOT IN (SELECT recent.product_id FROM (
                   SELECT DISTINCT ON (p.product_id) p.product_id,
                     COALESCE(p.published_at,p.attempted_at,p.updated_at) AS activity_at
                   FROM marketing_posts p WHERE p.channel=s.channel
