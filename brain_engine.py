@@ -94,7 +94,7 @@ def admin_token(domain):
 def admin_catalog(token, domain):
     query = """query ActiveProducts($after:String) {
       products(first:250,after:$after,query:"status:active") {
-        nodes { id title handle status productType onlineStoreUrl tags variants(first:100) {
+        nodes { id title handle status productType onlineStoreUrl tags variants(first:250) {
           nodes { id price compareAtPrice }
         } }
         pageInfo { hasNextPage endCursor }
@@ -188,17 +188,41 @@ def fix_product(product, token, domain, new_handle=None):
             productVariants { id price compareAtPrice } userErrors { field message }
           }
         }"""
+        verify_query = """query VerifyProductAnchors($id:ID!) {
+          product(id:$id) { variants(first:250) { nodes { id price compareAtPrice } } }
+        }"""
         try:
             result = shopify_graphql(mutation, {"productId":pid,"variants":invalid}, token, domain)
-            errs = (result.get("productVariantsBulkUpdate") or {}).get("userErrors") or []
-            if errs:
+            payload = result.get("productVariantsBulkUpdate") or {}
+            if payload.get("userErrors"):
                 errors.append("PRICE_FIX_REJECTED")
-            else:
-                fixed_count = len(invalid)
-                fixed_ids = {row["id"] for row in invalid}
-                for variant in variants:
-                    if variant.get("id") in fixed_ids:
-                        variant["compareAtPrice"] = None
+            verified = shopify_graphql(verify_query, {"id":pid}, token, domain)
+            current = (((verified.get("product") or {}).get("variants") or {}).get("nodes") or [])
+            current_by_id = {str(row.get("id")):row for row in current}
+            requested = {str(row["id"]) for row in invalid}
+            remaining = [row for row in invalid if
+                str(row["id"]) not in current_by_id or risky_compare_anchor(
+                    current_by_id[str(row["id"])].get("price"),
+                    current_by_id[str(row["id"])].get("compareAtPrice"))]
+            if remaining:
+                retry = shopify_graphql(mutation, {"productId":pid,"variants":remaining}, token, domain)
+                if (retry.get("productVariantsBulkUpdate") or {}).get("userErrors"):
+                    errors.append("PRICE_FIX_RETRY_REJECTED")
+                verified = shopify_graphql(verify_query, {"id":pid}, token, domain)
+                current = (((verified.get("product") or {}).get("variants") or {}).get("nodes") or [])
+                current_by_id = {str(row.get("id")):row for row in current}
+            remaining_ids = {str(row["id"]) for row in invalid if
+                str(row["id"]) not in current_by_id or risky_compare_anchor(
+                    current_by_id[str(row["id"])].get("price"),
+                    current_by_id[str(row["id"])].get("compareAtPrice"))}
+            fixed_count = len(requested - remaining_ids)
+            for variant in variants:
+                live = current_by_id.get(str(variant.get("id")))
+                if live:
+                    variant["price"] = live.get("price")
+                    variant["compareAtPrice"] = live.get("compareAtPrice")
+            if remaining_ids:
+                errors.append("PRICE_FIX_UNVERIFIED:" + str(len(remaining_ids)))
         except Exception as exc:
             errors.append(str(exc)[:100] or "PRICE_FIX_FAILED")
 
