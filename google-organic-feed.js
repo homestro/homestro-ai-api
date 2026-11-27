@@ -39,7 +39,8 @@ async function googleOrganicXml(graphql){
  return `<?xml version="1.0" encoding="UTF-8"?><rss xmlns:g="http://base.google.com/ns/1.0" version="2.0"><channel><title>Homestro</title><link>https://homestro.de</link><description>Homestro Produktfeed</description>${items.join('')}</channel></rss>`;
 }
 function registerGoogleOrganicFeed(app,graphql,{getPilotFeed,env=process.env}={}){
- const handler=async(_q,res)=>{let timer;try{const xml=env.PILOT_FEED_LEGACY_ALIAS==='true'?await Promise.race([Promise.resolve().then(()=>{if(typeof getPilotFeed!=='function')throw new Error('Pilot feed unavailable');return getPilotFeed();}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Feed timeout')),30000);timer.unref?.();})]):await googleOrganicXml(graphql);const itemCount=(xml.match(/<item>/g)||[]).length;res.set('Cache-Control','no-store').set('X-Feed-Item-Count',String(itemCount)).type('application/xml').send(xml);}catch(e){res.status(502).type('text/plain').send('Feed generation failed');}finally{clearTimeout(timer);}};
- for(const route of ['/feeds/google-organic.xml','/feed/google-shopping.xml'])app.get(route,handler);
+ const makeHandler=useLegacy=>async(_q,res)=>{let timer;try{const usePilot=useLegacy&&env.PILOT_FEED_LEGACY_ALIAS==='true';const xml=usePilot?await Promise.race([Promise.resolve().then(()=>{if(typeof getPilotFeed!=='function')throw new Error('Pilot feed unavailable');return getPilotFeed();}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Feed timeout')),30000);timer.unref?.();})]):await googleOrganicXml(graphql);const itemCount=(xml.match(/<item>/g)||[]).length;res.set('Cache-Control','no-store').set('X-Feed-Item-Count',String(itemCount)).type('application/xml').send(xml);}catch(e){res.status(502).type('text/plain').send('Feed generation failed');}finally{clearTimeout(timer);}};
+ app.get('/feeds/google-organic.xml',makeHandler(true));
+ app.get('/feed/google-shopping.xml',makeHandler(false));
 }
 module.exports={googleOrganicXml,registerGoogleOrganicFeed,longTailTitle:cleanTitle,shopifyJpegUrl};
