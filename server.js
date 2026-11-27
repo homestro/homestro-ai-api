@@ -1653,11 +1653,11 @@ app.get('/api/brain/status',async(_req,res)=>{
   const publisherEnabled=process.env.PILOT_WORKER_ENABLED==='true'&&process.env.PILOT_PUBLISH_ENABLED==='true';
   res.set('Cache-Control','no-store').json({
    status:'ACTIVE',modules:{
-    store_doctor:{status:state.admin_auth==='authenticated'?'ACTIVE':'DEGRADED',admin_auth:state.admin_auth,price_fixes:state.price_fixes||0},
+    store_doctor:{status:state.admin_auth==='authenticated'?'ACTIVE':'DEGRADED',admin_auth:state.admin_auth,price_fixes:state.price_fixes||0,issues_remaining:diagnostics.issues_remaining||0},
     content_publisher:{status:publisherEnabled?'ACTIVE':'PAUSED',worker_enabled:process.env.PILOT_WORKER_ENABLED==='true',publishing_enabled:process.env.PILOT_PUBLISH_ENABLED==='true',last_cycle:brainLastCycle?.marketing_cycle?.publisher?.status||brainLastCycle?.marketing_cycle?.status||null,last_cycle_at:brainLastCycle?.completed_at||null,last_cycle_reason:brainLastCycle?.marketing_cycle?.publisher?.reason||null},
     roas_brain:{status:'READY_FOR_PERFORMANCE_DATA',ad_spend_eur:0.00}
    },
-   products_synced:state.products_synced||0,diagnostics_issues_found:diagnostics.issues_found||0,
+   products_synced:state.products_synced||0,diagnostics_issues_found:diagnostics.issues_found||0,diagnostics_issues_remaining:diagnostics.issues_remaining||0,
    price_fixes:state.price_fixes||0,products_cleaned_count:state.products_cleaned_count||0,
    product_types_filled:state.product_types_filled||0,handles_cleaned:state.handles_cleaned||0,last_run_at:state.last_run_at||null,
    last_published_product:state.last_published_product||null,
