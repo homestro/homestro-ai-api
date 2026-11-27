@@ -1629,18 +1629,21 @@ function runUnifiedBrainCycle(){
    if(typeof marketingPilot.runCycle==='function')marketing=await marketingPilot.runCycle(result);
   }catch(error){marketing={status:'failed',reason:String(error?.message||'MARKETING_CYCLE_FAILED').slice(0,100)};}
   const published=Array.isArray(marketing?.publisher?.posts)?marketing.publisher.posts:[];
-  if(published.length){
-   try{
-    const statePath=brainPath.replace(/brain_engine\.py$/,'brain-state.json');
-    const state=JSON.parse(await brainFs.readFile(statePath,'utf8'));
+  brainLastCycle={...result,marketing_cycle:marketing,completed_at:new Date().toISOString()};
+  try{
+   const statePath=brainPath.replace(/brain_engine\.py$/,'brain-state.json');
+   const state=JSON.parse(await brainFs.readFile(statePath,'utf8'));
+   if(published.length){
     const ids=published.map(p=>p.remotePostId||p.localPostId).filter(Boolean);
     state.last_post_ids=[...new Set([...ids,...(Array.isArray(state.last_post_ids)?state.last_post_ids:[])])].slice(0,50);
     state.last_published_product=published.at(-1)?.productId||state.last_published_product||null;
     state.last_published_at=new Date().toISOString();
-    const temp=statePath+'.tmp';await brainFs.writeFile(temp,JSON.stringify(state));await brainFs.rename(temp,statePath);
-   }catch(error){console.error('[brain-engine] POST_STATUS_PERSIST_FAILED '+String(error?.message||'IO_ERROR').slice(0,100));}
-  }
-  brainLastCycle={...result,marketing_cycle:marketing,completed_at:new Date().toISOString()};
+   }
+   state.last_cycle_at=brainLastCycle.completed_at;
+   state.last_cycle_status=marketing?.publisher?.status||marketing?.status||'completed';
+   state.last_cycle_reason=marketing?.publisher?.reason||null;
+   const temp=statePath+'.tmp';await brainFs.writeFile(temp,JSON.stringify(state));await brainFs.rename(temp,statePath);
+  }catch(error){console.error('[brain-engine] CYCLE_STATUS_PERSIST_FAILED '+String(error?.message||'IO_ERROR').slice(0,100));}
   return brainLastCycle;
  })().finally(()=>{brainRunPromise=null;});
  return brainRunPromise;
@@ -1649,18 +1652,20 @@ app.get('/api/brain/status',async(_req,res)=>{
  try{
   const state=JSON.parse(await brainFs.readFile(brainDataDir+'/brain-state.json','utf8'));
   const diagnostics=JSON.parse(await brainFs.readFile(brainDataDir+'/store-diagnostics.json','utf8'));
-  const posts=Array.isArray(state.last_post_ids)?state.last_post_ids:[];
+  let publisherStatus={};try{publisherStatus=await marketingPilot.getStatus?.()||{};}catch{}
+  const posts=Array.isArray(publisherStatus.last_post_ids)&&publisherStatus.last_post_ids.length
+   ?publisherStatus.last_post_ids:(Array.isArray(state.last_post_ids)?state.last_post_ids:[]);
   const publisherEnabled=process.env.PILOT_WORKER_ENABLED==='true'&&process.env.PILOT_PUBLISH_ENABLED==='true';
   res.set('Cache-Control','no-store').json({
    status:'ACTIVE',modules:{
     store_doctor:{status:state.admin_auth==='authenticated'?'ACTIVE':'DEGRADED',admin_auth:state.admin_auth,price_fixes:state.price_fixes||0,issues_remaining:diagnostics.issues_remaining||0},
-    content_publisher:{status:publisherEnabled?'ACTIVE':'PAUSED',worker_enabled:process.env.PILOT_WORKER_ENABLED==='true',publishing_enabled:process.env.PILOT_PUBLISH_ENABLED==='true',last_cycle:brainLastCycle?.marketing_cycle?.publisher?.status||brainLastCycle?.marketing_cycle?.status||null,last_cycle_at:brainLastCycle?.completed_at||null,last_cycle_reason:brainLastCycle?.marketing_cycle?.publisher?.reason||null},
+    content_publisher:{status:publisherEnabled?'ACTIVE':'PAUSED',worker_enabled:process.env.PILOT_WORKER_ENABLED==='true',publishing_enabled:process.env.PILOT_PUBLISH_ENABLED==='true',last_cycle:brainLastCycle?.marketing_cycle?.publisher?.status||state.last_cycle_status||brainLastCycle?.marketing_cycle?.status||null,last_cycle_at:brainLastCycle?.completed_at||state.last_cycle_at||null,last_cycle_reason:brainLastCycle?.marketing_cycle?.publisher?.reason||state.last_cycle_reason||null},
     roas_brain:{status:'READY_FOR_PERFORMANCE_DATA',ad_spend_eur:0.00}
    },
    products_synced:state.products_synced||0,diagnostics_issues_found:diagnostics.issues_found||0,diagnostics_issues_remaining:diagnostics.issues_remaining||0,
    price_fixes:state.price_fixes||0,products_cleaned_count:state.products_cleaned_count||0,
    product_types_filled:state.product_types_filled||0,handles_cleaned:state.handles_cleaned||0,last_run_at:state.last_run_at||null,
-   last_published_product:state.last_published_product||null,
+   last_published_product:publisherStatus.last_published_product||state.last_published_product||null,
    last_post_ids:posts,
    ms_handwerk_ready:true,ad_spend_eur:0.00,
    catalog_source:state.catalog_source||null,admin_auth:state.admin_auth||'unknown'
