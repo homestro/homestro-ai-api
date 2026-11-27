@@ -1625,6 +1625,10 @@ app.post('/api/brain/run-now',apiKey,async(_req,res)=>{
  try{res.json(await runUnifiedBrainCycle());}
  catch(error){res.status(502).json({status:'FAILED',reason:String(error?.message||'BRAIN_CYCLE_FAILED').slice(0,100),ad_spend_eur:0.00});}
 });
-setTimeout(()=>runUnifiedBrainCycle().then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})).catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED'))),30000).unref();
-const brainTimer=setInterval(()=>runUnifiedBrainCycle().then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})).catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED'))),4*60*60*1000);
+setTimeout(()=>{runUnifiedBrainCycle()
+ .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})))
+ .catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED')));},30000).unref();
+const brainTimer=setInterval(()=>{runUnifiedBrainCycle()
+ .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})))
+ .catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED')));},4*60*60*1000);
 brainTimer.unref();
