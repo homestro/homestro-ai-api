@@ -65,7 +65,7 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
   return approved;
 }
 export class Worker {
-  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;}
+  constructor({store,meta,cfg,freshSnapshot,isPublishingWindow=publicationWindow,ensureImportedAssets}) {Object.assign(this,{store,meta,cfg,freshSnapshot,isPublishingWindow,ensureImportedAssets});this.busy=false;this.lastPublished=null;}
   async tick(postId=null) {
     if(this.busy){log('PUBLISH_BLOCKED',{reason:'WORKER_ALREADY_BUSY'});return {status:'busy',posts:[]};}
     if(!this.cfg.workerEnabled || !this.cfg.publishingEnabled){log('PUBLISH_BLOCKED',{reason:'PUBLISHING_DISABLED',workerEnabled:this.cfg.workerEnabled,publishingEnabled:this.cfg.publishingEnabled});return {status:'disabled',posts:[]};}
@@ -178,6 +178,7 @@ export class Worker {
           await this.meta.publish(job,async state=>{remote=state;await this.store.checkpoint(job.id,state);});
           await this.store.setStatus(job.id,'published');log('PUBLISHED',{postId:job.id,productId:job.product_id,channel:job.channel,title:job.payload.title||null});
           publishedPost={localPostId:job.id,remotePostId:remote?.postId||null,productId:job.product_id,channel:job.channel,permalink:remote?.permalink||null};
+          this.lastPublished=publishedPost;
           if(this.cfg.autonomyEnabled && remote?.postId) {
             try {
               const p=await this.meta.request(String(remote.postId),{fields:job.channel==='instagram'?'id,permalink,media_type':'id,permalink_url'});
