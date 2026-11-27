@@ -55,9 +55,7 @@ export function compilePost(product,channel,asset,cfg={}) {
     ? createTrackedLink({productId:product.id,channel,format:asset.format,publicOrigin:cfg.publicOrigin,secret:cfg.adminKey})
     : trackingLink(product.url,channel,asset.format);
   const hashtags=[...(categories[product.categoryKey]||categories.home),'#Homestro'];
-  const cta=channel==='instagram'
-    ? 'Entdecke das Produkt bei Homestro – über den Link in unserem Profil.'
-    : 'Jetzt bei Homestro entdecken:';
+  const cta='Jetzt entdecken auf homestro.de – sicher bestellen mit 30 Tagen Rückgaberecht.';
   const price=Math.min(...product.variants.filter(v=>v.available && v.price>0).map(v=>Number(v.price))).toLocaleString('de-DE',{style:'currency',currency:'EUR'});
   // Pinterest has a dedicated destination link. Keep its description within 800
   // characters without cutting claims mid-sentence or losing the product URL.

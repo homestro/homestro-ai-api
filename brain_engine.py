@@ -7,7 +7,7 @@ rotation/content state. Social publication remains delegated to the reviewed
 Meta/Zernio publisher in the Node runtime.
 """
 from __future__ import annotations
-import json, os, random, re, sys, tempfile, traceback
+import json, os, random, re, sys, tempfile, traceback, unicodedata
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 DATA_DIR = Path(os.getenv("BRAIN_DATA_DIR", "/data"))
-CTA = "Jetzt entdecken auf homestro.de – bequem mit PayPal & Klarna."
+CTA = "Jetzt entdecken auf homestro.de – sicher bestellen mit 30 Tagen Rückgaberecht."
 HOOK_FILE = Path(os.getenv("JARVIS_USED_HOOKS_PATH", str(DATA_DIR / "jarvis-used-hooks.json")))
 SHOP = "https://homestro.de"
 
@@ -94,7 +94,7 @@ def admin_token(domain):
 def admin_catalog(token, domain):
     query = """query ActiveProducts($after:String) {
       products(first:250,after:$after,query:"status:active") {
-        nodes { id title handle status onlineStoreUrl tags variants(first:100) {
+        nodes { id title handle status productType onlineStoreUrl tags variants(first:100) {
           nodes { id price compareAtPrice }
         } }
         pageInfo { hasNextPage endCursor }
@@ -114,54 +114,154 @@ def admin_catalog(token, domain):
         if not after or len(rows) > 5000:
             raise ValueError("ADMIN_CATALOG_PAGINATION_INVALID")
 
-def fix_product(product, token, domain):
-    pid = product.get("id")
-    invalid = []
-    for variant in (product.get("variants") or {}).get("nodes", []):
-        price, anchor = variant.get("price"), variant.get("compareAtPrice")
-        try:
-            if anchor is not None and float(anchor) <= float(price):
-                invalid.append({"id":variant["id"], "compareAtPrice":None})
-        except (TypeError, ValueError, KeyError):
+def infer_product_type(product):
+    title = str(product.get("title") or "").casefold()
+    tags = " ".join(map(str, product.get("tags") or [])).casefold()
+    text = title + " " + tags
+    categories = [
+        (r"hund|katze|tier|haustier|futterspender|fell|pfote", "Haustierbedarf"),
+        (r"trinkflasche|wasserflasche|thermos|isolierflasche", "Trinkflaschen"),
+        (r"fitness|massage|hantel|haltung|posture|faszien|sport|yoga", "Fitness & Gesundheit"),
+        (r"auto|kfz|fahrzeug|reise|travel|rucksack|gepäck|koffer", "Auto & Reise"),
+        (r"kopfhörer|headphone|earbud|übersetzer|elektronik|bluetooth|technik", "Elektronik & Technik"),
+        (r"küche|küchen|kochen|backen|geschirr|haushalt", "Küche & Haushalt"),
+        (r"garten|terrasse|pflanze|bewässer", "Garten"),
+        (r"beauty|pflege|haare|haut|kosmetik", "Beauty & Pflege"),
+        (r"baby|kind|spielzeug|spiel", "Baby & Spielzeug"),
+        (r"wohn|möbel|deko|licht|lampe|aufbewahrung", "Wohnen & Einrichtung"),
+    ]
+    for pattern, category in categories:
+        if re.search(pattern, text):
+            return category
+    return "Alltag & Haushalt"
+
+def clean_handle(title, product_id, reserved):
+    value = str(title or "").casefold().replace("ä","ae").replace("ö","oe").replace("ü","ue").replace("ß","ss").replace("™"," ")
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    base = re.sub(r"[^a-z0-9]+", "-", value).strip("-")[:90].strip("-") or "homestro-produkt"
+    if base in reserved:
+        suffix = re.sub(r"\D", "", str(product_id))[-7:] or "produkt"
+        base = (base[:80].rstrip("-") + "-" + suffix).strip("-")
+    return base
+
+def plan_handle_updates(products):
+    reserved = {str(p.get("handle") or "") for p in products}
+    updates = {}
+    for product in products:
+        old = str(product.get("handle") or "")
+        if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", old):
             continue
+        reserved.discard(old)
+        new = clean_handle(product.get("title"), product.get("id"), reserved)
+        reserved.add(new)
+        if new != old:
+            updates[str(product.get("id") or "")] = new
+    return updates
+
+def risky_compare_anchor(price, anchor):
+    try:
+        price, anchor = float(price), float(anchor)
+    except (TypeError, ValueError):
+        return False
+    if price <= 0:
+        return False
+    if anchor <= price:
+        return True
+    ratio = anchor / price
+    tiny_discount = (anchor - price) / anchor < 0.05
+    artificial_double = 1.98 <= ratio <= 2.02
+    return tiny_discount or artificial_double
+
+def fix_product(product, token, domain, new_handle=None):
+    pid = product.get("id")
+    variants = (product.get("variants") or {}).get("nodes", [])
+    invalid = []
+    for variant in variants:
+        if risky_compare_anchor(variant.get("price"), variant.get("compareAtPrice")):
+            invalid.append({"id":variant["id"], "compareAtPrice":None})
+    errors = []
+    fixed_count = 0
     if invalid:
         mutation = """mutation FixAnchors($productId:ID!,$variants:[ProductVariantsBulkInput!]!) {
           productVariantsBulkUpdate(productId:$productId,variants:$variants) {
             productVariants { id price compareAtPrice } userErrors { field message }
           }
         }"""
-        result = shopify_graphql(mutation, {"productId":pid,"variants":invalid}, token, domain)
-        errs = (result.get("productVariantsBulkUpdate") or {}).get("userErrors") or []
-        if errs:
-            raise ValueError("PRICE_FIX_REJECTED")
+        try:
+            result = shopify_graphql(mutation, {"productId":pid,"variants":invalid}, token, domain)
+            errs = (result.get("productVariantsBulkUpdate") or {}).get("userErrors") or []
+            if errs:
+                errors.append("PRICE_FIX_REJECTED")
+            else:
+                fixed_count = len(invalid)
+                fixed_ids = {row["id"] for row in invalid}
+                for variant in variants:
+                    if variant.get("id") in fixed_ids:
+                        variant["compareAtPrice"] = None
+        except Exception as exc:
+            errors.append(str(exc)[:100] or "PRICE_FIX_FAILED")
+
     tags = [str(t) for t in (product.get("tags") or [])]
     clean = [t for t in tags if t not in {"⚠️-chybi-foto","⚠️-nizka-cena"}]
+    product_type = str(product.get("productType") or "").strip()
+    new_type = infer_product_type(product) if not product_type else product_type
+    metadata = {"id":pid}
+    changed_type = not product_type
+    if changed_type:
+        metadata["productType"] = new_type
+    changed_handle = bool(new_handle and new_handle != product.get("handle"))
+    if changed_handle:
+        metadata["handle"] = new_handle
+        metadata["redirectNewHandle"] = True
     if clean != tags:
-        mutation = """mutation CleanTags($product:ProductInput!) {
-          productUpdate(input:$product) { product { id tags } userErrors { field message } }
+        metadata["tags"] = clean
+    saved_metadata = False
+    if len(metadata) > 1:
+        mutation = """mutation StoreDoctorUpdate($product:ProductInput!) {
+          productUpdate(input:$product) { product { id handle productType tags } userErrors { field message } }
         }"""
-        result = shopify_graphql(mutation, {"product":{"id":pid,"tags":clean}}, token, domain)
-        errs = (result.get("productUpdate") or {}).get("userErrors") or []
-        if errs:
-            raise ValueError("TAG_CLEANUP_REJECTED")
-    return len(invalid), int(clean != tags)
+        try:
+            result = shopify_graphql(mutation, {"product":metadata}, token, domain)
+            errs = (result.get("productUpdate") or {}).get("userErrors") or []
+            if errs:
+                errors.append("PRODUCT_METADATA_FIX_REJECTED")
+            else:
+                saved_metadata = True
+                if changed_handle:
+                    product["handle"] = new_handle
+                if changed_type:
+                    product["productType"] = new_type
+                product["tags"] = clean
+        except Exception as exc:
+            errors.append(str(exc)[:100] or "PRODUCT_METADATA_FIX_FAILED")
 
+    return {"price_variants_fixed":fixed_count,
+        "obsolete_tags_removed":int(saved_metadata and clean != tags),
+        "product_type_filled":int(saved_metadata and changed_type),
+        "handles_cleaned":int(saved_metadata and changed_handle),
+        "product_cleaned":bool(fixed_count or (saved_metadata and (clean != tags or changed_type or changed_handle))),
+        "fix_errors":errors}
 def diagnostics(products):
     issues = []
     for product in products:
+        if not str(product.get("productType") or "").strip():
+            issues.append({"product_id":product.get("id"),"handle":product.get("handle"),"issue":"MISSING_PRODUCT_TYPE"})
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", str(product.get("handle") or "")):
+            issues.append({"product_id":product.get("id"),"handle":product.get("handle"),"issue":"NON_SEO_HANDLE"})
         variants = product.get("variants") or []
         if isinstance(variants, dict):
             variants = variants.get("nodes") or []
         for variant in variants:
-            try:
-                price = float(variant.get("price") or 0)
-                anchor = variant.get("compareAtPrice", variant.get("compare_at_price"))
-                if anchor is not None and float(anchor) <= price:
-                    issues.append({"product_id":product.get("id"),"handle":product.get("handle"),
-                        "variant_id":variant.get("id"),"price":price,"compare_at_price":float(anchor),
-                        "issue":"COMPARE_AT_NOT_ABOVE_PRICE"})
-            except (TypeError, ValueError):
-                continue
+            anchor = variant.get("compareAtPrice", variant.get("compare_at_price"))
+            if anchor is not None and risky_compare_anchor(variant.get("price"), anchor):
+                try:
+                    price, compare = float(variant.get("price") or 0), float(anchor)
+                except (TypeError, ValueError):
+                    continue
+                kind = "ARTIFICIAL_2X_ANCHOR" if price > 0 and 1.98 <= compare / price <= 2.02 else "RISKY_COMPARE_AT_PRICE"
+                issues.append({"product_id":product.get("id"),"handle":product.get("handle"),
+                    "variant_id":variant.get("id"),"price":price,"compare_at_price":compare,"issue":kind})
     return issues
 
 def select_product(products, state, hooks):
@@ -220,17 +320,27 @@ def run():
     state_path = DATA_DIR / "brain-state.json"
     prior = read_json(state_path, {})
     domain = (os.getenv("SHOPIFY_STORE_DOMAIN") or "").strip().removeprefix("https://").removeprefix("http://").strip("/")
-    admin_status, admin_source, fixed, cleaned = "unavailable", "none", 0, 0
+    admin_status, admin_source = "unavailable", "none"
+    fixed = cleaned = types_filled = handles_cleaned = products_cleaned = 0
+    fix_errors = []
     products, source = [], "public_products_json"
+    issues_before = []
     if domain:
         try:
             token, admin_source = admin_token(domain)
             if token:
                 products = admin_catalog(token, domain)
                 source, admin_status = "shopify_admin_active", "authenticated"
+                issues_before = diagnostics(products)
+                handle_updates = plan_handle_updates(products)
                 for p in products:
-                    f, c = fix_product(p, token, domain)
-                    fixed += f; cleaned += c
+                    counts = fix_product(p, token, domain, handle_updates.get(str(p.get("id") or "")))
+                    fixed += counts["price_variants_fixed"]
+                    cleaned += counts["obsolete_tags_removed"]
+                    types_filled += counts["product_type_filled"]
+                    handles_cleaned += counts["handles_cleaned"]
+                    products_cleaned += int(counts["product_cleaned"])
+                    fix_errors.extend({"product_id":p.get("id"),"reason":reason} for reason in counts["fix_errors"])
         except HTTPError as exc:
             admin_status = "authentication_required" if exc.code in (401,403) else f"http_{exc.code}"
         except Exception as exc:
@@ -239,13 +349,18 @@ def run():
     if not products:
         products = public_catalog()
         source = "public_products_json_fallback"
+        issues_before = diagnostics(products)
     feed = {"generated_at":now_iso(),"source":source,"products":products}
     atomic_json(DATA_DIR / "active-feed.json", feed)
-    issues = diagnostics(products)
+    issues_after = diagnostics(products)
     atomic_json(DATA_DIR / "store-diagnostics.json", {
-        "generated_at":now_iso(),"active_products":len(products),"issues_found":len(issues),
-        "price_fixes":fixed,"obsolete_tags_removed":cleaned,"admin_auth":admin_status,
-        "admin_credential_source":admin_source,"issues":issues
+        "generated_at":now_iso(),"active_products":len(products),"issues_found":len(issues_before),
+        "issues_remaining":len(issues_after),"issues_fixed_this_run":max(0,len(issues_before)-len(issues_after)),
+        "products_cleaned_count":products_cleaned,"price_fixes":fixed,
+        "obsolete_tags_removed":cleaned,"product_types_filled":types_filled,
+        "handles_cleaned":handles_cleaned,"fix_errors":fix_errors,
+        "admin_auth":admin_status,"admin_credential_source":admin_source,
+        "issues":issues_after
     })
     hooks = read_json(HOOK_FILE, [])
     if isinstance(hooks, dict): hooks = hooks.get("events", [])
@@ -263,12 +378,14 @@ def run():
             "last_prepared_at":event["at"],"rotation_history":rotation[-500:]})
     ms = update_ms_campaigns()
     prior.update({"status":"ACTIVE","last_run_at":now_iso(),"products_synced":len(products),
-        "diagnostics_issues_found":len(issues),"price_fixes":fixed,"obsolete_tags_removed":cleaned,
+        "diagnostics_issues_found":len(issues_after),"price_fixes":fixed,"obsolete_tags_removed":cleaned,"products_cleaned_count":products_cleaned,"product_types_filled":types_filled,"handles_cleaned":handles_cleaned,
         "catalog_source":source,"admin_auth":admin_status,"ad_spend_eur":0.0,
         "ms_handwerk_ready":True,"last_post_ids":prior.get("last_post_ids",[])})
     atomic_json(state_path, prior)
-    return {"status":"ACTIVE","products_synced":len(products),"diagnostics_issues_found":len(issues),
-        "price_fixes":fixed,"obsolete_tags_removed":cleaned,"admin_auth":admin_status,
+    return {"status":"ACTIVE","products_synced":len(products),"diagnostics_issues_found":len(issues_after),
+        "price_fixes":fixed,"obsolete_tags_removed":cleaned,"products_cleaned_count":products_cleaned,
+        "product_types_filled":types_filled,"handles_cleaned":handles_cleaned,
+        "issues_fixed_this_run":max(0,len(issues_before)-len(issues_after)),"admin_auth":admin_status,
         "catalog_source":source,"selected_product":candidate.get("title") if candidate else None,
         "selected_product_id":candidate.get("id") if candidate else None,
         "hook":hook,"caption":caption,"ms_handwerk_ready":bool(ms),"ad_spend_eur":0.0}

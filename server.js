@@ -431,25 +431,58 @@ function imageVisionRequest(task){
  imageVisionQueue=queued.catch(()=>{});
  return queued;
 }
-async function imageIsRelevant(url,input,pageContext){
- if(imageVisionQuotaBlocked||!process.env.OPENAI_API_KEY)return false;
+function verifiedShopifyJpegUrl(raw){
+ try{const u=new URL(String(raw||''));if(u.hostname!=='cdn.shopify.com'&&!(u.hostname==='homestro.de'&&u.pathname.startsWith('/cdn/shop/')))return null;u.searchParams.set('format','jpg');u.searchParams.set('width','1080');return u.href;}catch{return null;}
+}
+async function verifyShopifyJpeg(raw){
+ const url=verifiedShopifyJpegUrl(raw);if(!url)return null;
+ try{
+  const r=await fetch(url,{headers:{Accept:'image/jpeg'},redirect:'error',signal:AbortSignal.timeout(20000)});
+  if(r.status!==200||String(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()!=='image/jpeg')return null;
+  const reader=r.body?.getReader?.();let head;
+  if(reader){head=(await reader.read()).value;await reader.cancel().catch(()=>{});}
+  else head=new Uint8Array(await r.arrayBuffer()).subarray(0,3);
+  if(!head||head.length<3||head[0]!==0xff||head[1]!==0xd8||head[2]!==0xff)return null;
+  return url;
+ }catch{return null;}
+}
+async function imageIsRelevant(url,input,pageContext,verifiedJpeg=null){
+ if(!verifiedJpeg)verifiedJpeg=await verifyShopifyJpeg(url);
+ if(imageVisionQuotaBlocked){
+  if(verifiedJpeg){console.warn('OPENAI_QUOTA_EXHAUSTED fallback=verified_shopify_jpeg');return true;}
+  return false;
+ }
+ if(!process.env.OPENAI_API_KEY)return false;
+ const visionUrl=verifiedJpeg||url;
  const model=process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||'gpt-5-mini';
  const prompt='Prüfe dieses konkrete Produktbild für Homestro extrem streng. Freigabe NUR wenn exakt das Produkt aus dem Produktnamen/der Beschreibung gezeigt wird und das Bild für einen deutschen Online-Shop geeignet ist. ABLEHNEN bei anderem Produkt, Zubehör statt Hauptprodukt, Banner, Logo, Wasserzeichen, Verpackung als Hauptmotiv, chinesischen/japanischen/koreanischen Schriftzeichen, fremdsprachigem Werbetext, irreführenden Angaben, starker Unschärfe oder schlechter Qualität. Wenn du unsicher bist, ABLEHNEN. Produkt: '+String(input?.title||'')+'. Kategorie: '+String(input?.category||input?.productType||'')+'. Beschreibung: '+homestroPlain(input?.description||'').slice(0,1500)+'. Quellkontext: '+String(pageContext||'').slice(0,3000)+'. Antworte nur JSON {"relevant":true/false,"confidence":0-1,"hasForeignText":true/false,"lowQuality":true/false}.';
  return imageVisionRequest(async()=>{
   for(let attempt=0;attempt<3;attempt++){
    try{
-    const r=await fetch('https://api.openai.com/v1/responses',{signal:AbortSignal.timeout(25000),method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:url,detail:'high'}]}],max_output_tokens:180})});
+    const r=await fetch('https://api.openai.com/v1/responses',{signal:AbortSignal.timeout(25000),method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:visionUrl,detail:'high'}]}],max_output_tokens:180})});
     const raw=await r.text();let d={};try{d=JSON.parse(raw);}catch{console.error('IMAGE VISION INVALID RESPONSE','status='+r.status);return false;}
     if(r.status===429){
      const error=d?.error||{},code=String(error.code||''),type=String(error.type||'');
      console.error('IMAGE VISION RATE LIMITED','code='+code,'type='+type);
-     if(code==='insufficient_quota'||type==='insufficient_quota'){imageVisionQuotaBlocked=true;return false;} if(attempt===2)return false;
+     if(code==='insufficient_quota'||type==='insufficient_quota'){
+      imageVisionQuotaBlocked=true;
+      console.warn('OPENAI_QUOTA_EXHAUSTED fallback='+String(verifiedJpeg?'verified_shopify_jpeg_available':'no_verified_shopify_jpeg'));
+      return Boolean(verifiedJpeg);
+     }
+     if(attempt===2)return false;
      const retryAfter=Number(r.headers.get('retry-after'));
      const delay=Number.isFinite(retryAfter)&&retryAfter>0?Math.min(30000,retryAfter*1000):Math.min(15000,3000*(attempt+1));
-     await new Promise(resolve=>setTimeout(resolve,delay));
-     continue;
+     await new Promise(resolve=>setTimeout(resolve,delay));continue;
     }
-    if(!r.ok){console.error('IMAGE VISION HTTP','status='+r.status,'code='+String(d?.error?.code||''),'type='+String(d?.error?.type||''));return false;}
+    if(!r.ok){
+     const error=d?.error||{},code=String(error.code||''),type=String(error.type||'');
+     if(code==='insufficient_quota'||type==='insufficient_quota'){
+      imageVisionQuotaBlocked=true;
+      console.warn('OPENAI_QUOTA_EXHAUSTED fallback='+String(verifiedJpeg?'verified_shopify_jpeg_available':'no_verified_shopify_jpeg'));
+      return Boolean(verifiedJpeg);
+     }
+     console.error('IMAGE VISION HTTP','status='+r.status,'code='+code,'type='+type);return false;
+    }
     const out=cleanJson(d.output_text||d.output?.flatMap(x=>x.content||[]).map(x=>x.text||'').join('')||'{}');
     return out.relevant===true&&out.hasForeignText!==true&&out.lowQuality!==true&&Number(out.confidence)>=0.85;
    }catch(e){console.error('IMAGE VISION REQUEST FAILED',String(e?.name||'Error'));return false;}
@@ -457,7 +490,6 @@ async function imageIsRelevant(url,input,pageContext){
   return false;
  });
 }
-
 async function generateHomestroImage(input,title,pageContext){
  if(!process.env.OPENAI_API_KEY) return null;
  const model=process.env.OPENAI_IMAGE_MODEL||'gpt-image-1';
@@ -495,7 +527,7 @@ async function uploadGeneratedImageToShopify(productId,dataUrl,title,token,index
 async function addMedia(productId,input,title,token){
  const found=await discoverImages({...input,title});
  const candidates=found.urls.slice(0,20),accepted=[];
- for(const url of candidates){if(accepted.length>=7)break;if(await imageIsRelevant(url,{...input,title},found.pageContext||''))accepted.push(url);}
+ for(const url of candidates){if(accepted.length>=7)break;const jpeg=await verifyShopifyJpeg(url);const candidate=jpeg||url;if(await imageIsRelevant(candidate,{...input,title},found.pageContext||'',jpeg))accepted.push(candidate);}
  // If source images contain foreign text, logos, watermarks or are otherwise unsuitable,
  // replace the missing visuals with freshly generated, text-free Homestro images.
  let generatedCount=0;
@@ -1614,7 +1646,8 @@ app.get('/api/brain/status',async(_req,res)=>{
     roas_brain:{status:'READY_FOR_PERFORMANCE_DATA',ad_spend_eur:0.00}
    },
    products_synced:state.products_synced||0,diagnostics_issues_found:diagnostics.issues_found||0,
-   price_fixes:state.price_fixes||0,last_run_at:state.last_run_at||null,
+   price_fixes:state.price_fixes||0,products_cleaned_count:state.products_cleaned_count||0,
+   product_types_filled:state.product_types_filled||0,handles_cleaned:state.handles_cleaned||0,last_run_at:state.last_run_at||null,
    last_published_product:state.last_published_product||null,
    last_post_ids:posts,
    ms_handwerk_ready:true,ad_spend_eur:0.00,
@@ -1629,7 +1662,7 @@ app.post('/api/brain/run-now',apiKey,async(_req,res)=>{
  catch(error){res.status(502).json({status:'FAILED',reason:String(error?.message||'BRAIN_CYCLE_FAILED').slice(0,100),ad_spend_eur:0.00});}
 });
 setTimeout(()=>{runUnifiedBrainCycle()
- .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})))
+ .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,products_cleaned_count:result.products_cleaned_count,price_fixes:result.price_fixes,product_types_filled:result.product_types_filled,handles_cleaned:result.handles_cleaned,marketing:result.marketing_cycle?.status,ad_spend_eur:0})))
  .catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED')));},30000).unref();
 const brainTimer=setInterval(()=>{runUnifiedBrainCycle()
  .then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})))

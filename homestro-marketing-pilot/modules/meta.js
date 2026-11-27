@@ -102,8 +102,18 @@ export class MetaOrganic {
     await checkpoint({phase:'published',videoId:s.video_id,postId:s.video_id});
     return s.video_id;
   }
+  async verifyJpegAsset(url) {
+    const response=await this.fetch(url,{headers:{Accept:'image/jpeg'},signal:AbortSignal.timeout(20000),redirect:'error'});
+    const type=String(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+    if(response.status!==200||type!=='image/jpeg')fail('META_IMAGE_HTTP_OR_CONTENT_TYPE_INVALID');
+    const reader=response.body?.getReader?.();let head;
+    try{if(reader){head=(await reader.read()).value;await reader.cancel().catch(()=>{});}else head=new Uint8Array(await response.arrayBuffer()).subarray(0,3);}
+    catch{fail('META_IMAGE_READ_FAILED');}
+    if(!head||head.length<3||head[0]!==0xff||head[1]!==0xd8||head[2]!==0xff)fail('META_IMAGE_JPEG_SIGNATURE_INVALID');
+  }
   async publishPhotos(job,checkpoint) {
     const p=job.payload, images=p.imageURLs;
+    for(const url of images)await this.verifyJpegAsset(url);
     if(job.channel==='instagram') {
       const children=[];
       for(let i=0;i<images.length;i++){

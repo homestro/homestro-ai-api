@@ -13,7 +13,13 @@ export function extractMedia(nodes=[]) {
   const images=[...new Set(nodes.filter(n=>n.mediaContentType==='IMAGE' && n.status==='READY').map(n=>n.image?.url).filter(Boolean))];
   return {videoURL:videos[0]?.url||null,images};
 }
-export const carouselAssetKey=image=>hash({image,imageRendererVersion:1});
+export const carouselAssetKey=image=>hash({image,imageRendererVersion:2});
+export function shopifyJpegUrl(raw) {
+  const u=new URL(raw);
+  if(u.hostname!=='cdn.shopify.com'&&!(u.hostname==='homestro.de'&&u.pathname.startsWith('/cdn/shop/')))return raw;
+  u.searchParams.set('format','jpg');u.searchParams.set('width','1080');
+  return u.href;
+}
 // Prefer product photographs with little embedded copy. OCR is a local heuristic,
 // not a language translation or a guarantee that a picture has no text.
 export function selectPhotos(photos,limit=4) {
@@ -34,16 +40,23 @@ function run(bin,args,timeout=120000,cwd) {
     c.once('close',code=>finish(code===0?null:new Error('MEDIA_ENCODING_FAILED')));
   });
 }
-export async function downloadMedia(url,path,allowedHosts,fetchImpl=fetch,maxBytes=150*1024*1024) {
+export async function downloadMedia(url,path,allowedHosts,fetchImpl=fetch,maxBytes=150*1024*1024,{shopifyJpeg=false}={}) {
   let u;
   try {u=new URL(url);} catch {fail('INVALID_MEDIA_URL');}
   // Exact trusted CDN host allowlist, no redirects or arbitrary user origins (SSRF).
   if(u.protocol!=='https:' || u.username || u.password || u.port || !allowedHosts.includes(u.hostname)) fail('MEDIA_HOST_NOT_ALLOWED');
-  const r=await fetchImpl(u,{redirect:'error',signal:AbortSignal.timeout(60000)});
+  const requestUrl=shopifyJpeg?shopifyJpegUrl(u.href):u.href;
+  const r=await fetchImpl(requestUrl,{headers:shopifyJpeg?{Accept:'image/jpeg'}:undefined,redirect:'error',signal:AbortSignal.timeout(60000)});
   if(!r.ok || !r.body) fail('MEDIA_DOWNLOAD_FAILED');
+  if(shopifyJpeg&&(r.status!==200||String(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()!=='image/jpeg'))fail('SHOPIFY_JPEG_HTTP_VERIFICATION_FAILED');
   if(Number(r.headers.get('content-length'))>maxBytes) fail('MEDIA_TOO_LARGE');
-  const chunks=[];let size=0;
-  for await(const chunk of r.body){size+=chunk.length;if(size>maxBytes){fail('MEDIA_TOO_LARGE');}chunks.push(chunk);}
+  const chunks=[];let size=0,signature=Buffer.alloc(0);
+  for await(const raw of r.body){
+    const chunk=Buffer.from(raw);size+=chunk.length;if(size>maxBytes){fail('MEDIA_TOO_LARGE');}
+    if(shopifyJpeg&&signature.length<3)signature=Buffer.concat([signature,chunk.subarray(0,3-signature.length)]);
+    chunks.push(chunk);
+  }
+  if(shopifyJpeg&&(signature.length<3||signature[0]!==0xff||signature[1]!==0xd8||signature[2]!==0xff))fail('SHOPIFY_JPEG_SIGNATURE_INVALID');
   await writeFile(path,Buffer.concat(chunks));
 }
 function plain(value,max=1800) {
@@ -251,7 +264,7 @@ export class MediaRenderer {
       try {await stat(dest);} catch {
         const tmp=await mkdtemp(join(dir,'photo-'));
         try {
-          await downloadMedia(image,join(tmp,'input'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch,15*1024*1024);
+          await downloadMedia(image,join(tmp,'input'),this.cfg.mediaHosts,this.cfg.fetchImpl||fetch,15*1024*1024,{shopifyJpeg:true});
           await run('/usr/bin/ffmpeg',['-hide_banner','-loglevel','error','-y','-i',join(tmp,'input'),
             '-vf','scale=1080:1350:force_original_aspect_ratio=decrease,pad=1080:1350:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1',
             '-frames:v','1','-threads','1','-filter_threads','1','-q:v','3',join(tmp,'image.jpg')]);

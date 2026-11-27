@@ -482,10 +482,16 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
     console.log(`[jarvis-autopilot] ${enabled ? 'ENABLED' : 'DISABLED'} initial_delay_ms=60000 interval_ms=21600000`);
     // Meta Ads remain strictly read-only. Startup only performs the GET-only preflight below.
     if (metaConnection && shopifyGraphQL) {
-      const timer = setTimeout(() => {
-        void liveExecutor.preflight().catch(error => console.warn('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT_FAILED ' + JSON.stringify({reason:error?.message||String(error),evidence:error?.details||null})));
-      }, 5000);
-      timer.unref?.();
+      const paidAdsEnabled=String(process.env.PAID_ADS_ENABLED||'').toLowerCase()==='true';
+      const spendCap=Number(process.env.MAX_DAILY_AD_SPEND_EUR||0);
+      if(paidAdsEnabled&&Number.isFinite(spendCap)&&spendCap>0){
+        const timer = setTimeout(() => {
+          void liveExecutor.preflight().catch(error => console.warn('[jarvis-autopilot] META_READ_ONLY_PREFLIGHT_FAILED ' + JSON.stringify({reason:error?.message||String(error),evidence:error?.details||null})));
+        }, 5000);
+        timer.unref?.();
+      } else {
+        console.log('[jarvis-autopilot] PAID_ADS_LOCKED_SKIP_BUDGET_PREFLIGHT '+JSON.stringify({paidAdsEnabled:false,maxDailyAdSpendEur:0,organicPublishingIndependent:true}));
+      }
     }
   }
 
