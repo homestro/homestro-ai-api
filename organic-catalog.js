@@ -2,12 +2,26 @@
 const {buildOrganicDraft}=require('./organic-marketing');
 const {publishOrganicDraft}=require('./meta-organic');
 const {queueDraft,listDrafts,approveDraft,markPublished,hasQueuedProduct}=require('./organic-staging');
-const QUERY='query OrganicProducts { products(first: 30, query: "status:active") { nodes { id title handle status tags onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } featuredMedia { ... on MediaImage { image { url } } } metafields(first:20,namespace:"homestro"){nodes{key value}} variants(first: 100) { nodes { id price inventoryQuantity inventoryPolicy } } } } }';
+const QUERY='query OrganicProducts($after: String) { products(first: 100, after: $after, query: "status:active") { nodes { id title handle status tags onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } featuredMedia { ... on MediaImage { image { url } } } metafields(first:20,namespace:"homestro"){nodes{key value}} variants(first: 100) { nodes { id price inventoryQuantity inventoryPolicy } } } pageInfo { hasNextPage endCursor } } }';
+async function loadAllPublishedActiveProducts(graphql){
+  const products=[];
+  let after=null;
+  for(let page=0;page<100;page++){
+    const data=await graphql(QUERY,{after});
+    const connection=data?.products;
+    if(!connection||!Array.isArray(connection.nodes)||!connection.pageInfo)throw Error('Invalid Shopify product connection');
+    products.push(...connection.nodes);
+    if(!connection.pageInfo.hasNextPage)return products;
+    if(!connection.pageInfo.endCursor)throw Error('Shopify product pagination cursor missing');
+    after=connection.pageInfo.endCursor;
+  }
+  throw Error('Shopify active product pagination limit reached');
+}
 async function organicPreview(graphql,fetchImpl=global.fetch){
-  const data=await graphql(QUERY);
+  const products=await loadAllPublishedActiveProducts(graphql);
   const skipped=[];
   const excludedProductIds=new Set(String(process.env.META_ORGANIC_EXCLUDED_PRODUCT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean));
-  for(const p of data.products.nodes){
+  for(const p of products){
     try {
       const productIdentity=`${p.title||''} ${p.handle||''} ${p.onlineStoreUrl||''}`.toLowerCase();
       if(excludedProductIds.has(String(p.id))||['lickmat','lick mat','lick-pad','lick pad'].some(term=>productIdentity.includes(term)))throw Error('Product explicitly excluded from organic marketing');
@@ -32,7 +46,7 @@ async function organicPreview(graphql,fetchImpl=global.fetch){
       return {ok:true,drafts:['facebook','instagram'].map(channel=>queueDraft(buildOrganicDraft(product,channel))),skipped,published:false};
     }catch(error){skipped.push({productId:p.id,reason:error.message});}
   }
-  return {ok:false,error:'No eligible product in the first 30 active products',skipped,published:false};
+  return {ok:false,error:'No eligible published ACTIVE product found after scanning the Shopify catalog',skipped,published:false};
 }
 function registerOrganicCatalog(app,apiKey,graphql,metaAccess={}){
   app.get('/api/marketing/organic/drafts',apiKey,(_req,res)=>res.json({ok:true,drafts:listDrafts()}));
