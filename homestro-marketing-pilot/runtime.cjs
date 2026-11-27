@@ -75,6 +75,15 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
       publisher={status:'tick_requested'};
     }
     return {status:'completed',catalog,publisher};
+  },getPublishedPosts:async()=>{
+    const current=await ready;
+    if(!current?.enabled||!current.store)return [];
+    try{
+      const posts=await current.store.list('published');
+      return posts.slice(0,100).map(row=>({id:row.id,channel:row.channel,title:row.payload?.title||null,
+        platform_post_id:row.remote?.postId||null,permalink:row.remote?.permalink||null,
+        published_at:row.published_at||null})).filter(row=>row.platform_post_id||row.permalink);
+    }catch{return [];}
   }};
 }
 module.exports={registerMarketingPilot,marketingGraphqlAllowed};
