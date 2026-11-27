@@ -23,7 +23,7 @@ export class MetaOrganic {
     let b;try{b=await r.json();}catch{fail('META_INVALID_RESPONSE');}
     if(!r.ok || b.error) {
       const message=String(b.error?.message||'').replace(/https?:\/\/\S+/g,'[URL]').replace(/[A-Za-z0-9_-]{40,}/g,'[REDACTED]').slice(0,240);
-      log('META_API_ERROR',{httpStatus:r.status,apiCode:b.error?.code||null,apiSubcode:b.error?.error_subcode||null,message});
+      log('META_API_ERROR',{httpStatus:r.status,apiCode:b.error?.code||null,apiSubcode:b.error?.error_subcode||null,apiMessage:message});
       if(b.error?.code===190)await this.cfg.onCredentialError?.({metaCode:190},credentials);
       fail(b.error?.code===190?'META_REAUTH_REQUIRED':'META_REQUEST_FAILED');
     }
