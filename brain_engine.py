@@ -270,6 +270,7 @@ def run():
     return {"status":"ACTIVE","products_synced":len(products),"diagnostics_issues_found":len(issues),
         "price_fixes":fixed,"obsolete_tags_removed":cleaned,"admin_auth":admin_status,
         "catalog_source":source,"selected_product":candidate.get("title") if candidate else None,
+        "selected_product_id":candidate.get("id") if candidate else None,
         "hook":hook,"caption":caption,"ms_handwerk_ready":bool(ms),"ad_spend_eur":0.0}
 
 def main():
