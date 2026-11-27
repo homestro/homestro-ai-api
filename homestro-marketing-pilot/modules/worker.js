@@ -35,7 +35,7 @@ async function autoApproveVerifiedDrafts({client,store,freshSnapshot,cfg}) {
         !payload.caption.includes(localized.hook)||!sourceLooksGerman(payload.caption)||
         !current.variants?.some(v=>v.available&&Number(v.price)>0)||
         (!isReel&&!['image','carousel'].includes(payload.format))||(!isReel&&payload.videoURL)||
-        (isReel&&!['image','video'].some(k=>k==='video'?Boolean(source.videoURL):source.images.length>=3))||
+        (isReel&&!['image','video'].some(k=>k==='video'?Boolean(source.videoURL):source.images.length>=1))||
         (!isReel&&(!Array.isArray(images)||images.length<1||images.length>10)))continue;
       const sourceImages=source.images;
       if(!sourceImages.length&&!source.videoURL)continue;
