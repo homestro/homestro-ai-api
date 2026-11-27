@@ -218,7 +218,7 @@ export class MediaRenderer {
   async renderImageReel(product,selected) {
     const gallery=await this.carousel(selected.images);
     const photos=gallery.imageURLs.slice(0,4);
-    if(photos.length<3) {
+    if(photos.length<1) {
       log('REEL_SKIPPED',{productId:product.id,reason:'INSUFFICIENT_CLEAN_PRODUCT_ANGLES',cleanAngles:photos.length});
       return gallery;
     }
@@ -228,15 +228,18 @@ export class MediaRenderer {
     const output=join(dir,key+'.mp4');
     try {await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch {}
     const files=photos.map(url=>join(dir,new URL(url).pathname.split('/').pop()));
-    const shots=[...new Set(files)].slice(0,4);
+    const uniqueFiles=[...new Set(files)].slice(0,4);
+    // Repeat 1–2 verified photos as distinct crops so the Reel still has multiple moving beats.
+    const shots=uniqueFiles.length>=3?uniqueFiles:Array.from({length:4},(_,i)=>uniqueFiles[i%uniqueFiles.length]);
     const duration=10,fade=0.25,segment=(duration+fade*(shots.length-1))/shots.length,filters=[];
     const tmp=await mkdtemp(join(dir,'reel-'));
     try {
       await writeFile(join(tmp,'story.ass'),storyAss(c,script,duration),'utf8');
       const args=['-hide_banner','-loglevel','error','-y'];
       for(const file of shots)args.push('-loop','1','-t',segment.toFixed(3),'-i',file);
+      const panX=[20,-24,28,-18],panY=[25,-20,-16,22];
       shots.forEach((_,i)=>filters.push('['+i+':v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,'+
-        "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+sin(on/48)*20':y='(ih-ih/zoom)/2+cos(on/52)*25':d=1:s=720x1280:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
+        "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+"+panX[i%4]+"*sin(on/48)':y='(ih-ih/zoom)/2+"+panY[i%4]+"*cos(on/52)':d=1:s=720x1280:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
       let current='v0';
       for(let i=1;i<shots.length;i++){
         const next='x'+i,offset=(i*(segment-fade)).toFixed(3);
