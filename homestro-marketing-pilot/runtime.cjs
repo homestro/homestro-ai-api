@@ -65,6 +65,16 @@ function registerMarketingPilot(app,{graphql,apiKey,env=process.env,getCredentia
   return {ready,processProduct:async (id,options)=>{
     try{return (await ready)?.processProduct(id,options)||{processed:0,status:'marketing_disabled'};}
     catch{return {processed:0,status:'pending_marketing'};}
+  },getStatus:async()=>{
+    const current=await ready;
+    if(!current?.enabled||!current.worker)return {status:'disabled',last_post_ids:[]};
+    const rows=(await current.worker.store.pool.query("SELECT id,product_id,channel,remote,published_at FROM marketing_posts WHERE status='published' ORDER BY published_at DESC LIMIT 20")).rows;
+    const posts=rows.map(row=>{
+      let remote=row.remote||{};
+      if(typeof remote==='string'){try{remote=JSON.parse(remote);}catch{remote={};}}
+      return {localPostId:row.id,remotePostId:remote.postId||null,productId:row.product_id,channel:row.channel,publishedAt:row.published_at};
+    });
+    return {status:'ready',last_post_ids:posts.map(p=>p.remotePostId).filter(Boolean),last_published_product:posts[0]?.productId||null,last_published_at:posts[0]?.publishedAt||null};
   },runCycle:async(brainResult={})=>{
     const current=await ready;
     if(!current?.enabled)return {status:'marketing_disabled'};
