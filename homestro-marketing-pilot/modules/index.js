@@ -113,6 +113,7 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
             for(const channel of ['facebook','instagram']){
               if(prepared.previouslyPublished?.[channel])continue;
               const payload=compilePost(prepared,channel,prepared.asset,cfg);
+              payload.adSpendEUR=0;payload.requiresReview=false;
               if(await store.queue(id,channel,hash(payload),payload))queued++;
             }
             try{await publishProductSeo(graphql,raw,prepared.localized);}catch(e){log('PRODUCT_SEO_SYNC_FAILED',{productId:id,reason:codeOf(e)});}
@@ -122,6 +123,20 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
         const result=await (freeOnly?freeIngestion:ingestion).process(raw,inputs);
         if(result.status==='draft_queued' && result.processed) {
           const prepared=await enrichStoredWithTrends(await store.product(id));
+          const doc=prepared?.document;
+          if(prepared?.status==='ready'&&doc?.status==='ACTIVE'&&doc.contentReviewed===true&&
+              doc.asset&&!doc.asset.previewOnly&&doc.localized) {
+            let queued=0;
+            for(const channel of ['facebook','instagram']) {
+              if(doc.previouslyPublished?.[channel])continue;
+              try {
+                const payload=compilePost(doc,channel,doc.asset,cfg);
+                payload.adSpendEUR=0;payload.requiresReview=false;
+                if(await store.queue(id,channel,hash(payload),payload))queued++;
+              } catch(e) { log('META_ORGANIC_QUEUE_PENDING',{productId:id,channel,reason:codeOf(e)}); }
+            }
+            if(queued)log('META_ORGANIC_DRAFT_QUEUED',{productId:id,count:queued,format:doc.asset.format,adSpendEUR:0});
+          }
           try {
             const seo=await publishProductSeo(graphql,raw,prepared?.document?.localized);
             if(seo.updated)log('PRODUCT_SEO_SYNCED',{productId:id,fields:seo.fields});
