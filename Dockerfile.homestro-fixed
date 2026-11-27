@@ -17,6 +17,9 @@ RUN npm install --omit=dev
 COPY . .
 RUN python3 -m venv /opt/venv \
   && /opt/venv/bin/pip install --no-cache-dir "httpx>=0.27,<1" "pydantic>=2.9,<3" "defusedxml>=0.7.1,<1" "Pillow>=10,<13"
+RUN node --check ./organic-catalog.js \
+  && node --check ./organic-marketing.js \
+  && python3 -m py_compile ./agents/product_hunter.py ./jarvis_agents/unified_pipeline.py
 ENV PYTHON_EXECUTABLE=/opt/venv/bin/python
 # Autopilot quality logic is integrated directly in server.js/autopilot-core.js.
 # Apply a deterministic Apify budget/cache guard before syntax validation so Hunter cannot create runaway paid Actor runs.
