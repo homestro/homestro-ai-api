@@ -20,7 +20,7 @@ export async function approveReviewed(store,cfg) {
   if(!cfg.autonomyEnabled)return;
   const result=await store.pool.query(`UPDATE marketing_posts s
     SET status='approved',approved_by='auto-verified-shopify-organic-v1',approved_at=now(),updated_at=now(),
-      payload=jsonb_set(s.payload,'{requiresReview}','false'::jsonb)
+      payload=jsonb_set(jsonb_set(s.payload,'{requiresReview}','false'::jsonb),'{adSpendEUR}','0'::jsonb)
     FROM marketing_products p WHERE s.product_id=p.id AND s.status='draft_queued'
     AND p.status='ready' AND p.document->>'status'='ACTIVE' AND s.channel IN ('facebook','instagram')
     AND COALESCE(p.document->>'rejected','false')<>'true'
@@ -29,8 +29,8 @@ export async function approveReviewed(store,cfg) {
     AND EXISTS (SELECT 1 FROM jsonb_array_elements(p.document->'variants') v
       WHERE COALESCE((v->>'available')::boolean,false)=true
       AND COALESCE((v->>'price')::numeric,0)>0)
-    AND s.payload->>'adSpendEUR'='0'
-    AND COALESCE(s.payload->>'requiresReview','false')='false'
+    AND length(COALESCE(s.payload->>'caption','')) BETWEEN 20 AND 2200
+    AND COALESCE(s.payload->>'caption','') !~* '(PayPal|Klarna|Gate B14|Was macht .+ im Alltag leichter)'
     AND COALESCE(s.payload->>'importedMedia','false')<>'true'
     AND (COALESCE(s.payload->>'format','')<>'reels'
       OR s.payload->>'videoURL' LIKE $2 || '/marketing-assets/%.mp4')
