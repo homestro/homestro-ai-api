@@ -234,20 +234,29 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, width
 def _promo_image(product: dict[str, Any], output: Path, work: Path, headline: str) -> None:
     sources = product.get("image_urls") or []
     photo = None
+    fallback_photo = None
     for index, url in enumerate(sources[:4]):
         candidate = work / f"source-{index}.img"
         try:
             _download(url, candidate, 18 * 1024 * 1024)
             with Image.open(candidate) as opened:
                 opened.verify()
+            with Image.open(candidate) as opened:
+                normalized = ImageOps.fit(
+                    opened.convert("RGB"), (1000, 900), method=Image.Resampling.LANCZOS
+                )
+            if fallback_photo is None:
+                fallback_photo = normalized
             if _looks_like_english_supplier_banner(candidate):
                 continue
-            with Image.open(candidate) as opened:
-                photo = ImageOps.fit(opened.convert("RGB"), (1000, 900), method=Image.Resampling.LANCZOS)
+            photo = normalized
             break
         except Exception:
             continue
 
+    # Soft-sort: prefer clean media, but use Shopify's first valid product image
+    # when all available source images contain supplier text.
+    photo = photo or fallback_photo
     canvas = Image.new("RGB", (1080, 1350), "#101827")
     draw = ImageDraw.Draw(canvas)
     # Reserved padded red header band keeps the emotional headline inside the safe area.
