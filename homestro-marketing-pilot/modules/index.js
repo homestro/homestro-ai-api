@@ -179,6 +179,10 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
           rejected:current?.rejected===true,availableVariant:Boolean(current?.variants?.some(v=>v.available&&Number(v.price)>0)),adSpendEUR:0});
         return false;
       }
+      const staleAsset=await pool.query(`UPDATE marketing_products
+        SET document=jsonb_set(document,'{asset,previewOnly}','true'::jsonb,true),updated_at=now()
+        WHERE id=$1 AND status='ready' AND document->'asset' IS NOT NULL RETURNING id`,[productId]);
+      if(staleAsset.rowCount)log('STARTUP_REEL_REENCODE_FORCED',{productId,channel,reason:'meta_1080x1920_aac_spec',adSpendEUR:0});
       const result=await processProduct(productId,{freeOnly:true});
       log('STARTUP_PRODUCT_PREPARATION_RESULT',{productId,channel,status:result?.status||'unknown',
         queued:Number(result?.queued||0),assetFormat:result?.assetFormat||null,
