@@ -1564,3 +1564,67 @@ app.listen(PORT,()=>console.log(`Homestro AI Control listening on ${PORT}`));
 // Immediate image-QA kickoff for existing DRAFTs; the image-check tag makes this idempotent.
 if(process.env.HOMESTRO_IMAGE_QA_ENABLED!=='false')runDraftImageQA().catch(e=>console.error('DRAFT IMAGE QA STARTUP FAILED',e.message));
 
+
+
+// Unified brain: store diagnostics and the existing reviewed organic pipeline share one scheduler.
+const brainFs=require('fs/promises');
+const brainPath=require('path').join(__dirname,'brain_engine.py');
+const brainDataDir=process.env.BRAIN_DATA_DIR||'/data';
+let brainRunPromise=null, brainLastCycle=null;
+function runUnifiedBrainCycle(){
+ if(brainRunPromise)return brainRunPromise;
+ brainRunPromise=(async()=>{
+  const python=process.env.PYTHON_EXECUTABLE||'python3';
+  const {spawn}=require('child_process');
+  const result=await new Promise((resolve,reject)=>{
+   const child=spawn(python,[brainPath,'run'],{env:{...process.env,BRAIN_DATA_DIR:brainDataDir},stdio:['ignore','pipe','pipe']});
+   let stdout='',stderr='',timer=setTimeout(()=>{child.kill('SIGTERM');reject(new Error('BRAIN_ENGINE_TIMEOUT'));},180000);
+   child.stdout.on('data',chunk=>{stdout+=chunk.toString();if(stdout.length>2_000_000)child.kill('SIGTERM');});
+   child.stderr.on('data',chunk=>{stderr+=chunk.toString();if(stderr.length>8000)stderr=stderr.slice(-8000);});
+   child.on('error',error=>{clearTimeout(timer);reject(error);});
+   child.on('close',code=>{
+    clearTimeout(timer);
+    if(code!==0)return reject(new Error('BRAIN_ENGINE_EXIT_'+code));
+    try{resolve(JSON.parse(stdout.trim().split(/\\r?\\n/).at(-1)));}catch{return reject(new Error('BRAIN_ENGINE_INVALID_OUTPUT'));}
+   });
+  });
+  let marketing={status:'unavailable'};
+  try{
+   if(typeof marketingPilot.runCycle==='function')marketing=await marketingPilot.runCycle();
+  }catch(error){marketing={status:'failed',reason:String(error?.message||'MARKETING_CYCLE_FAILED').slice(0,100)};}
+  brainLastCycle={...result,marketing_cycle:marketing,completed_at:new Date().toISOString()};
+  return brainLastCycle;
+ })().finally(()=>{brainRunPromise=null;});
+ return brainRunPromise;
+}
+app.get('/api/brain/status',async(_req,res)=>{
+ try{
+  const state=JSON.parse(await brainFs.readFile(brainDataDir+'/brain-state.json','utf8'));
+  const diagnostics=JSON.parse(await brainFs.readFile(brainDataDir+'/store-diagnostics.json','utf8'));
+  let posts=[];
+  try{posts=await marketingPilot.getPublishedPosts?.()||[];}catch{}
+  const publisherEnabled=process.env.PILOT_WORKER_ENABLED==='true'&&process.env.PILOT_PUBLISH_ENABLED==='true';
+  res.set('Cache-Control','no-store').json({
+   status:'ACTIVE',modules:{
+    store_doctor:{status:state.admin_auth==='authenticated'?'ACTIVE':'DEGRADED',admin_auth:state.admin_auth,price_fixes:state.price_fixes||0},
+    content_publisher:{status:publisherEnabled?'ACTIVE':'PAUSED',worker_enabled:process.env.PILOT_WORKER_ENABLED==='true',publishing_enabled:process.env.PILOT_PUBLISH_ENABLED==='true',last_cycle:brainLastCycle?.marketing_cycle?.status||null},
+    roas_brain:{status:'READY_FOR_PERFORMANCE_DATA',ad_spend_eur:0.00}
+   },
+   products_synced:state.products_synced||0,diagnostics_issues_found:diagnostics.issues_found||0,
+   price_fixes:state.price_fixes||0,last_run_at:state.last_run_at||null,
+   last_published_product:posts[0]?.title||null,
+   last_post_ids:posts.map(p=>({id:p.platform_post_id,channel:p.channel,permalink:p.permalink,published_at:p.published_at})),
+   ms_handwerk_ready:true,ad_spend_eur:0.00,
+   catalog_source:state.catalog_source||null,admin_auth:state.admin_auth||'unknown'
+  });
+ }catch(error){
+  res.status(503).json({status:'INITIALIZING',error:String(error?.message||'BRAIN_STATE_UNAVAILABLE').slice(0,100),ad_spend_eur:0.00});
+ }
+});
+app.post('/api/brain/run-now',apiKey,async(_req,res)=>{
+ try{res.json(await runUnifiedBrainCycle());}
+ catch(error){res.status(502).json({status:'FAILED',reason:String(error?.message||'BRAIN_CYCLE_FAILED').slice(0,100),ad_spend_eur:0.00});}
+});
+setTimeout(()=>runUnifiedBrainCycle().then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})).catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED'))),30000).unref();
+const brainTimer=setInterval(()=>runUnifiedBrainCycle().then(result=>console.log('[brain-engine] '+JSON.stringify({status:result.status,products_synced:result.products_synced,marketing:result.marketing_cycle?.status,ad_spend_eur:0})).catch(error=>console.error('[brain-engine] '+String(error?.message||'BRAIN_CYCLE_FAILED'))),4*60*60*1000);
+brainTimer.unref();
