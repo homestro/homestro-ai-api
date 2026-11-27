@@ -13,7 +13,7 @@ export function extractMedia(nodes=[]) {
   const images=[...new Set(nodes.filter(n=>n.mediaContentType==='IMAGE' && n.status==='READY').map(n=>n.image?.url).filter(Boolean))];
   return {videoURL:videos[0]?.url||null,images};
 }
-export const carouselAssetKey=image=>hash({image,imageRendererVersion:2});
+export const carouselAssetKey=image=>hash({image,imageRendererVersion:3});
 export function shopifyJpegUrl(raw) {
   const u=new URL(raw);
   if(u.hostname!=='cdn.shopify.com'&&!(u.hostname==='homestro.de'&&u.pathname.startsWith('/cdn/shop/')))return raw;
@@ -23,11 +23,15 @@ export function shopifyJpegUrl(raw) {
 // Prefer product photographs with little embedded copy. OCR is a local heuristic,
 // not a language translation or a guarantee that a picture has no text.
 export function selectPhotos(photos,limit=4) {
-  const clean=photos.filter(p=>p.words!==null && p.words<=8);
-  const unknown=photos.filter(p=>p.words===null);
-  const ranked=clean.length?clean:unknown.length?unknown:
-    [...photos].sort((a,b)=>a.words-b.words).slice(0,2);
-  return ranked.slice(0,limit).map(p=>p.url);
+  const supplierComparison=p=>/srovn[-_]?\d*/i.test(decodeURIComponent((new URL(p.url).pathname.split('/').pop()||'')));
+  const englishPromo=p=>/\b(?:before|after|before\s+and\s+after|gently\s+scrub|learning\s+machine|buy\s+now|free\s+shipping|best\s+seller|limited\s+offer|sale|off\s+today)\b/i.test(String(p.text||''));
+  const preferred=photos.filter(p=>!supplierComparison(p)&&!englishPromo(p)&&(p.words===null||p.words<=8));
+  const noComparison=photos.filter(p=>!supplierComparison(p));
+  const byClarity=(a,b)=>(a.words??0)-(b.words??0);
+  const ranked=preferred.length?preferred:
+    noComparison.length?[...noComparison].sort((a,b)=>Number(englishPromo(a))-Number(englishPromo(b))||byClarity(a,b)):
+    [...photos].sort((a,b)=>Number(englishPromo(a))-Number(englishPromo(b))||byClarity(a,b));
+  return [...new Map(ranked.map(p=>[new URL(p.url).pathname,p])).values()].slice(0,Math.min(4,limit)).map(p=>p.url);
 }
 function run(bin,args,timeout=120000,cwd) {
   return new Promise((resolve,reject)=>{
@@ -66,13 +70,15 @@ function plain(value,max=1800) {
 function safeScript(value) {
   const s=plain(value,360).replace(/[\r\n]+/g,' ').replace(/-->/g,'—').trim();
   const words=s.split(/\s+/).filter(Boolean);
-  if(words.length<4 || words.length>42)fail('VIDEO_SCRIPT_INVALID');
+  if(words.length<6 || words.length>28 || /was\s+macht\s+.{1,120}\s+im\s+alltag\s+leichter|gate\s*b14/i.test(s))fail('VIDEO_SCRIPT_INVALID');
   return s;
 }
 function fallbackScript(product) {
-  const c=product.localized||{}, benefit=c.benefits?.[0]?.text||c.description||'';
-  const words=[c.hook,c.title,benefit,'Jetzt bei Homestro entdecken.'].filter(Boolean).join('. ').split(/\s+/).slice(0,30);
-  return safeScript(words.join(' '));
+  const c=product.localized||{},title=plain(c.title||product.title||'dieses Produkt',100);
+  const benefit=plain(c.benefits?.[0]?.text||c.description||'',180);
+  const openings=['Kennst du das, wenn eine kleine Aufgabe unnötig Zeit kostet?','Manchmal hilft schon eine praktische Idee für den Alltag.','Für genau solche Momente gibt es eine einfache Lösung.','Kleine Alltagshilfe gesucht? Schau dir das hier an.','Warum kompliziert, wenn es auch praktisch geht?'];
+  const seed=parseInt(hash(product.id||title).slice(0,8),16)||0;
+  return safeScript([openings[seed%openings.length],title,benefit].filter(Boolean).join(' ').split(/\s+/).slice(0,27).join(' '));
 }
 async function responseOrFail(response,cfg,operation) {
   if(response.ok)return response;
@@ -96,7 +102,7 @@ async function generateScript(product,cfg,fetchImpl) {
       headers:{Authorization:'Bearer '+cfg.openaiApiKey,'Content-Type':'application/json'},
       body:JSON.stringify({model:cfg.videoScriptModel||'gpt-4o-mini',temperature:0.4,max_tokens:110,
         messages:[
-          {role:'system',content:'Write a natural German product video voiceover. Start immediately with a concrete relevant problem or short question, NEVER with a catalogue title. Use ONLY facts explicitly present in the supplied product copy. Do not invent material, dimensions, performance, ratings, discounts, guarantees, health effects, delivery promises, or scarcity. 20–30 spoken words: short hook, one supported benefit, neutral call to action. Avoid repeated benefits and long product names. Return only the spoken German text.'},
+          {role:'system',content:'Write a fresh, punchy German product voiceover in 16–22 words. The first sentence is a curiosity hook for the first 2 seconds; follow it with two short, distinct benefits from the supplied copy. Never use “Was macht [Produkt] im Alltag leichter?” or any variation, and never mention Gate B14. Do not begin with a catalogue title. Use ONLY facts explicitly present in the product copy; invent no price, performance, rating, discount, guarantee, health effect, delivery promise, or scarcity. Natural spoken German, not robotic. Return only the German text.'},
           {role:'user',content:JSON.stringify(source)}
         ]})
     });
@@ -174,7 +180,7 @@ export class MediaRenderer {
       }
     }
     if(!selected.videoURL) return this.carousel(selected.images);
-    const key=hash({media:selected,hook:product.localized.hook,renderVersion:2});
+    const key=hash({media:selected,hook:product.localized.hook,renderVersion:3});
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const output=join(dir,key+'.mp4');
     try {await stat(output);return {format:'reels',videoURL:this.url(key),imageURLs:[]};} catch{}
@@ -201,9 +207,9 @@ export class MediaRenderer {
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const source=selected.videoURL?{video:selected.videoURL}:{image:selected.images[0]};
     const c=product.localized||{};
-    const version={videoEngine:2,source,id:product.id,title:c.title,description:c.description,hook:c.hook,benefits:c.benefits,
+    const version={videoEngine:4,source,id:product.id,title:c.title,description:c.description,hook:c.hook,benefits:c.benefits,
       scriptModel:this.cfg.videoScriptModel||'gpt-4o-mini',ttsModel:this.cfg.videoTtsModel||'gpt-4o-mini-tts',voice:this.cfg.videoTtsVoice||'coral'};
-    const audioKey=hash(version),key=hash({...version,videoEngine:3,shots:selected.images.slice(0,6)}),output=join(dir,key+'.mp4'),scriptPath=join(dir,audioKey+'.script.txt'),speechPath=join(dir,audioKey+'.speech.mp3');
+    const audioKey=hash(version),key=hash({...version,videoEngine:5,shots:selected.images.slice(0,4)}),output=join(dir,key+'.mp4'),scriptPath=join(dir,audioKey+'.script.txt'),speechPath=join(dir,audioKey+'.speech.mp3');
     let script,speech;
     try{script=(await readFile(scriptPath,'utf8')).trim();}catch{}
     try{speech=await readFile(speechPath);}catch{}
@@ -224,7 +230,7 @@ export class MediaRenderer {
       const probe=JSON.parse(await run('/usr/bin/ffprobe',['-v','error','-show_format','-of','json',speechPath]));
       const voiceDuration=Number(probe.format?.duration);
       if(!Number.isFinite(voiceDuration)||voiceDuration<2)fail('VIDEO_AUDIO_TOO_SHORT');
-      const duration=Math.max(6,Math.min(Number(this.cfg.videoMaxDurationSec||20),voiceDuration+0.15));
+      const duration=Math.max(8,Math.min(10,Number(this.cfg.videoMaxDurationSec||20),voiceDuration+0.25));
       await writeFile(join(tmp,'story.ass'),storyAss(c,script,duration),'utf8');
       const args=['-hide_banner','-loglevel','error','-y'];
       if(selected.videoURL) {
@@ -234,18 +240,24 @@ export class MediaRenderer {
         args.push('-stream_loop','-1','-i',join(tmp,'source.mp4'),'-i',speechPath,'-map','0:v:0','-map','1:a:0','-t',String(duration),
           '-vf',"scale=680:680:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:265:color=0xf4f4ef,setsar=1,fps=30,ass=story.ass");
       } else {
-        // Reuse the photo selector's cached OCR ranking; retain whole product images.
+        // OCR-rank distinct product angles, then animate each scene with Ken Burns motion.
         const photos=await this.carousel(selected.images);
-        const files=photos.imageURLs.slice(0,3).map(url=>join(dir,new URL(url).pathname.split('/').pop()));
+        const files=photos.imageURLs.slice(0,4).map(url=>join(dir,new URL(url).pathname.split('/').pop()));
         if(!files.length)fail('NO_MARKETING_MEDIA');
-        const shots=[files[0],files[1]||files[0],files[2]||files[1]||files[0]];
+        const shots=[...new Set(files)].slice(0,4);
         for(const file of shots)args.push('-loop','1','-i',file);
         args.push('-i',speechPath);
-        const segment=duration/shots.length,frames=Math.ceil(segment*30),filters=[];
-        shots.forEach((_,i)=>filters.push('['+i+':v]scale=680:680:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:265:color=0xf4f4ef,setsar=1,'+
-          "zoompan=z='"+[1,1.06,1.025][i]+"+0.015*on/"+frames+"':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d="+frames+":s=720x1280:fps=30,trim=duration="+segment+",setpts=PTS-STARTPTS[v"+i+']'));
-        filters.push('[v0][v1][v2]concat=n=3:v=1:a=0,ass=story.ass[v]');
-        args.push('-filter_complex',filters.join(';'),'-map','[v]','-map','3:a:0','-t',String(duration));
+        const fade=0.25,segment=(duration+fade*(shots.length-1))/shots.length,filters=[];
+        shots.forEach((_,i)=>filters.push('['+i+':v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,'+
+          "zoompan=z='min(zoom+0.0012,1.08)':x='(iw-iw/zoom)/2+sin(on/48)*20':y='(ih-ih/zoom)/2+cos(on/52)*25':d=1:s=720x1280:fps=30,trim=duration="+segment.toFixed(3)+",setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v"+i+']'));
+        let current='v0';
+        for(let i=1;i<shots.length;i++){
+          const next='x'+i,offset=(i*(segment-fade)).toFixed(3);
+          filters.push('['+current+'][v'+i+']xfade=transition=fade:duration='+fade+':offset='+offset+'['+next+']');
+          current=next;
+        }
+        filters.push('['+current+']ass=story.ass[v]');
+        args.push('-filter_complex',filters.join(';'),'-map','[v]','-map',shots.length+':a:0','-t',String(duration));
       }
       args.push('-threads','1','-filter_threads','1','-filter_complex_threads','1',
         '-c:v','libx264','-preset','fast','-crf','24','-pix_fmt','yuv420p',
@@ -259,7 +271,8 @@ export class MediaRenderer {
   async carousel(images) {
     const dir=join(this.cfg.dataDir,'assets');await mkdir(dir,{recursive:true});
     const balanced=this.cfg.organicPolicy==='balanced-v1',photos=[];
-    for(const image of [...new Set(images)].slice(0,balanced?6:10)) {
+    const unique=[...new Map([...new Set(images)].map(image=>{try{return [new URL(image).pathname,image];}catch{return [image,image];}})).values()];
+    for(const image of unique.slice(0,balanced?8:12)) {
       const key=carouselAssetKey(image);const dest=join(dir,key+'.jpg');
       try {await stat(dest);} catch {
         const tmp=await mkdtemp(join(dir,'photo-'));
@@ -272,22 +285,20 @@ export class MediaRenderer {
           await rename(join(tmp,'image.jpg'),dest);
         } finally {await rm(tmp,{recursive:true,force:true});}
       }
-      let words=null;
-      if(balanced){
-        const assessment=join(dir,key+'.ocr-v1.json');
-        try{words=JSON.parse(await readFile(assessment,'utf8')).words;}catch{
-          try{
-            const tsv=await run('/usr/bin/tesseract',[dest,'stdout','-l','eng','--psm','11','tsv'],15000);
-            words=tsv.split('\n').slice(1).filter(line=>{
-              const cells=line.split('\t');return cells[0]==='5' && Number(cells[10])>=40 && /[\p{L}\p{N}]/u.test(cells[11]||'');
-            }).length;
-            await writeFile(assessment,JSON.stringify({words}),'utf8');
-          }catch{ /* Missing OCR never blocks an otherwise usable product photograph. */ }
-        }
+      let words=null,text='';
+      const assessment=join(dir,key+'.ocr-v2.json');
+      try{const cached=JSON.parse(await readFile(assessment,'utf8'));words=cached.words;text=String(cached.text||'');}catch{
+        try{
+          const tsv=await run('/usr/bin/tesseract',[dest,'stdout','-l','eng','--psm','11','tsv'],15000);
+          const recognized=tsv.split('\n').slice(1).map(line=>line.split('\t')).filter(cells=>
+            cells[0]==='5'&&Number(cells[10])>=40&&/[\p{L}\p{N}]/u.test(cells[11]||''));
+          words=recognized.length;text=recognized.map(cells=>cells[11].trim()).filter(Boolean).join(' ');
+          await writeFile(assessment,JSON.stringify({words,text}),'utf8');
+        }catch{ /* OCR failure never blocks otherwise usable photos. */ }
       }
-      photos.push({url:`${this.cfg.publicOrigin}/marketing-assets/${key}.jpg`,words});
+      photos.push({url:`${this.cfg.publicOrigin}/marketing-assets/${key}.jpg`,words,text});
     }
-    const urls=balanced?selectPhotos(photos):photos.map(p=>p.url);
+    const urls=selectPhotos(photos,balanced?6:10);
     if(!urls.length)fail('NO_MARKETING_MEDIA');
     return {format:urls.length>1?'carousel':'image',videoURL:null,imageURLs:urls};
   }
