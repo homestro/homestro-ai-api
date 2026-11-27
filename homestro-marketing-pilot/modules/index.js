@@ -157,20 +157,20 @@ export async function attachMarketing(app,{pool,graphql,localizer,prepareInputs,
       }
     };
     const worker=new Worker({store,meta,cfg,freshSnapshot:fresh,prepareStartup:async channel=>{
-      const products=await store.feedRows();
-      const preferred='gid://shopify/Product/16104466776446';
-      products.sort((a,b)=>Number(b.id===preferred)-Number(a.id===preferred));
-      for(const product of products){
-        if(!product?.id||product.status!=='ACTIVE'||product.rejected===true||product.contentReviewed!==true||
-          product.localized?.language!=='de'||!product.asset||product.asset.previewOnly||
-          product.previouslyPublished?.[channel])continue;
-        const current=await fresh(product.id);
-        if(!current||current.status!=='ACTIVE'||current.rejected===true||current.contentReviewed!==true||
-          current.revision!==product.revision||!current.variants?.some(v=>v.available&&Number(v.price)>0))continue;
-        const result=await processProduct(product.id,{freeOnly:true});
-        if((result?.queued||0)>0){log('STARTUP_PRODUCT_PREPARED',{productId:product.id,channel,queued:result.queued,adSpendEUR:0});return true;}
+      const productId='gid://shopify/Product/16104466776446';
+      const current=await fresh(productId);
+      if(!current||current.status!=='ACTIVE'||current.rejected===true||
+        !current.variants?.some(v=>v.available&&Number(v.price)>0)){
+        log('STARTUP_WINNER_NOT_PUBLISHABLE',{productId,channel,active:current?.status==='ACTIVE',
+          rejected:current?.rejected===true,availableVariant:Boolean(current?.variants?.some(v=>v.available&&Number(v.price)>0)),adSpendEUR:0});
+        return false;
       }
-      log('STARTUP_NO_SAFE_ACTIVE_PRODUCT',{channel,adSpendEUR:0});return false;
+      const result=await processProduct(productId,{freeOnly:true});
+      log('STARTUP_PRODUCT_PREPARATION_RESULT',{productId,channel,status:result?.status||'unknown',
+        queued:Number(result?.queued||0),assetFormat:result?.assetFormat||null,
+        reasons:Array.isArray(result?.reasons)?result.reasons.slice(0,6):[],adSpendEUR:0});
+      if((result?.queued||0)>0){log('STARTUP_PRODUCT_PREPARED',{productId,channel,queued:result.queued,adSpendEUR:0});return true;}
+      log('STARTUP_NO_SAFE_ACTIVE_PRODUCT',{productId,channel,adSpendEUR:0});return false;
     },ensureImportedAssets:(job,source)=>{
       if(!importedMedia)fail('IMPORTED_ASSET_VERIFIER_UNAVAILABLE');return importedMedia.ensure(job,source);
     }});
