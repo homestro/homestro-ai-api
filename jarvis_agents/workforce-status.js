@@ -108,49 +108,42 @@ function taskResult(agentId, pillar) {
 }
 
 function buildOrganicScripts(products) {
-  const xp6 = products.find(p => p.handle === erazer.handle) || {title: erazer.title, handle: erazer.handle, productType: 'Audio'};
-  const next = products.find(p => p.handle !== xp6.handle) || xp6;
-  const platforms = ['TikTok', 'Instagram Reels', 'YouTube Shorts'];
-  const hashtags = product => product.handle === erazer.handle
-    ? ['#Homestro','#ErazerXP6','#Kopfhoerer','#MusikUnterwegs','#Zuhausegefuehl']
-    : String(product.title||'').toLowerCase().includes('ohrenreinigung')
-      ? ['#Homestro','#Ohrenpflege','#Hundepflege','#Katzenpflege','#Haustierliebe']
-      : ['#Homestro','#Alltagsideen','#Produktentdecken','#Zuhause','#ShoppingTipps'];
-  const shortTitle = product => product.handle === erazer.handle ? 'Erazer XP6' : String(product.title||'Produkt').split(/ – | \(/)[0].slice(0,42);
-  return [
-    {
-      id: 'organic-xp6-'+new Date().toISOString().slice(0,10), platforms, productTitle: xp6.title, productHandle: xp6.handle,
-      durationSeconds: 25, angle: 'Rescue & Relief in a Foreign Country',
-      scenes: [
-        {seconds:'0-4',visual:'Bahnhof in einer fremden Stadt; eine Person schaut kurz auf eine Karte und atmet durch.',onscreen:'Alles neu. Ein Moment für mich.'},
-        {seconds:'4-10',visual:'Die Person setzt die Erazer XP6 ein und startet ihre eigene Musikauswahl.',onscreen:'Ein vertrauter Song kann guttun.'},
-        {seconds:'10-18',visual:'Ruhiger Spaziergang durch die Stadt; die Person wirkt erleichtert und findet ihren Weg.',onscreen:'Kleine Momente fühlen sich nach Zuhause an.'},
-        {seconds:'18-25',visual:'Produktaufnahme der Erazer XP6, danach Homestro Shop auf dem Smartphone.',onscreen:'Erazer XP6 bei Homestro entdecken.'}
-      ],
-      voiceover:'Du bist weit weg von Zuhause. Alles klingt neu und der Tag war lang. Dann kommt dieser eine vertraute Song. Ein kleiner Moment zum Durchatmen. Entdecke die Erazer XP6 bei Homestro.',
-      caption:'Fern von Zuhause und ein langer Tag? Manchmal hilft ein vertrauter Song, kurz durchzuatmen. Entdecke die Erazer XP6 bei Homestro.',
-      hashtags:[...hashtags(xp6),'#unterwegs','#musikmoment','#zuhausegefühl'],
-      cta:'Jetzt bei Homestro entdecken: https://homestro.de/products/'+xp6.handle,
-      manualPostRequired:true, paidMedia:false, videoGeneration:false
-    },
-    {
-      id: 'organic-product-'+new Date().toISOString().slice(0,10), platforms, productTitle: next.title, productHandle: next.handle,
-      durationSeconds: 20, angle: 'Kleine Erleichterung im neuen Alltag',
-      scenes: [
-        {seconds:'0-4',visual:'Ein neuer Alltag beginnt: Tasche abstellen, kurz orientieren, tief durchatmen.',onscreen:'Neuer Ort. Neuer Alltag.'},
-        {seconds:'4-11',visual:'Ruhige Nahaufnahme des Produkts '+shortTitle(next)+'.',onscreen:shortTitle(next)},
-        {seconds:'11-16',visual:'Das Produkt wird neutral und passend zu seiner Kategorie gezeigt.',onscreen:'Einfach selbst entdecken.'},
-        {seconds:'16-20',visual:'Produktseite auf dem Smartphone.',onscreen:'Bei Homestro ansehen.'}
-      ],
-      voiceover:'Wenn sich der Alltag verändert, zählen die kleinen Dinge. Heute stelle ich dir '+next.title+' von Homestro vor. Schau dir die Details in Ruhe an und entscheide selbst, ob es zu deinem Alltag passt.',
-      caption:'Kleine Dinge können einen neuen Alltag angenehmer machen. Hier findest du '+next.title+' bei Homestro.',
-      hashtags:[...hashtags(next),'#neueralltag','#alltagsideen'],
-      cta:'Produkt ansehen: https://homestro.de/products/'+next.handle,
-      manualPostRequired:true, paidMedia:false, videoGeneration:false
-    }
+  const product = (products || []).find(p => p.handle === erazer.handle) || (products || [])[0];
+  if (!product || !product.handle || !product.title) return [];
+  const title = String(product.title).replace(/\s+/g, ' ').trim();
+  const plain = String(product.descriptionHtml || product.description || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  const bullets = (Array.isArray(product.benefits) ? product.benefits : plain.split(/[.!?;]+/))
+    .map(value => String(value).replace(/^[-•\s]+/, '').trim()).filter(value => value.length >= 8 && value.length <= 110)
+    .slice(0, 3);
+  const variantPrices = (product.variants || []).map(v => Number(v.price)).filter(v => Number.isFinite(v) && v > 0);
+  const price = variantPrices.length ? ` ${Math.min(...variantPrices).toFixed(2).replace('.', ',')} €` : '';
+  const benefit = bullets[0] || `Hier siehst du ${title} mit den Angaben aus dem Homestro-Shop.`;
+  const hookSets = [
+    [`Kennst du das Problem? Schau dir ${title} genauer an.`, `Bevor du dich entscheidest: Das solltest du über ${title} wissen.`],
+    [`Suchst du eine Lösung für deinen Alltag? Hier sind die Shopdetails zu ${title}.`, `Was ist bei ${title} wirklich angegeben? Hier kommen die Produktdetails.`],
+    [`Ein kurzer Produktcheck: Das bietet ${title} laut Shopbeschreibung.`, `Passt ${title} zu deinem Bedarf? Prüfe die Fakten direkt im Shop.`]
   ];
+  const day = Math.floor(Date.now() / 86400000);
+  const hooks = hookSets[day % hookSets.length];
+  const today = new Date().toISOString().slice(0, 10);
+  return hooks.map((hook, index) => {
+    const caption = `${hook} ${benefit}${price ? ` Preis im Shop: ${price}.` : ''} Alle Details findest du direkt auf der Produktseite bei Homestro.`;
+    return {
+      id: `organic-${String(product.handle).slice(0, 48)}-${today}-${index + 1}`,
+      productId: String(product.id || ''), productTitle: title, productHandle: product.handle,
+      durationSeconds: 20, angle: index === 0 ? 'Problem und Produktdetails' : 'Kaufentscheidung mit Fakten',
+      scenes: [
+        {seconds:'0-4',visual:'Alltagssituation passend zum Produkt zeigen.',onscreen:hook},
+        {seconds:'4-12',visual:`Produktaufnahme: ${title}.`,onscreen:benefit.slice(0, 64)},
+        {seconds:'12-20',visual:'Produktseite und aktuelle Angaben im Homestro-Shop zeigen.',onscreen:`Details${price}`}
+      ],
+      voiceover: `${hook} ${benefit}${price ? ` Der angezeigte Shoppreis: ${price}.` : ''} Prüfe alle aktuellen Details direkt bei Homestro.`,
+      caption, hashtags: ['#Homestro', '#Produktdetails', '#Alltag', '#Produktentdecken'],
+      cta: `Produktdetails ansehen: https://homestro.de/products/${product.handle}`,
+      manualPostRequired:true, paidMedia:false, videoGeneration:false
+    };
+  });
 }
-
 
 function runPythonPipeline(payload) {
   return new Promise((resolve,reject)=>{
@@ -495,15 +488,31 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
     }
   }
 
+  let organicScriptCache = {at: 0, scripts: [], error: null};
   app.get('/api/jarvis/v1/workforce', async (_req, res) => {
     try {
       const run_history = await runHistoryStore.load();
       const scheduler = autopilotScheduler?.status() || {};
-      return res.status(200).json(workforceStatus(process.env, {
+      let scriptError = null;
+      if (Date.now() - organicScriptCache.at > 60000) {
+        try {
+          const catalog = liveExecutor?.activeCatalogForPipeline
+            ? await liveExecutor.activeCatalogForPipeline() : [];
+          organicScriptCache = {at: Date.now(), scripts: buildOrganicScripts(catalog), error: null};
+          if (!organicScriptCache.scripts.length) organicScriptCache.error = 'ACTIVE_SHOPIFY_PRODUCT_NOT_AVAILABLE';
+        } catch (error) { organicScriptCache = {at: Date.now(), scripts: [], error: String(error?.message || 'SHOPIFY_CATALOG_READ_FAILED').slice(0, 160)}; }
+      }
+      scriptError = organicScriptCache.error;
+      const status = workforceStatus(process.env, {
         ...scheduler,
         paid_ads_status: {mode: 'read_only', campaignMutationPerformed: false},
         run_history,
-      }));
+      });
+      status.scripts = organicScriptCache.scripts;
+      status.script_count = organicScriptCache.scripts.length;
+      status.script_generation = {provider:'deterministic_local', external_ai_called:false, paid_api_called:false,
+        error:scriptError, product_handle:organicScriptCache.scripts[0]?.productHandle || null};
+      return res.status(200).json(status);
     } catch (error) {
       return res.status(200).json(workforceStatus(process.env, {
         autopilot_active: Boolean(autopilotScheduler?.status().autopilot_active),
@@ -584,5 +593,5 @@ async function runLiveCycle() {
   return cycle;
 }
 
-module.exports = {registerJarvisWorkforce, workforceStatus, runDryRunCycle, runLiveCycle, auditMessage};
+module.exports = {registerJarvisWorkforce, workforceStatus, runDryRunCycle, runLiveCycle, auditMessage, buildOrganicScripts};
 

@@ -89,20 +89,56 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
   const expectedHost=new URL(String(env.JARVIS_PUBLIC_ORIGIN||'https://homestro-ai-api-fixed-current-production.up.railway.app')).hostname;
   if(parsed.protocol!=='https:'||parsed.hostname!==expectedHost||parsed.username||parsed.password||parsed.search||parsed.hash
     ||!/^\/marketing-assets\/[a-f0-9]{64}\.mp4$/.test(parsed.pathname))throw new Error('UNTRUSTED_REEL_VIDEO_URL');
+  const redact = value => String(value ?? '').split(token).join('[REDACTED_TOKEN]');
+  async function decode(response) {
+    const raw=await response.text();
+    let data;
+    try{data=JSON.parse(raw);}catch{data={raw};}
+    return {data,raw:redact(raw)};
+  }
+  async function reportFailure(label, response, data, raw) {
+    console.error(`[meta-organic] ${label} ${JSON.stringify({status:response.status,body:raw})}`);
+    const error = new Error(label);
+    error.meta = data?.error || null;
+    if(error.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);
+    throw error;
+  }
+  async function validateAndDownload() {
+    const response=await fetchImpl(videoUrl,{method:'GET',headers:{Accept:'video/mp4'},signal:AbortSignal.timeout(30000)});
+    if(!response.ok)throw new Error(`REEL_ASSET_FETCH_FAILED_HTTP_${response.status}`);
+    const type=String(response.headers?.get?.('content-type')||'').split(';')[0].trim().toLowerCase();
+    if(type!=='video/mp4')throw new Error(`REEL_ASSET_NOT_MP4:${type||'missing_content_type'}`);
+    const bytes=Buffer.from(await response.arrayBuffer());
+    if(!bytes.length||bytes.length>60*1024*1024)throw new Error('REEL_ASSET_SIZE_INVALID');
+    return bytes;
+  }
   async function post(path, params) {
     const body=new URLSearchParams({...params,...(credentials.appsecretProof?{appsecret_proof:credentials.appsecretProof}:{})});
     const response=await fetchImpl(`https://graph.facebook.com/v26.0/${path}`,{
       method:'POST',headers:{Authorization:`Bearer ${credentials.token}`,'Content-Type':'application/x-www-form-urlencoded'},body,signal:AbortSignal.timeout(30000)
     });
-    const data=await response.json();
-    if(!response.ok||data.error){const e=new Error('Meta publish rejected');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;}
+    const {data,raw}=await decode(response);
+    if(!response.ok||data.error)return reportFailure(`META_POST_FAILED:${path}`,response,data,raw);
+    console.info(`[meta-organic] META_POST_OK ${JSON.stringify({path,id:data.id||null})}`);
     return data;
   }
   if(draft.channel==='facebook'){
-    const result=await post(`${pageId}/videos`,{file_url:videoUrl,description:draft.caption,published:'true'});
-    return {channel:'facebook',published:true,id:result.id,mediaType:'video'};
+    const bytes=await validateAndDownload();
+    const body=new FormData();
+    body.append('source',new Blob([bytes],{type:'video/mp4'}),'homestro-reel.mp4');
+    body.append('description',String(draft.caption||''));
+    body.append('published','true');
+    if(credentials.appsecretProof)body.append('appsecret_proof',credentials.appsecretProof);
+    const response=await fetchImpl(`https://graph-video.facebook.com/v26.0/${pageId}/videos`,{
+      method:'POST',headers:{Authorization:`Bearer ${token}`},body,signal:AbortSignal.timeout(60000)
+    });
+    const {data,raw}=await decode(response);
+    if(!response.ok||data.error)return reportFailure('FB_UPLOAD_FAILED',response,data,raw);
+    console.info(`[meta-organic] FB_REEL_PUBLISHED ${JSON.stringify({postId:data.id||null})}`);
+    return {channel:'facebook',published:true,id:data.id,mediaType:'video'};
   }
   if(draft.channel==='instagram'){
+    await validateAndDownload();
     const container=await post(`${instagramId}/media`,{
       media_type:'REELS',video_url:videoUrl,caption:draft.caption,share_to_feed:'true'
     });
@@ -113,14 +149,18 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
       url.searchParams.set('fields','status_code,status');
       if(credentials.appsecretProof)url.searchParams.set('appsecret_proof',credentials.appsecretProof);
       const response=await fetchImpl(url,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
-      const data=await response.json();
-      if(!response.ok||data.error){const e=new Error('Instagram Reel status failed');e.meta=data?.error?{code:data.error.code,error_subcode:data.error.error_subcode}:null;if(e.meta?.code===190)await onCredentialError?.({metaCode:190},credentials);throw e;}
+      const {data,raw}=await decode(response);
+      if(!response.ok||data.error)return reportFailure('IG_CONTAINER_STATUS_FAILED',response,data,raw);
       status=data;
       if(data.status_code==='FINISHED')break;
-      if(data.status_code==='ERROR'||data.status_code==='EXPIRED')throw new Error('Instagram Reel processing failed: '+(data.status||data.status_code));
+      if(data.status_code==='ERROR'||data.status_code==='EXPIRED'){
+        console.error(`[meta-organic] IG_CONTAINER_FAILED ${JSON.stringify({containerId:container.id,status:data,raw})}`);
+        throw new Error('IG_CONTAINER_FAILED');
+      }
     }
-    if(status?.status_code!=='FINISHED')throw new Error('Instagram Reel processing timed out');
+    if(status?.status_code!=='FINISHED')throw new Error('IG_CONTAINER_PROCESSING_TIMEOUT');
     const result=await post(`${instagramId}/media_publish`,{creation_id:container.id});
+    console.info(`[meta-organic] IG_REEL_PUBLISHED ${JSON.stringify({containerId:container.id,postId:result.id||null})}`);
     return {channel:'instagram',published:true,id:result.id,containerId:container.id,mediaType:'reel'};
   }
   throw new Error('Unsupported channel');

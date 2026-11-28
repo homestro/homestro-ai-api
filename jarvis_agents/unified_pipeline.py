@@ -1,9 +1,4 @@
-"""JARVIS organic chain: Shopify catalog -> SEO/GEO -> Pillow -> video -> organic handoffs.
-
-Default operation remains zero-cost. Optional Higgsfield generation is attempted only
-when HIGGSFIELD_ENABLED=true and HIGGSFIELD_API_KEY is configured; failures fall back
-to existing Shopify video or the free gallery montage. Paid ads remain disabled.
-"""
+"""JARVIS organic chain with local creative generation and zero paid API dependencies."""
 from __future__ import annotations
 
 import fcntl
@@ -27,13 +22,12 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from agents import copy_compliance, creative_seo, product_hunter, tiktok_publisher, youtube_publisher
-from jarvis_agents import ai_video_generator
 
 
 MAX_DOWNLOAD = 60 * 1024 * 1024
 ALLOWED_MEDIA_HOSTS = {"cdn.shopify.com", "cdn.shopifycdn.net"}
 HOOK_HISTORY_PATH = Path(os.getenv("JARVIS_USED_HOOKS_PATH", "/data/jarvis-used-hooks.json"))
-HOOK_CTA = "Jetzt entdecken auf homestro.de – bequem mit PayPal & Klarna."
+HOOK_CTA = "Details und aktuelle Produktinformationen findest du bei Homestro."
 HOOK_HISTORY_LIMIT = 20000
 
 
@@ -45,18 +39,31 @@ def _read_hook_history(path: Path = HOOK_HISTORY_PATH) -> list[dict[str, Any]] |
     lock_path = path.with_suffix(path.suffix + ".lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             if not path.exists():
                 return []
-            value = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("events"), list):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if (isinstance(value, dict) and value.get("version") == 1
+                        and isinstance(value.get("events"), list)
+                        and all(isinstance(row, dict) for row in value["events"])):
+                    return value["events"]
+                reason = "invalid_schema"
+            except (OSError, ValueError, TypeError):
+                reason = "unreadable_json"
+            # Keep the bad file for diagnosis, then restore the expected schema atomically.
+            backup = path.with_name(path.name + ".corrupt-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + ".bak")
+            try:
+                os.replace(path, backup)
+                temp = path.with_suffix(path.suffix + ".tmp")
+                temp.write_text(json.dumps({"version": 1, "events": []}), encoding="utf-8")
+                os.replace(temp, path)
+                print(f"[jarvis-hooks] CORRUPT_HISTORY_ARCHIVED reason={reason} backup={backup.name}", file=sys.stderr)
+                return []
+            except OSError as error:
+                print(f"[jarvis-hooks] HISTORY_REPAIR_FAILED reason={reason} error={type(error).__name__}", file=sys.stderr)
                 return None
-            if any(not isinstance(row, dict) for row in value["events"]):
-                return None
-            return value["events"]
-        except (OSError, ValueError, TypeError):
-            return None
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
@@ -304,19 +311,7 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
         except Exception:
             continue
 
-    higgsfield_result: dict[str, Any] | None = None
-    if not video_paths:
-        try:
-            generated = ai_video_generator.generate_video(
-                product, hook, work / "higgsfield-source.mp4", env=os.environ,
-            )
-            higgsfield_result = generated
-            if generated.get("status") == "completed":
-                generated_path = Path(str(generated.get("path") or ""))
-                if generated_path.is_file() and generated_path.stat().st_size > 0:
-                    video_paths.append(generated_path)
-        except Exception as error:
-            higgsfield_result = {"status": "fallback", "reason": type(error).__name__}
+    # Always use Shopify media or local gallery rendering; no paid generation APIs.
 
     if video_paths:
         source = video_paths[0]
@@ -341,15 +336,16 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
         args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
         if source_duration < duration:
             args += ["-stream_loop", "-1"]
-        args += ["-i", str(source), "-loop", "1", "-framerate", "25", "-i", str(hook_path)]
+        args += ["-i", str(source), "-loop", "1", "-framerate", "30", "-i", str(hook_path),
+                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
         filters: list[str] = []
         for index in range(scenes):
             start = index * scene_duration
             filters.append(
                 f"[0:v]trim=start={start:.3f}:duration={scene_duration:.3f},setpts=PTS-STARTPTS,"
-                "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,setsar=1,"
-                f"zoompan=z='min(zoom+0.00035,1.06)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=720x1280:fps=25,"
-                f"trim=duration={scene_duration:.3f},fps=25,settb=1/25,format=yuv420p[v{index}]"
+                "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,"
+                f"zoompan=z='min(zoom+0.00035,1.06)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30,"
+                f"trim=duration={scene_duration:.3f},fps=30,settb=1/30,format=yuv420p[v{index}]"
             )
         previous = "v0"
         for index in range(1, scenes):
@@ -361,12 +357,11 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
             previous = current
         filters.append(
             f"[{previous}][1:v]overlay=(W-w)/2:(H-h)/2:format=auto:enable='between(t,0,3.2)',"
-            "format=yuv420p[vout]"
+            "scale=in_range=full:out_range=limited,format=yuv420p[vout]"
         )
-        args += ["-filter_complex", ";".join(filters), "-map", "[vout]", "-an"]
+        args += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
         final_duration = scene_duration * scenes - transition * (scenes - 1)
-        source_name = ("higgsfield_generated_motion_clips" if higgsfield_result and higgsfield_result.get("status") == "completed"
-                       else "existing_shopify_video_motion_clips")
+        source_name = "existing_shopify_video_motion_clips"
     else:
         image_urls = list(dict.fromkeys(
             str(url) for url in (product.get("image_urls") or []) if str(url).strip()
@@ -394,14 +389,15 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
         transition = 0.16
         args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
         for image_file in image_paths:
-            args += ["-loop", "1", "-framerate", "25", "-t", f"{scene_duration:.3f}", "-i", str(image_file)]
-        args += ["-loop", "1", "-framerate", "25", "-i", str(hook_path)]
+            args += ["-loop", "1", "-framerate", "30", "-t", f"{scene_duration:.3f}", "-i", str(image_file)]
+        args += ["-loop", "1", "-framerate", "30", "-i", str(hook_path),
+                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
         filters = []
         for index in range(scenes):
             filters.append(
-                f"[{index}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,"
-                f"zoompan=z='min(zoom+0.0012,1.12)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=720x1280:fps=25,"
-                f"trim=duration={scene_duration:.3f},setpts=PTS-STARTPTS,fps=25,settb=1/25,setsar=1,format=yuv420p[v{index}]"
+                f"[{index}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
+                f"zoompan=z='min(zoom+0.0012,1.12)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30,"
+                f"trim=duration={scene_duration:.3f},setpts=PTS-STARTPTS,fps=30,settb=1/30,setsar=1,format=yuv420p[v{index}]"
             )
         previous = "v0"
         for index in range(1, scenes):
@@ -413,13 +409,15 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
             previous = current
         filters.append(
             f"[{previous}][{scenes}:v]overlay=(W-w)/2:(H-h)/2:format=auto:enable='between(t,0,3.2)',"
-            "format=yuv420p[vout]"
+            "scale=in_range=full:out_range=limited,format=yuv420p[vout]"
         )
-        args += ["-filter_complex", ";".join(filters), "-map", "[vout]", "-an"]
+        args += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
         final_duration = scene_duration * scenes - transition * (scenes - 1)
         source_name = "shopify_gallery_ken_burns_montage"
 
-    args += ["-t", f"{final_duration:.3f}", "-c:v", "libx264", "-preset", "veryfast",
+    audio_input_index = sum(1 for value in args if value == "-i") - 1
+    args += ["-map", f"{audio_input_index}:a:0", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
+             "-t", f"{final_duration:.3f}", "-c:v", "libx264", "-r", "30", "-preset", "veryfast",
              "-crf", "24", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
              "-threads", "1", str(output)]
     try:
@@ -429,13 +427,35 @@ def _render_video(product: dict[str, Any], image_path: Path, output: Path, work:
                 "detail": (error.stderr or "")[-400:], "rendered": False}
     except subprocess.TimeoutExpired:
         return {"status": "blocked", "reason": "FFMPEG_RENDER_TIMEOUT", "rendered": False}
+    probe = shutil.which("ffprobe")
+    if not probe:
+        return {"status": "blocked", "reason": "FFPROBE_NOT_INSTALLED", "rendered": False}
+    try:
+        checked = subprocess.run(
+            [probe, "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,pix_fmt,r_frame_rate,sample_rate,channels", "-of", "json", str(output)],
+            check=True, capture_output=True, text=True, timeout=20,
+        )
+        streams = json.loads(checked.stdout).get("streams", [])
+        video_stream = next(stream for stream in streams if stream.get("codec_type") == "video")
+        audio_stream = next(stream for stream in streams if stream.get("codec_type") == "audio")
+        if not (video_stream.get("codec_name") == "h264" and video_stream.get("width") == 1080
+                and video_stream.get("height") == 1920 and video_stream.get("pix_fmt") == "yuv420p"
+                and video_stream.get("r_frame_rate") == "30/1" and audio_stream.get("codec_name") == "aac"
+                and audio_stream.get("sample_rate") == "44100" and audio_stream.get("channels") == 2):
+            return {"status": "blocked", "reason": "REEL_MP4_SPEC_VERIFICATION_FAILED", "rendered": False,
+                    "verified_streams": streams}
+    except (OSError, ValueError, StopIteration, subprocess.SubprocessError):
+        return {"status": "blocked", "reason": "REEL_MP4_SPEC_VERIFICATION_FAILED", "rendered": False}
     return {"status": "rendered", "rendered": True, "path": str(output),
             "source": source_name, "scene_count": scenes,
             "source_image_count": scenes if source_name == "shopify_gallery_ken_burns_montage" else 0,
             "full_screen": True, "motion_per_scene": "ken_burns" if not video_paths else "video_clip_and_zoom",
             "hook_safe_zone": "center_wrapped_pill", "static_card_fallback": False,
-            "format": "vertical_9_16_mp4", "duration_seconds": round(final_duration, 1),
-            "higgsfield_generation": higgsfield_result}
+            "format": "vertical_9_16_mp4", "width": 1080, "height": 1920, "fps": 30,
+            "video_codec": "h264", "pixel_format": "yuv420p", "audio_codec": "aac",
+            "audio_sample_rate": 44100, "audio_channels": 2,
+            "duration_seconds": round(final_duration, 1),
+            "higgsfield_generation": {"status": "disabled", "reason": "ZERO_PAID_API_DEPENDENCIES"}}
 
 
 def _hook_overlay(hook: str, output: Path) -> None:
@@ -475,7 +495,7 @@ def _human_product_name(product: dict[str, Any]) -> str:
 
 
 def _append_conversion_hooks(caption: str, product_url: str) -> str:
-    clean = re.sub(r"\n*Jetzt entdecken auf homestro\.de – bequem mit PayPal & Klarna\.?\s*$", "", caption, flags=re.IGNORECASE).rstrip()
+    clean = re.sub(r"\n*Jetzt entdecken auf homestro\.de[^\n]*\s*$", "", caption, flags=re.IGNORECASE).rstrip()
     if product_url and product_url not in clean:
         clean += f"\n\n{product_url}"
     return clean + "\n\n" + HOOK_CTA
@@ -488,7 +508,7 @@ def _story_copy(product: dict[str, Any], product_url: str, prices: list[float]) 
             hook = "Fremde Durchsage auf Reisen? Der Erazer XP6 unterstützt Übersetzungen direkt am Ohr."
             price_text = f"für {min(prices):.2f}".replace(".", ",") + " € " if prices else ""
             caption = (
-                "Gate B14. Dein Flug ist gestrichen. Die Durchsage kommt in einer Sprache, die du nicht verstehst. "
+                "Du bist unterwegs und möchtest eine fremde Durchsage besser verstehen. "
                 "Du atmest kurz durch und setzt den Erazer XP6 ein, um die nächsten Schritte besser einzuordnen. "
                 "Kein Handy, das du fremden Menschen vors Gesicht halten musst.\n\n"
                 f"135 Sprachen. Kabellos. Erazer XP6 {price_text}bei Homestro entdecken.\n\n{product_url}"
@@ -658,12 +678,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "blocked", "reason": "NO_FRESH_GERMAN_HOOK_AVAILABLE",
                 "product_id": product_id, "hook_history_path": str(history_path),
                 "cost_eur": 0, "paid_ai_calls": 0}
-    if "Gate B14" in story_caption:
-        tail = story_caption.split("\n\n135 Sprachen.", 1)
-        story_caption = (hook + "\n\n135 Sprachen." + tail[1]) if len(tail) == 2 else hook
-    else:
-        story_caption = story_caption.replace(proposed_hook, "", 1).strip()
-        story_caption = hook + "\n\n" + story_caption
+    story_caption = story_caption.replace(proposed_hook, "", 1).strip()
+    story_caption = hook + "\n\n" + story_caption
     if "Link in der Bio" not in story_caption:
         story_caption = re.sub(r"\n+https://homestro\.de/products/[^\s]+\s*$", "", story_caption).rstrip()
         story_caption += f"\n\nLink in der Bio — jetzt bei Homestro entdecken.\n\n{product_url}"
@@ -701,7 +717,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "blocked", "scout": {k:v for k,v in scout.items() if k != "product"},
                 "creative": {"status": "blocked", "reason": "SEO_GEO_DRAFT_UNAVAILABLE"}, "video": None}
     draft = drafts[0]
-    digest = hashlib.sha256((product_id + str(product.get("handle")) + ":organic-motion-v2").encode()).hexdigest()
+    digest = hashlib.sha256((product_id + str(product.get("handle")) + ":organic-motion-v3").encode()).hexdigest()
     root = Path(payload.get("assets_dir") or "/data/jarvis-unified/assets")
     root.mkdir(parents=True, exist_ok=True)
     work = root / f".work-{digest[:16]}"

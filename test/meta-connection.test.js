@@ -16,7 +16,7 @@ function database(){let row=null;const states=new Map();return {get row(){return
   if(sql.includes('SET expires_at=$1')){if(row?.revision===p[2]){row.expires_at=p[0];row.data_access_expires_at=p[1];row.last_error=null;}return {rows:[]};}
   throw Error('Unexpected SQL: '+sql);
 }};}
-const response=(data,ok=true)=>({ok,status:ok?200:400,json:async()=>data});
+const response=(data,ok=true)=>({ok,status:ok?200:400,json:async()=>data,text:async()=>JSON.stringify(data)});
 function fixture({wrongApp=false,missingScope=false,wrongPage=false}={}){
   const pool=database(),calls=[];const fetchImpl=async(url,opts)=>{calls.push({url:String(url),opts});const u=new URL(url),path=u.pathname.split('/').slice(2).join('/');
     if(path==='oauth/access_token')return response({access_token:u.searchParams.has('code')?'short-user':'long-user'});
@@ -92,10 +92,31 @@ test('deauthorization requires the app signature and matching user',async()=>{
 });
 test('partial OAuth configuration prevents a legacy fallback',async()=>{await assert.rejects(new MetaConnection({env:{META_APP_ID:'123',META_PAGE_ACCESS_TOKEN:'legacy'}}).credentials(),{code:'META_OAUTH_NOT_CONFIGURED'});});
 test('legacy publisher consumes stored access and never retries a rejected write',async()=>{
-  const f=await connected(fixture());let writes=0;
-  await assert.rejects(publishOrganicDraft({channel:'facebook',imageUrl:'https://cdn.shopify.com/image.jpg',caption:'Test'},
-    {env,getCredentials:()=>f.connection.credentials(),onCredentialError:(e,c)=>f.connection.reject(e,c),fetchImpl:async(_u,opts)=>{writes++;assert.equal(opts.headers.Authorization,'Bearer page-secret');return response({error:{code:190,error_subcode:463}},false);}}));
-  assert.equal(writes,1);assert.equal(f.pool.row.status,'reauth_required');
+  const f=await connected(fixture());let graphWrites=0;
+  const video='https://homestro-ai-api-fixed-current-production.up.railway.app/marketing-assets/'+('b'.repeat(64))+'.mp4';
+  await assert.rejects(publishOrganicDraft({channel:'facebook',videoUrl:video,caption:'Test'},
+    {env:{...env,JARVIS_PUBLIC_ORIGIN:'https://homestro-ai-api-fixed-current-production.up.railway.app'},getCredentials:()=>f.connection.credentials(),onCredentialError:(e,c)=>f.connection.reject(e,c),fetchImpl:async(url,opts)=>{
+      if(String(url)===video)return {ok:true,status:200,headers:{get:()=> 'video/mp4'},arrayBuffer:async()=>new Uint8Array([1,2,3]).buffer};
+      graphWrites++;assert.equal(opts.headers.Authorization,'Bearer page-secret');return response({error:{code:190,error_subcode:463}},false);
+    }}));
+  assert.equal(graphWrites,1);assert.equal(f.pool.row.status,'reauth_required');
+});
+test('Facebook Reel uses trusted MP4 bytes and multipart source upload',async()=>{
+  const calls=[];
+  const video='https://homestro-ai-api-fixed-current-production.up.railway.app/marketing-assets/'+('a'.repeat(64))+'.mp4';
+  const fetchImpl=async(url,opts={})=>{
+    calls.push({url:String(url),opts});
+    if(String(url)===video)return {ok:true,status:200,headers:{get:()=> 'video/mp4'},arrayBuffer:async()=>new Uint8Array([0,0,0,24,102,116,121,112]).buffer};
+    return {ok:true,status:200,text:async()=>JSON.stringify({id:'fb-post-123'})};
+  };
+  const result=await publishOrganicDraft({channel:'facebook',videoUrl:video,caption:'Test caption'},
+    {env:{JARVIS_PUBLIC_ORIGIN:'https://homestro-ai-api-fixed-current-production.up.railway.app'},getCredentials:async()=>({token:'secret-token',pageId:'456',instagramId:'789'}),fetchImpl});
+  assert.equal(result.id,'fb-post-123');
+  assert.equal(calls[1].url,'https://graph-video.facebook.com/v26.0/456/videos');
+  assert.equal(calls[1].opts.body.get('published'),'true');
+  assert.equal(calls[1].opts.body.get('description'),'Test caption');
+  assert.equal(calls[1].opts.body.get('source').type,'video/mp4');
+  assert.equal(calls[1].opts.headers.Authorization,'Bearer secret-token');
 });
 test('Pilot v2 resolves stored access and stops after revocation',async()=>{
   const {MetaOrganic}=await import('../homestro-marketing-pilot/modules/meta.js'),f=await connected(fixture());

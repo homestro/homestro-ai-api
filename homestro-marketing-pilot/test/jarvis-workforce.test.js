@@ -3,7 +3,21 @@ import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 
 const require=createRequire(import.meta.url);
-const {registerJarvisWorkforce,workforceStatus,runDryRunCycle,auditMessage}=require('../../jarvis_agents/workforce-status.js');
+const {registerJarvisWorkforce,workforceStatus,runDryRunCycle,auditMessage,buildOrganicScripts}=require('../../jarvis_agents/workforce-status.js');
+
+test('organic scripts are deterministic, German, fact-based and always return two zero-cost drafts',()=>{
+  const scripts=buildOrganicScripts([{id:'gid://shopify/Product/1',handle:'produkt-test',title:'Produkt Test',descriptionHtml:'<ul><li>Leicht zu reinigen.</li></ul>',variants:[{price:'19.90'}]}]);
+  assert.equal(scripts.length,2);
+  for(const script of scripts){
+    assert.equal(script.productHandle,'produkt-test');
+    assert.equal(script.manualPostRequired,true);
+    assert.equal(script.paidMedia,false);
+    assert.equal(script.videoGeneration,false);
+    assert.match(script.voiceover,/Leicht zu reinigen/);
+    assert.match(script.voiceover,/19,90 €/);
+    assert.doesNotMatch(`${script.voiceover} ${script.caption}`,/Was macht .* im Alltag leichter\?|Gate B14|Klarna/i);
+  }
+});
 
 test('workforce status is read-only, reports the flagship lock and safe runtime flags',async()=>{
   const status=workforceStatus({DRY_RUN:'true',PILOT_AD_DRY_RUN:'true',VIDEO_GENERATION_ENABLED:'false'});
@@ -17,16 +31,18 @@ test('workforce status is read-only, reports the flagship lock and safe runtime 
   assert.equal(status.safety.runtimeSwitches.VIDEO_GENERATION_ENABLED,false);
   assert.equal(status.agents.length,6);
 
-  let route;
-  const app={get(path,handler){assert.equal(path,'/api/jarvis/v1/workforce');route=handler;},post(){}};
+  const routes=new Map();
+  const app={get(path,handler){routes.set(path,handler);},post(){}};
   registerJarvisWorkforce(app);
   let statusCode;
   let body;
-  route({}, {status(code){statusCode=code;return this;},json(value){body=value;return this;}});
+  await routes.get('/api/jarvis/v1/workforce')({}, {status(code){statusCode=code;return this;},json(value){body=value;return this;}});
   assert.equal(statusCode,200);
   assert.equal(body.ok,true);
   assert.equal(body.erazerPriority.locked,true);
   assert.equal(body.safety.newAdWrites,false);
+  assert.equal(body.script_count,0);
+  assert.equal(body.script_generation.external_ai_called,false);
   assert.ok(body.agents.every(agent=>agent.mission && agent.communication));
 });
 
@@ -52,15 +68,17 @@ test('risk guard blocks positive spend and restricted local copy',()=>{
   assert.equal(auditMessage(handwerk).reason,'LEGAL_SERVICE_WORDING_BLOCKED');
 });
 
-test('POST cycle endpoint returns the coordinated zero-cost report',()=>{
-  let postRoute;
-  const app={get(){},post(path,handler){assert.equal(path,'/api/jarvis/v1/workforce/cycle');postRoute=handler;}};
+test('POST cycle endpoint returns the coordinated zero-cost report',async()=>{
+  const routes=new Map();
+  const app={get(){},post(path,handler){routes.set(path,handler);}};
   registerJarvisWorkforce(app);
   let statusCode;
   let responseBody;
-  postRoute({}, {status(code){statusCode=code;return this;},json(value){responseBody=value;return this;}});
-  assert.equal(statusCode,200);
-  assert.equal(responseBody.ok,true);
-  assert.equal(responseBody.cycle.pillar_results.length,4);
+  await routes.get('/api/jarvis/v1/workforce/cycle')({}, {status(code){statusCode=code;return this;},json(value){responseBody=value;return this;}});
+  assert.equal(statusCode,409);
+  assert.equal(responseBody.ok,false);
+  assert.equal(responseBody.cycle.status,'blocked');
+  assert.equal(responseBody.cycle.ad_spend_eur,0);
+  assert.match(responseBody.cycle.summary_report.text,/Shopify adaptér není dostupný/);
   assert.equal(responseBody.cycle.budget_eur,0);
 });
