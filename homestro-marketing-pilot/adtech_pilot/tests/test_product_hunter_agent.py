@@ -3,6 +3,7 @@ import sys
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -212,6 +213,25 @@ class ProductHunterOptionalTrendSourceTests(unittest.TestCase):
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["sources"]["tiktok"]["reason"], "TIKTOK_TREND_SCAN_FAILED")
         self.assertEqual(result["sources"]["google"]["status"], "skipped")
+
+
+class ProductHunterOrganicAllowlistTests(unittest.TestCase):
+    def test_rotation_allowlist_selects_only_eraizer_xp6(self):
+        xp6={"id":"gid://shopify/Product/1","handle":"lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5",
+             "title":"Lenovo Erazer XP6","status":"ACTIVE","onlineStoreUrl":"https://homestro.de/products/xp6",
+             "variants":[{"availableForSale":True}]}
+        brush={"id":"gid://shopify/Product/2","handle":"dog-bathing-brush-pet-massage-shampoo-dispenser-rubber-bristle-shower-grooming-tool-for-dogs-and-cats",
+               "title":"Badebürste für Hunde & Katzen","status":"ACTIVE","onlineStoreUrl":"https://homestro.de/products/brush",
+               "variants":[{"availableForSale":True}]}
+        with TemporaryDirectory() as tmp:
+            selected=product_hunter.select_next_active_product([brush,xp6],[],Path(tmp)/"rotation.json",
+                existing_publish_ledger_path=None,allowed_handles={xp6["handle"]})
+            self.assertEqual(selected["status"],"selected")
+            self.assertEqual(selected["product"]["handle"],xp6["handle"])
+            rejected=product_hunter.select_next_active_product([brush],[],Path(tmp)/"empty.json",
+                existing_publish_ledger_path=None,allowed_handles={xp6["handle"]})
+            self.assertEqual(rejected["status"],"blocked")
+            self.assertIsNone(rejected["product"])
 
 
 if __name__ == "__main__":

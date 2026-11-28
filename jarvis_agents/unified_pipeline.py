@@ -645,6 +645,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("rotation_history_path") or "/data/jarvis-published-products.json",
         existing_publish_ledger_path=payload.get("existing_publish_ledger_path") or "/data/jarvis-unified-published.json",
         seed_published_product_ids=[str(item) for item in seed_ids],
+        allowed_handles={"lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5"},
     )
     if scout.get("status") != "selected":
         return {"status": "blocked", "scout": scout, "creative": None, "video": None}

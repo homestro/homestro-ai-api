@@ -166,5 +166,27 @@ async function publishOrganicDraft(draft, { fetchImpl = global.fetch, env = proc
   throw new Error('Unsupported channel');
 }
 
-module.exports = { registerMetaOrganic, publishOrganicDraft };
+async function deleteKnownIncorrectPost({channel,id}, {fetchImpl=global.fetch,getCredentials}={}) {
+  const authorized = new Map([
+    ['4815336872034736','facebook'],
+    ['17938298934142484','instagram'],
+  ]);
+  const postId=String(id||'');
+  if(authorized.get(postId)!==channel)throw new Error('INCIDENT_POST_ID_NOT_ALLOWLISTED');
+  const credentials=getCredentials?await getCredentials():{};
+  if(!credentials.token)throw new Error('META_PUBLISHING_CONFIGURATION_INCOMPLETE');
+  const response=await fetchImpl(`https://graph.facebook.com/v26.0/${postId}`,{
+    method:'DELETE',headers:{Authorization:`Bearer ${credentials.token}`},signal:AbortSignal.timeout(20000)
+  });
+  const raw=String(await response.text()).split(credentials.token).join('[REDACTED_TOKEN]');
+  let data={};try{data=JSON.parse(raw);}catch{}
+  if(!response.ok||data.error||data.success===false){
+    console.error(`[meta-organic] INCIDENT_POST_DELETE_FAILED ${JSON.stringify({channel,id:postId,status:response.status,body:raw})}`);
+    const error=new Error('INCIDENT_POST_DELETE_FAILED');error.meta=data.error||data;throw error;
+  }
+  console.info(`[meta-organic] INCIDENT_POST_DELETED ${JSON.stringify({channel,id:postId})}`);
+  return {channel,id:postId,deleted:true};
+}
+
+module.exports = { registerMetaOrganic, publishOrganicDraft, deleteKnownIncorrectPost };
 

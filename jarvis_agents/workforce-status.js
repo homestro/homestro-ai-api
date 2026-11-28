@@ -7,7 +7,7 @@ const {
 } = require('./autopilot');
 const {LiveMetaExecutor} = require('./live-meta');
 const {spawn} = require('node:child_process');
-const {publishOrganicDraft} = require('../meta-organic');
+const {publishOrganicDraft,deleteKnownIncorrectPost} = require('../meta-organic');
 const fs = require('node:fs');
 const path = require('node:path');
 const msHandwerkPipeline = require('./ms-handwerk-pipeline');
@@ -28,6 +28,7 @@ let metaConnectionBridge = null;
 const unifiedAssetsDir = process.env.JARVIS_UNIFIED_ASSETS_DIR || '/data/jarvis-unified/assets';
 const unifiedPublicOrigin = String(process.env.JARVIS_PUBLIC_ORIGIN || 'https://homestro-ai-api-fixed-current-production.up.railway.app').replace(/\/$/, '');
 const unifiedPublishedPath = process.env.JARVIS_UNIFIED_PUBLISH_LEDGER || '/data/jarvis-unified-published.json';
+const incidentTakedownPath = process.env.JARVIS_INCIDENT_TAKEDOWN_PATH || '/data/jarvis-incident-takedown.json';
 const serviceList = ['Streicharbeiten', 'Spachtelarbeiten', 'Laminat und Vinyl verlegen',
   'Silikonfugen erneuern', 'Fliesenreparaturen', 'Haus- und Wohnungsrenovierungen'];
 const blockedRoot = 'Ma' + 'ler';
@@ -108,7 +109,9 @@ function taskResult(agentId, pillar) {
 }
 
 function buildOrganicScripts(products) {
-  const product = (products || []).find(p => p.handle === erazer.handle) || (products || [])[0];
+  // This worker is intentionally flagship-only. An empty match means no scripts,
+  // never a silent fallback to another Shopify product.
+  const product = (products || []).find(p => p.handle === erazer.handle && (!p.status || p.status === 'ACTIVE'));
   if (!product || !product.handle || !product.title) return [];
   const title = String(product.title).replace(/\s+/g, ' ').trim();
   const decode = value => String(value).replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&')
@@ -191,6 +194,30 @@ async function savePublishLedger(ledger) {
   await fs.promises.writeFile(temp,JSON.stringify(ledger,null,2),'utf8');
   await fs.promises.rename(temp,unifiedPublishedPath);
 }
+async function removeKnownIncorrectBrushPosts() {
+  const targets=[
+    {channel:'facebook',id:'4815336872034736'},
+    {channel:'instagram',id:'17938298934142484'},
+  ];
+  let receipts={};
+  try{receipts=JSON.parse(await fs.promises.readFile(incidentTakedownPath,'utf8'));}catch(error){if(error.code!=='ENOENT')console.warn('[jarvis-takedown] RECEIPT_READ_FAILED '+String(error.message||error).slice(0,100));}
+  if(!receipts||typeof receipts!=='object'||Array.isArray(receipts))receipts={};
+  for(const target of targets){
+    if(receipts[target.id]?.status==='deleted')continue;
+    try{
+      await deleteKnownIncorrectPost(target,{getCredentials:()=>metaConnectionBridge.credentials()});
+      receipts[target.id]={status:'deleted',channel:target.channel,deleted_at:new Date().toISOString()};
+    }catch(error){
+      receipts[target.id]={status:'failed',channel:target.channel,reason:String(error?.message||'META_DELETE_FAILED').slice(0,100),attempted_at:new Date().toISOString()};
+    }
+    try{
+      await fs.promises.mkdir(path.dirname(incidentTakedownPath),{recursive:true});
+      const temp=incidentTakedownPath+'.tmp';
+      await fs.promises.writeFile(temp,JSON.stringify(receipts,null,2),'utf8');
+      await fs.promises.rename(temp,incidentTakedownPath);
+    }catch(error){console.error('[jarvis-takedown] RECEIPT_WRITE_FAILED '+String(error.message||error).slice(0,100));}
+  }
+}
 
 const productRotationPath=process.env.JARVIS_PUBLISHED_PRODUCTS_PATH||'/data/jarvis-published-products.json';
 async function updateProductRotationHistory(productId, publication) {
@@ -230,10 +257,22 @@ async function runFreeOrganicCycle() {
   try{
     const imported=await import('../homestro-marketing-pilot/modules/trends.js');
     const trends=await new imported.GoogleTrends({geos:['DE','AT']}).refresh();
-    const products=await liveExecutor.activeCatalogForPipeline();
+    const activeProducts=await liveExecutor.activeCatalogForPipeline();
+    const products=(activeProducts||[]).filter(item=>item?.handle===erazer.handle&&item?.status==='ACTIVE');
+    if(products.length!==1)return blocked('FLAGSHIP_ERAZER_XP6_NOT_ACTIVE_IN_SHOPIFY');
+    const liveProduct=await liveExecutor.shopifyGraphQL(
+      'query($id:ID!){product(id:$id){id handle title status}}',{id:products[0].id});
+    const verified=liveProduct?.product;
+    if(!verified||verified.id!==products[0].id||verified.handle!==erazer.handle||verified.status!=='ACTIVE')
+      return blocked('FLAGSHIP_ERAZER_XP6_LIVE_STATUS_CHECK_FAILED');
     const result=await runPythonPipeline({products,trends,assets_dir:unifiedAssetsDir,public_origin:unifiedPublicOrigin,rotation_history_path:productRotationPath,existing_publish_ledger_path:unifiedPublishedPath,seed_published_product_ids:process.env.JARVIS_ROTATION_SEED_PUBLISHED_PRODUCT_IDS||'[]'});
     if(result.status==='blocked')return blocked(result.reason||result.scout?.reason||'Scout nenašel vhodný produkt');
     const product=result.product||{};
+    if(product.id!==verified.id||product.handle!==erazer.handle)return blocked('NON_FLAGSHIP_PRODUCT_REJECTED');
+    const preWriteCheck=await liveExecutor.shopifyGraphQL(
+      'query($id:ID!){product(id:$id){id handle status}}',{id:product.id});
+    if(preWriteCheck?.product?.id!==verified.id||preWriteCheck.product.handle!==erazer.handle||preWriteCheck.product.status!=='ACTIVE')
+      return blocked('FLAGSHIP_ERAZER_XP6_NOT_ACTIVE_BEFORE_WRITES');
     const creative=result.creative||{};
     const audit=auditMessage(message('seo_geo_visuals','shopify','homestro','shopify_seo_update',{
       product_id:product.id,budget_eur:0,paid_api_call:false,
@@ -289,6 +328,12 @@ async function runFreeOrganicCycle() {
       ledger[key]=ledger[key]||{};
       const channels=[];
       for(const channel of ['facebook','instagram']){
+        const activeCheck=await liveExecutor.shopifyGraphQL(
+          'query($id:ID!){product(id:$id){id handle status}}',{id:product.id});
+        if(activeCheck?.product?.id!==verified.id||activeCheck.product.handle!==erazer.handle||activeCheck.product.status!=='ACTIVE'){
+          channels.push({channel,status:'blocked',reason:'FLAGSHIP_ERAZER_XP6_NOT_ACTIVE_BEFORE_PUBLISH'});
+          continue;
+        }
         const formatKey=channel+'_video_reel_v1';
         const previous=ledger[key][formatKey];
         if(previous?.status==='published'||previous?.status==='attempted'){
@@ -474,6 +519,10 @@ function registerJarvisWorkforce(app, {apiKey, metaConnection, shopifyGraphQL} =
   workforceApiKey = apiKey || null;
   liveExecutor = new LiveMetaExecutor({metaConnection, shopifyGraphQL, env: process.env});
   metaConnectionBridge=metaConnection||null;
+  if(metaConnectionBridge&&String(process.env.RAILWAY_SERVICE_ID||'')==='3ee64de3-7855-4b84-a866-43cc79bc56d1'){
+    const takedownTimer=setTimeout(()=>void removeKnownIncorrectBrushPosts(),15000);
+    takedownTimer.unref?.();
+  }
   const assetRoot=path.resolve(unifiedAssetsDir);
   app.get('/marketing-assets/:name',(req,res)=>{
     const name=String(req.params.name||'');

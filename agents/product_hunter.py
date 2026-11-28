@@ -764,8 +764,13 @@ def select_next_active_product(
     *,
     existing_publish_ledger_path: str | Path | None = "/data/jarvis-unified-published.json",
     seed_published_product_ids: list[str] | None = None,
+    allowed_handles: set[str] | None = None,
 ) -> dict[str, Any]:
     """Pick the next eligible catalog item in a durable round-robin rotation."""
+    if allowed_handles is not None:
+        products = [product for product in products
+                    if product.get("handle") in allowed_handles
+                    and str(product.get("status") or "ACTIVE").upper() == "ACTIVE"]
     ranked = _rank_active_shopify_products(products, trends)
     if not ranked:
         return {"status": "blocked", "reason": "NO_ACTIVE_PUBLISHED_SHOPIFY_PRODUCTS",

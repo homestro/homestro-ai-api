@@ -6,10 +6,12 @@ const require=createRequire(import.meta.url);
 const {registerJarvisWorkforce,workforceStatus,runDryRunCycle,auditMessage,buildOrganicScripts}=require('../../jarvis_agents/workforce-status.js');
 
 test('organic scripts are deterministic, German, fact-based and always return two zero-cost drafts',()=>{
-  const scripts=buildOrganicScripts([{id:'gid://shopify/Product/1',handle:'produkt-test',title:'Produkt Test',descriptionHtml:'<ul><li>Leicht zu reinigen.</li></ul>',variants:[{price:'19.90'}]}]);
+  const handle='lenovo-erazer-xp6-bluetooth-in-ear-kopfhoerer-ipx5';
+  const product={id:'gid://shopify/Product/1',handle,title:'Lenovo Erazer XP6',descriptionHtml:'<ul><li>Leicht zu reinigen.</li></ul>',variants:[{price:'19.90'}]};
+  const scripts=buildOrganicScripts([product]);
   assert.equal(scripts.length,2);
   for(const script of scripts){
-    assert.equal(script.productHandle,'produkt-test');
+    assert.equal(script.productHandle,handle);
     assert.equal(script.manualPostRequired,true);
     assert.equal(script.paidMedia,false);
     assert.equal(script.videoGeneration,false);
@@ -17,6 +19,8 @@ test('organic scripts are deterministic, German, fact-based and always return tw
     assert.match(script.voiceover,/19,90 €/);
     assert.doesNotMatch(`${script.voiceover} ${script.caption}`,/Was macht .* im Alltag leichter\?|Gate B14|Klarna/i);
   }
+  assert.deepEqual(buildOrganicScripts([{...product,handle:'dog-bathing-brush-pet-massage-shampoo-dispenser-rubber-bristle-shower-grooming-tool-for-dogs-and-cats'}]),[]);
+  assert.deepEqual(buildOrganicScripts([{...product,status:'ARCHIVED'}]),[]);
 });
 
 test('workforce status is read-only, reports the flagship lock and safe runtime flags',async()=>{

@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),{createHmac}=require('node:crypto');
 const {MetaConnection,encrypt,decrypt,SCOPES}=require('../meta-connection');
-const {publishOrganicDraft}=require('../meta-organic');
+const {publishOrganicDraft,deleteKnownIncorrectPost}=require('../meta-organic');
 const env={DATABASE_URL:'postgres://test',META_APP_ID:'123',META_APP_SECRET:'secret',META_TOKEN_ENCRYPTION_KEY:'ab'.repeat(32),META_OAUTH_REDIRECT_URI:'https://homestro.example/auth/meta/callback',META_PAGE_ID:'456',META_INSTAGRAM_ACCOUNT_ID:'789',META_PAGE_ACCESS_TOKEN:'expired-legacy'};
 function database(){let row=null;const states=new Map();return {get row(){return row;},set row(v){row=v;},states,async query(sql,p=[]){
   if(sql.startsWith('CREATE TABLE'))return {rows:[]};
@@ -117,6 +117,18 @@ test('Facebook Reel uses trusted MP4 bytes and multipart source upload',async()=
   assert.equal(calls[1].opts.body.get('description'),'Test caption');
   assert.equal(calls[1].opts.body.get('source').type,'video/mp4');
   assert.equal(calls[1].opts.headers.Authorization,'Bearer secret-token');
+});
+test('incident takedown deletes only the two known wrong organic post IDs',async()=>{
+  const calls=[];
+  const result=await deleteKnownIncorrectPost({channel:'facebook',id:'4815336872034736'},
+    {getCredentials:async()=>({token:'test-token'}),fetchImpl:async(url,opts)=>{
+      calls.push({url:String(url),opts});return response({success:true});
+    }});
+  assert.equal(result.deleted,true);
+  assert.equal(calls[0].opts.method,'DELETE');
+  assert.equal(calls[0].opts.headers.Authorization,'Bearer test-token');
+  await assert.rejects(deleteKnownIncorrectPost({channel:'instagram',id:'some-other-post'},
+    {getCredentials:async()=>({token:'test-token'}),fetchImpl:async()=>{throw Error('must not call Graph for an unapproved ID');}}),{message:'INCIDENT_POST_ID_NOT_ALLOWLISTED'});
 });
 test('Pilot v2 resolves stored access and stops after revocation',async()=>{
   const {MetaOrganic}=await import('../homestro-marketing-pilot/modules/meta.js'),f=await connected(fixture());
