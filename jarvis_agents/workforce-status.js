@@ -111,23 +111,41 @@ function buildOrganicScripts(products) {
   const product = (products || []).find(p => p.handle === erazer.handle) || (products || [])[0];
   if (!product || !product.handle || !product.title) return [];
   const title = String(product.title).replace(/\s+/g, ' ').trim();
-  const plain = String(product.descriptionHtml || product.description || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-  const bullets = (Array.isArray(product.benefits) ? product.benefits : plain.split(/[.!?;]+/))
-    .map(value => String(value).replace(/^[-•\s]+/, '').trim()).filter(value => value.length >= 8 && value.length <= 110)
-    .slice(0, 3);
+  const decode = value => String(value).replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&')
+    .replace(/&quot;|&#34;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&lt;/gi, '<').replace(/&gt;/gi, '>');
+  const descriptionHtml = String(product.descriptionHtml || product.description || '');
+  const stripHtml = value => decode(String(value).replace(/<br\s*\/?\s*>/gi, '. ')
+    .replace(/<\/(?:li|p|div|h[1-6])\s*>/gi, '. ').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+  let bullets = Array.isArray(product.benefits) ? product.benefits.map(stripHtml) : [];
+  if (!bullets.length) bullets = [...descriptionHtml.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)].map(match => stripHtml(match[1]));
+  if (!bullets.length) bullets = stripHtml(descriptionHtml).split(/[.!?;•]+/);
+  bullets = bullets.map(value => value.replace(/^[-•\s]+/, '').trim())
+    .filter(value => value.length >= 8 && value.length <= 110 && !value.includes('…') && !value.endsWith('...'))
+    .filter((value, index, all) => all.indexOf(value) === index).slice(0, 3);
+  if (!bullets.length) {
+    const titleFacts = [];
+    const bluetooth = title.match(/Bluetooth\s*([\d.]+)/i);
+    if (bluetooth) titleFacts.push(`Bluetooth ${bluetooth[1]} wird im Produkttitel angegeben.`);
+    const ip = title.match(/\bIPX?\d\b/i);
+    if (ip) titleFacts.push(`${ip[0].toUpperCase()} wird im Produkttitel angegeben.`);
+    bullets = titleFacts.length ? titleFacts : ['Produktdetails bitte vor dem Kauf direkt im Shop prüfen.'];
+  }
   const variantPrices = (product.variants || []).map(v => Number(v.price)).filter(v => Number.isFinite(v) && v > 0);
   const price = variantPrices.length ? ` ${Math.min(...variantPrices).toFixed(2).replace('.', ',')} €` : '';
-  const benefit = bullets[0] || `Hier siehst du ${title} mit den Angaben aus dem Homestro-Shop.`;
+  const benefit = bullets[0];
+  const extraBenefit = bullets[1];
   const hookSets = [
-    [`Kennst du das Problem? Schau dir ${title} genauer an.`, `Bevor du dich entscheidest: Das solltest du über ${title} wissen.`],
-    [`Suchst du eine Lösung für deinen Alltag? Hier sind die Shopdetails zu ${title}.`, `Was ist bei ${title} wirklich angegeben? Hier kommen die Produktdetails.`],
-    [`Ein kurzer Produktcheck: Das bietet ${title} laut Shopbeschreibung.`, `Passt ${title} zu deinem Bedarf? Prüfe die Fakten direkt im Shop.`]
+    [`Kennst du das Problem? Prüfe, ob ${title} zu deinem Bedarf passt.`, `Bevor du dich entscheidest: Hier sind die belegten Angaben zu ${title}.`],
+    [`Suchst du passende Produktdetails? Hier siehst du die Angaben zu ${title}.`, `Was steht bei ${title} wirklich im Shop? Hier kommt der Faktencheck.`],
+    [`Ein kurzer Produktcheck: Diese Angabe findest du zu ${title}.`, `Passt ${title} zu deinem Alltag? Prüfe die Shopangaben vor dem Kauf.`]
   ];
   const day = Math.floor(Date.now() / 86400000);
   const hooks = hookSets[day % hookSets.length];
   const today = new Date().toISOString().slice(0, 10);
   return hooks.map((hook, index) => {
-    const caption = `${hook} ${benefit}${price ? ` Preis im Shop: ${price}.` : ''} Alle Details findest du direkt auf der Produktseite bei Homestro.`;
+    const factualDetails = [benefit, extraBenefit].filter(Boolean).join(' ');
+    const priceLine = price ? `Preis laut Shop: ${price}.` : '';
+    const caption = `${hook} ${factualDetails} ${priceLine} Alle Details findest du direkt auf der Produktseite bei Homestro.`.replace(/\s+/g, ' ').trim();
     return {
       id: `organic-${String(product.handle).slice(0, 48)}-${today}-${index + 1}`,
       productId: String(product.id || ''), productTitle: title, productHandle: product.handle,
@@ -135,9 +153,9 @@ function buildOrganicScripts(products) {
       scenes: [
         {seconds:'0-4',visual:'Alltagssituation passend zum Produkt zeigen.',onscreen:hook},
         {seconds:'4-12',visual:`Produktaufnahme: ${title}.`,onscreen:benefit.slice(0, 64)},
-        {seconds:'12-20',visual:'Produktseite und aktuelle Angaben im Homestro-Shop zeigen.',onscreen:`Details${price}`}
+        {seconds:'12-20',visual:'Produktseite und aktuelle Angaben im Homestro-Shop zeigen.',onscreen:`Details${price ? ` · ${price}` : ''}`}
       ],
-      voiceover: `${hook} ${benefit}${price ? ` Der angezeigte Shoppreis: ${price}.` : ''} Prüfe alle aktuellen Details direkt bei Homestro.`,
+      voiceover: `${hook} ${factualDetails} ${priceLine} Prüfe alle aktuellen Details direkt bei Homestro.`.replace(/\s+/g, ' ').trim(),
       caption, hashtags: ['#Homestro', '#Produktdetails', '#Alltag', '#Produktentdecken'],
       cta: `Produktdetails ansehen: https://homestro.de/products/${product.handle}`,
       manualPostRequired:true, paidMedia:false, videoGeneration:false
